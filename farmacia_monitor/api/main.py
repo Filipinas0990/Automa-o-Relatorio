@@ -326,29 +326,42 @@ def deletar_farmacia(
 
 # ── Painel Geral ──────────────────────────────────────────────────────────────
 
+def _mapear_nome_canal(nome: str) -> str:
+    n = nome.lower()
+    if "google" in n:
+        return "Google"
+    if "facebook" in n or "instagram" in n or "meta" in n:
+        return "Meta"
+    if "grupo" in n or "oferta" in n or "group" in n:
+        return "Grupos"
+    return nome  # mantém o nome original para canais não mapeados
+
+
 @app.get("/api/painel")
 def get_painel(
     gestor_id: Optional[int] = None,
     current_user: GestorTrafego = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    # Gestor comum vê apenas suas farmácias, independente do que vier na query
     filtro = gestor_id if current_user.is_admin else current_user.id
 
+    params: dict = {}
+    filtro_sql = ""
     if filtro:
-        rows = db.execute(text("""
-            SELECT r.* FROM vw_ranking_atual r
-            JOIN farmacias f ON f.id = r.farmacia_id
-            WHERE f.gestor_id = :gid
-        """), {"gid": filtro}).mappings().all()
-    else:
-        rows = db.execute(text("SELECT * FROM vw_ranking_atual")).mappings().all()
+        filtro_sql = "AND f.gestor_id = :gid"
+        params["gid"] = filtro
+
+    rows = db.execute(text(f"""
+        SELECT r.* FROM vw_ranking_atual r
+        JOIN farmacias f ON f.id = r.farmacia_id
+        WHERE TRUE {filtro_sql}
+    """), params).mappings().all()
 
     if not rows:
         return {
             "receita_total": 0, "total_atendimentos": 0, "vendas_realizadas": 0,
             "farmacias_ativas": 0, "farmacias_alerta": 0, "farmacias_atencao": 0,
-            "taxa_conversao_media": 0, "ultima_atualizacao": None,
+            "taxa_conversao_media": 0, "ultima_atualizacao": None, "canais": [],
         }
 
     receita_total      = sum(float(r["receita_total"] or 0) for r in rows)
@@ -361,6 +374,32 @@ def get_painel(
     taxa_media = round(sum(conversoes) / len(conversoes), 2) if conversoes else 0
     ultima_atualizacao = max((r["data_coleta"] for r in rows), default=None)
 
+    # Canais: agrega da última coleta de cada farmácia filtrada
+    canais_rows = db.execute(text(f"""
+        SELECT cc.canal, SUM(cc.atendimentos)::int AS total
+        FROM coleta_canais cc
+        JOIN (
+            SELECT DISTINCT ON (farmacia_id) id AS coleta_id, farmacia_id
+            FROM coletas
+            ORDER BY farmacia_id, data_coleta DESC
+        ) latest ON latest.coleta_id = cc.coleta_id
+        JOIN farmacias f ON f.id = latest.farmacia_id
+        WHERE f.ativa = TRUE {filtro_sql}
+        GROUP BY cc.canal
+        ORDER BY total DESC
+    """), params).mappings().all()
+
+    # Agrega por nome padronizado (Google / Meta / Grupos / outros)
+    canais_agg: dict[str, int] = {}
+    for row in canais_rows:
+        nome_std = _mapear_nome_canal(row["canal"])
+        canais_agg[nome_std] = canais_agg.get(nome_std, 0) + int(row["total"] or 0)
+
+    canais = [
+        {"nome": nome, "atendimentos": total}
+        for nome, total in sorted(canais_agg.items(), key=lambda x: -x[1])
+    ]
+
     return {
         "receita_total":        round(receita_total, 2),
         "total_atendimentos":   total_atendimentos,
@@ -370,6 +409,7 @@ def get_painel(
         "farmacias_atencao":    sum(1 for r in rows if r["nivel_alerta"] == "amarelo"),
         "taxa_conversao_media": taxa_media,
         "ultima_atualizacao":   ultima_atualizacao,
+        "canais":               canais,
     }
 
 
