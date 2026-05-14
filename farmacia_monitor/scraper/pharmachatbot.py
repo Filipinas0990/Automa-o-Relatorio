@@ -150,8 +150,11 @@ async def _aplicar_filtro_datas(page: Page, inicio: str, fim: str):
         'button:has-text("Filters"), span:has-text("Filters")'
     )
     if await filtros_btn.count() > 0:
-        await filtros_btn.first.click()
-        await page.wait_for_timeout(800)
+        try:
+            await filtros_btn.first.click(timeout=8000)
+            await page.wait_for_timeout(800)
+        except Exception:
+            pass  # Botão existe mas não clicável — continua sem filtro
 
     date_inputs = page.locator('input[type="date"]')
     if await date_inputs.count() < 2:
@@ -465,7 +468,10 @@ async def coletar_farmacia(
 
         # Login redireciona para /newsletter — navega para o painel de analytics
         await page.goto(f"{url_base}/dashboard", timeout=60000, wait_until="domcontentloaded")
-        await page.wait_for_timeout(4000)  # Aguarda SPA renderizar sem depender de networkidle
+        try:
+            await page.wait_for_load_state("networkidle", timeout=40000)
+        except Exception:
+            await page.wait_for_timeout(4000)  # fallback se networkidle nao atingir
         await _screenshot(page, "04_dashboard")
 
         await _aplicar_filtro_datas(page, inicio, fim)
