@@ -55,76 +55,86 @@ async def _screenshot(page: Page, nome: str):
 
 
 async def _fazer_login(page: Page, email: str, senha: str) -> bool:
-    await _screenshot(page, "01_pre_login")
     print(f"  [DEBUG] URL atual: {page.url}")
     print(f"  [DEBUG] tentando login: {email}")
 
-    # Espera campo de email aparecer
+    # Coleta respostas de rede para diagnóstico
+    _respostas = []
+    page.on("response", lambda r: _respostas.append(f"{r.status} {r.url}"))
+    page.on("console", lambda m: print(f"  [CONSOLE] {m.type}: {m.text}") if m.type in ("error", "warning") else None)
+
+    # Espera campo de email aparecer + React hidratar
     try:
-        await page.wait_for_selector('input[type="email"]', timeout=10000)
+        await page.wait_for_selector('input[type="email"]', timeout=15000)
+        await page.wait_for_timeout(2000)  # React precisa de tempo para hidratar
     except Exception:
-        print("  [DEBUG] campo email nao encontrado, HTML:")
-        try:
-            html = await page.content()
-            print(html[:2000])
-        except Exception:
-            pass
-        await _screenshot(page, "01b_sem_email_field")
+        print("  [DEBUG] campo email nao encontrado")
+        html = await page.content()
+        print(html[:3000])
         return False
 
-    # Limpa e digita campo a campo simulando teclado real
-    email_input = page.locator('input[type="email"]').first
-    await email_input.click()
-    await email_input.click(click_count=3)
-    await page.keyboard.type(email, delay=50)
+    await _screenshot(page, "01_pre_login")
 
-    await page.wait_for_timeout(300)
+    # Usa page.fill() — método correto para inputs React controlados
+    await page.fill('input[type="email"]', email)
+    await page.wait_for_timeout(400)
+    await page.fill('input[type="password"]', senha)
+    await page.wait_for_timeout(600)
 
-    senha_input = page.locator('input[type="password"]').first
-    await senha_input.click()
-    await senha_input.click(click_count=3)
-    await page.keyboard.type(senha, delay=50)
+    # Verifica se os campos foram preenchidos
+    val_email = await page.input_value('input[type="email"]')
+    val_senha = await page.input_value('input[type="password"]')
+    print(f"  [DEBUG] campos: email={repr(val_email[:10]+'...')} senha={'*'*len(val_senha)}")
 
-    await page.wait_for_timeout(500)
     await _screenshot(page, "02_pre_submit")
 
-    # Tenta clicar no botão; fallback: Enter
-    try:
-        botao = page.locator(
-            'button:has-text("Entrar"), button:has-text("Sign In"), button[type="submit"]'
-        )
-        await botao.first.click(timeout=8000)
-    except Exception:
+    # Clica no botão de submit
+    botao = page.locator(
+        'button:has-text("Entrar"), button:has-text("Sign In"), button[type="submit"]'
+    )
+    n_botoes = await botao.count()
+    print(f"  [DEBUG] botoes encontrados: {n_botoes}")
+    if n_botoes > 0:
+        await botao.first.click()
+    else:
         await page.keyboard.press("Enter")
 
-    # Palavras do formulário de login em PT e EN
-    _PALAVRAS_LOGIN = ("entrar", "esqueci minha senha", "lembrar-me",
-                       "sign in", "forget my password", "remember me")
+    await page.wait_for_timeout(2000)
+
+    # Loga respostas de rede capturadas
+    for r in _respostas[-10:]:
+        print(f"  [NET] {r}")
+
+    # Palavras da tela de login em PT e EN
+    _PALAVRAS_LOGIN = ("esqueci minha senha", "lembrar-me", "forget my password", "remember me")
 
     def _esta_no_login(texto: str) -> bool:
         t = texto.lower()
         return any(p in t for p in _PALAVRAS_LOGIN)
 
-    # Aguarda sair do login (máx 30s)
-    deadline = 30
-    for _ in range(deadline):
+    # Polling: aguarda sair do login (máx 30s)
+    for i in range(30):
         await page.wait_for_timeout(1000)
         try:
             corpo = (await page.locator("body").text_content(timeout=3000) or "")
             if not _esta_no_login(corpo):
-                print(f"  [DEBUG] login OK, URL: {page.url}")
+                print(f"  [DEBUG] login OK em {i+1}s, URL: {page.url}")
                 await _screenshot(page, "03_dashboard")
                 return True
+            # Verifica se apareceu mensagem de erro
+            erros = [ln for ln in corpo.splitlines()
+                     if any(w in ln.lower() for w in ("incorret", "inválid", "erro", "error", "invalid"))]
+            if erros:
+                print(f"  [DEBUG] mensagem de erro na pagina: {erros[:3]}")
         except Exception:
             pass
 
-    # Última checagem + dump para diagnóstico
-    try:
-        corpo = (await page.locator("body").text_content(timeout=3000) or "")
-        print(f"  [DEBUG] login FALHOU apos {deadline}s. URL: {page.url}")
-        print(f"  [DEBUG] conteudo atual:\n{corpo[:1500]}")
-    except Exception:
-        pass
+    corpo = (await page.locator("body").text_content(timeout=3000) or "")
+    print(f"  [DEBUG] login FALHOU. URL: {page.url}")
+    print(f"  [DEBUG] conteudo:\n{corpo[:2000]}")
+    print(f"  [DEBUG] ultimas respostas de rede:")
+    for r in _respostas[-15:]:
+        print(f"    {r}")
     await _screenshot(page, "03_login_falhou")
     return False
 
