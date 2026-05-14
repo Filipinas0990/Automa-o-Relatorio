@@ -452,6 +452,34 @@ def get_farmacias(
     else:
         rows = db.execute(text(sql.format(filtro_sql=""))).mappings().all()
 
+    # Busca canais agregados por farmácia (última coleta de cada uma)
+    canais_filtro_sql = "AND f.gestor_id = :gid" if filtro else ""
+    canais_params: dict = {}
+    if filtro:
+        canais_params["gid"] = filtro
+
+    canais_rows = db.execute(text(f"""
+        SELECT latest.farmacia_id, cc.canal, SUM(cc.atendimentos)::int AS total
+        FROM coleta_canais cc
+        JOIN (
+            SELECT DISTINCT ON (farmacia_id) id AS coleta_id, farmacia_id
+            FROM coletas
+            ORDER BY farmacia_id, data_coleta DESC
+        ) latest ON latest.coleta_id = cc.coleta_id
+        JOIN farmacias f ON f.id = latest.farmacia_id
+        WHERE f.ativa = TRUE {canais_filtro_sql}
+        GROUP BY latest.farmacia_id, cc.canal
+        ORDER BY latest.farmacia_id, total DESC
+    """), canais_params).mappings().all()
+
+    # Agrupa canais por farmacia_id com nome padronizado
+    canais_por_farmacia: dict[int, dict[str, int]] = {}
+    for cr in canais_rows:
+        fid = int(cr["farmacia_id"])
+        nome_std = _mapear_nome_canal(cr["canal"])
+        canais_por_farmacia.setdefault(fid, {})
+        canais_por_farmacia[fid][nome_std] = canais_por_farmacia[fid].get(nome_std, 0) + int(cr["total"] or 0)
+
     resultado = []
     for r in rows:
         label_status = {"verde": "Ativa", "amarelo": "Atencao", "vermelho": "Alerta"}.get(
@@ -462,8 +490,16 @@ def get_farmacias(
         if busca and busca.lower() not in r["farmacia"].lower():
             continue
 
+        fid = int(r["farmacia_id"])
+        canais = [
+            {"nome": nome, "atendimentos": total}
+            for nome, total in sorted(
+                canais_por_farmacia.get(fid, {}).items(), key=lambda x: -x[1]
+            )
+        ]
+
         resultado.append({
-            "id":                       r["farmacia_id"],
+            "id":                       fid,
             "nome":                     r["farmacia"],
             "status":                   label_status,
             "nivel_alerta":             r["nivel_alerta"],
@@ -481,6 +517,7 @@ def get_farmacias(
             "periodo_inicio":           str(r["periodo_inicio"]) if r["periodo_inicio"] else None,
             "periodo_fim":              str(r["periodo_fim"]) if r["periodo_fim"] else None,
             "data_coleta":              r["data_coleta"],
+            "canais":                   canais,
         })
 
     return resultado

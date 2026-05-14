@@ -14,7 +14,9 @@
       "PowerShell(python -m pip install openpyxl --quiet 2>&1)",
       "PowerShell(Get-ChildItem -Recurse \"C:\\\\Users\\\\Grupo Symbol Digital\\\\Desktop\\\\AUTOMAÇÂO\" | Where-Object { -not $_.PSIsContainer -and $_.FullName -notmatch \"\\\\.claude|__pycache__\" } | ForEach-Object { $_.FullName.Replace\\(\"C:\\\\Users\\\\Grupo Symbol Digital\\\\Desktop\\\\AUTOMAÇÂO\\\\\", \"\"\\) } | Sort-Object)",
       "PowerShell(python -m pip install cryptography --quiet 2>&1)",
-      "PowerShell(python -c \"from cryptography.fernet import Fernet; print\\('OK'\\)\")"
+      "PowerShell(python -c \"from cryptography.fernet import Fernet; print\\('OK'\\)\")",
+      "Bash(ls \"c:\\\\Users\\\\Grupo Symbol Digital\\\\Desktop\\\\AUTOMAÇÂO\\\\\")",
+      "Read(//c/Users/Grupo Symbol Digital/Desktop/**)"
     ]
   }
 }
