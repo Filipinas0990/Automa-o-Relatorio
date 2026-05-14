@@ -75,14 +75,14 @@ async def _fazer_login(page: Page, email: str, senha: str) -> bool:
     # Limpa e digita campo a campo simulando teclado real
     email_input = page.locator('input[type="email"]').first
     await email_input.click()
-    await email_input.triple_click()
+    await email_input.click(click_count=3)
     await page.keyboard.type(email, delay=50)
 
     await page.wait_for_timeout(300)
 
     senha_input = page.locator('input[type="password"]').first
     await senha_input.click()
-    await senha_input.triple_click()
+    await senha_input.click(click_count=3)
     await page.keyboard.type(senha, delay=50)
 
     await page.wait_for_timeout(500)
@@ -154,9 +154,9 @@ async def _aplicar_filtro_datas(page: Page, inicio: str, fim: str):
             await date_inputs.nth(0).fill(inicio, timeout=5000)
             await date_inputs.nth(1).fill(fim,    timeout=5000)
         except Exception:
-            await date_inputs.nth(0).triple_click()
+            await date_inputs.nth(0).click(click_count=3)
             await date_inputs.nth(0).type(br_inicio)
-            await date_inputs.nth(1).triple_click()
+            await date_inputs.nth(1).click(click_count=3)
             await date_inputs.nth(1).type(br_fim)
 
     salvar_btn = page.locator('button:has-text("Salvar"), button:has-text("Save")')
