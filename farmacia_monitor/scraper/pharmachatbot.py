@@ -80,12 +80,24 @@ async def _fazer_login(page: Page, email: str, senha: str) -> bool:
     await _screenshot(page, "02_pre_click_login")
     await botao.first.click(timeout=10000)
     try:
+        # Aguarda sair da tela de login
         await page.wait_for_function(
-            "!window.location.pathname.includes('login')", timeout=15000
+            "!window.location.pathname.includes('login') && "
+            "!window.location.hash.includes('login')",
+            timeout=15000
         )
-        base = page.url.split("/")[0] + "//" + page.url.split("/")[2]
-        await page.goto(f"{base}/dashboard", timeout=15000)
-        await page.wait_for_load_state("networkidle", timeout=15000)
+        url_pos_login = page.url
+        print(f"  [DEBUG] redirecionado para: {url_pos_login}")
+
+        # Só navega para /dashboard se não estiver em uma rota de dados
+        if "/login" in url_pos_login or url_pos_login.endswith("/"):
+            base = url_pos_login.split("/")[0] + "//" + url_pos_login.split("/")[2]
+            await page.goto(f"{base}/dashboard", timeout=20000)
+
+        # Espera a página carregar completamente
+        await page.wait_for_load_state("networkidle", timeout=20000)
+        await page.wait_for_timeout(2000)  # SPA: aguarda render inicial
+
         print(f"  [DEBUG] login OK, URL: {page.url}")
         await _screenshot(page, "03_dashboard")
         return True
@@ -384,6 +396,26 @@ async def coletar_farmacia(
             )
 
         await _aplicar_filtro_datas(page, inicio, fim)
+
+        # Espera o SPA terminar de carregar os dados (máx 30s)
+        print(f"  [DEBUG] {nome}: aguardando dados carregarem...")
+        try:
+            await page.wait_for_function(
+                "document.body.innerText.includes('R$') || "
+                "document.body.innerText.includes('atendimento') || "
+                "document.body.innerText.includes('Venda')",
+                timeout=30000,
+            )
+            print(f"  [DEBUG] {nome}: dados detectados na página")
+        except Exception as e:
+            print(f"  [DEBUG] {nome}: timeout aguardando dados: {e}")
+            # Dump dos primeiros 3000 chars da página para diagnóstico
+            try:
+                txt = await page.locator("body").text_content(timeout=5000)
+                print(f"  [DEBUG] {nome}: conteúdo da página (3000 chars):\n{(txt or '')[:3000]}")
+            except Exception:
+                pass
+            await _screenshot(page, "05_sem_dados")
 
         # Coleta em paralelo: receita + vendas badge + total atendimentos
         receita, vendas, total_atend = await asyncio.gather(
