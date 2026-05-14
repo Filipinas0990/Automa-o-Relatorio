@@ -457,6 +457,14 @@ async def coletar_farmacia(
                 erro="Falha no login",
             )
 
+        # Após login o site redireciona para /newsletter — volta ao dashboard
+        print(f"  [DEBUG] {nome}: pos-login={page.url}, navegando ao dashboard...")
+        await page.goto(f"{url_base}/", timeout=30000)
+        await page.wait_for_load_state("networkidle", timeout=20000)
+        await page.wait_for_timeout(2000)
+        print(f"  [DEBUG] {nome}: dashboard URL={page.url}")
+        await _screenshot(page, "04_dashboard")
+
         await _aplicar_filtro_datas(page, inicio, fim)
 
         # Espera o SPA terminar de carregar os dados (máx 45s)
