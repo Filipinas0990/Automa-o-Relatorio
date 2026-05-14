@@ -4,7 +4,7 @@ import os
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field
 from typing import Optional
-from playwright.async_api import async_playwright, Page, Browser
+from playwright.async_api import async_playwright, Page
 
 DEBUG_SCREENSHOTS = os.getenv("DEBUG_SCREENSHOTS", "false").lower() == "true"
 DEBUG_DIR = "/app/logs/debug_screenshots"
@@ -181,8 +181,11 @@ async def _aplicar_filtro_datas(page: Page, inicio: str, fim: str):
     if await salvar_btn.count() > 0:
         await salvar_btn.first.click()
 
-    await page.wait_for_load_state("networkidle", timeout=30000)
-    await page.wait_for_timeout(1500)
+    try:
+        await page.wait_for_load_state("networkidle", timeout=20000)
+    except Exception:
+        await page.wait_for_timeout(2000)
+    await page.wait_for_timeout(1000)
 
     # Fecha o painel com Escape
     try:
@@ -411,18 +414,48 @@ def _mapear_canais(canais: dict) -> dict:
     return {"google": google, "facebook": facebook, "grupos_oferta": grupos}
 
 
+_BROWSER_ARGS = [
+    "--no-sandbox",
+    "--disable-dev-shm-usage",
+    "--disable-gpu",
+    "--disable-blink-features=AutomationControlled",
+    "--disable-infobars",
+    "--disable-extensions",
+    "--disable-background-networking",
+    "--window-size=1366,768",
+    "--js-flags=--max-old-space-size=256",
+]
+
+
 async def coletar_farmacia(
     nome: str,
     url_base: str,
     email: str,
     senha: str,
-    browser: Browser,
     dias: int = 7,
 ) -> DadosFarmacia:
     hoje   = datetime.now()
     inicio = (hoje - timedelta(days=dias)).strftime("%Y-%m-%d")
     fim    = hoje.strftime("%Y-%m-%d")
 
+    # Cada farmácia sobe e derruba seu próprio processo Chromium — sem vazamento de memória entre coletas
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(headless=True, args=_BROWSER_ARGS)
+        try:
+            return await _coletar_com_browser(browser, nome, url_base, email, senha, inicio, fim)
+        finally:
+            await browser.close()
+
+
+async def _coletar_com_browser(
+    browser,
+    nome: str,
+    url_base: str,
+    email: str,
+    senha: str,
+    inicio: str,
+    fim: str,
+) -> DadosFarmacia:
     context = await browser.new_context(
         locale="pt-BR",
         timezone_id="America/Sao_Paulo",
@@ -444,20 +477,13 @@ async def coletar_farmacia(
     """)
 
     # Bloqueia fontes externas para acelerar carregamento no servidor
-    await context.route(
-        "**/fonts.googleapis.com/**",
-        lambda route: route.abort(),
-    )
-    await context.route(
-        "**/fonts.gstatic.com/**",
-        lambda route: route.abort(),
-    )
+    await context.route("**/fonts.googleapis.com/**", lambda route: route.abort())
+    await context.route("**/fonts.gstatic.com/**", lambda route: route.abort())
 
     page = await context.new_page()
 
     try:
         url_base = url_base.rstrip("/")
-        # domcontentloaded = não espera recursos externos (Stripe, fonts, etc.)
         await page.goto(f"{url_base}/", timeout=60000, wait_until="domcontentloaded")
 
         if not await _fazer_login(page, email, senha):
@@ -471,12 +497,11 @@ async def coletar_farmacia(
         try:
             await page.wait_for_load_state("networkidle", timeout=40000)
         except Exception:
-            await page.wait_for_timeout(4000)  # fallback se networkidle nao atingir
+            await page.wait_for_timeout(4000)
         await _screenshot(page, "04_dashboard")
 
         await _aplicar_filtro_datas(page, inicio, fim)
 
-        # Espera o SPA terminar de carregar os dados (máx 45s)
         print(f"  [DEBUG] {nome}: aguardando dados carregarem...")
         try:
             await page.wait_for_function(
@@ -495,7 +520,6 @@ async def coletar_farmacia(
                 pass
             await _screenshot(page, "05_sem_dados")
 
-        # Coleta em paralelo: receita + vendas badge + total atendimentos
         receita, vendas, total_atend = await asyncio.gather(
             _extrair_receita(page),
             _extrair_vendas_badge(page),
@@ -504,7 +528,6 @@ async def coletar_farmacia(
         if DEBUG_SCREENSHOTS:
             print(f"  [DEBUG] {nome}: receita={receita} vendas={vendas} atend={total_atend}")
 
-        # Extrai dados do gráfico de canais de divulgação
         canais_raw = await _extrair_canais_pizza(
             page, "Quantidade de atendimentos por canal de divulga"
         )
@@ -534,37 +557,23 @@ async def coletar_farmacia(
         await context.close()
 
 
-async def coletar_todas(farmacias: list[dict], paralelo: int = 5) -> list[DadosFarmacia]:
+async def coletar_todas(farmacias: list[dict], paralelo: int = 1) -> list[DadosFarmacia]:
+    """
+    Coleta sequencialmente (paralelo=1 por padrão) — cada farmácia usa seu próprio
+    processo Chromium que é destruído ao final, evitando acúmulo de memória (OOM).
+    """
     resultados = []
 
-    async with async_playwright() as pw:
-        browser = await pw.chromium.launch(
-            headless=True,
-            args=[
-                "--no-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-blink-features=AutomationControlled",
-                "--disable-infobars",
-                "--window-size=1366,768",
-            ],
+    for i, f in enumerate(farmacias, 1):
+        print(f"  [{i}/{len(farmacias)}] Coletando {f['nome']}...")
+        resultado = await coletar_farmacia(
+            nome=f["nome"],
+            url_base=f["url_base"],
+            email=f["email"],
+            senha=f["senha"],
         )
-
-        for i in range(0, len(farmacias), paralelo):
-            lote = farmacias[i: i + paralelo]
-            tarefas = [
-                coletar_farmacia(
-                    nome=f["nome"],
-                    url_base=f["url_base"],
-                    email=f["email"],
-                    senha=f["senha"],
-                    browser=browser,
-                )
-                for f in lote
-            ]
-            resultados_lote = await asyncio.gather(*tarefas)
-            resultados.extend(resultados_lote)
-            print(f"  Lote {i // paralelo + 1} OK ({len(resultados)}/{len(farmacias)})")
-
-        await browser.close()
+        resultados.append(resultado)
+        status = "ERRO" if resultado.erro else "OK"
+        print(f"  [{i}/{len(farmacias)}] {f['nome']}: {status}")
 
     return resultados
