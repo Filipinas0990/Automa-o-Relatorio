@@ -457,12 +457,22 @@ async def coletar_farmacia(
                 erro="Falha no login",
             )
 
-        # Após login o site redireciona para /newsletter — volta ao dashboard
-        print(f"  [DEBUG] {nome}: pos-login={page.url}, navegando ao dashboard...")
-        await page.goto(f"{url_base}/", timeout=30000)
-        await page.wait_for_load_state("networkidle", timeout=20000)
-        await page.wait_for_timeout(2000)
-        print(f"  [DEBUG] {nome}: dashboard URL={page.url}")
+        # Login redireciona para /newsletter — navega para o painel de analytics
+        print(f"  [DEBUG] {nome}: pos-login={page.url}")
+
+        # Tenta /dashboard primeiro; se redirecionar para login, tenta /reports
+        for tentativa in ("/dashboard", "/reports", "/home", "/"):
+            destino = f"{url_base}{tentativa}"
+            print(f"  [DEBUG] {nome}: tentando {destino}")
+            await page.goto(destino, timeout=30000)
+            await page.wait_for_load_state("networkidle", timeout=20000)
+            await page.wait_for_timeout(2000)
+            corpo = (await page.locator("body").text_content(timeout=5000) or "").lower()
+            ainda_login = any(p in corpo for p in ("esqueci minha senha", "forget my password"))
+            print(f"  [DEBUG] {nome}: URL={page.url} | login={ainda_login}")
+            if not ainda_login:
+                break
+
         await _screenshot(page, "04_dashboard")
 
         await _aplicar_filtro_datas(page, inicio, fim)
