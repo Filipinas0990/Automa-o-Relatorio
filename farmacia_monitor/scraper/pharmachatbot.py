@@ -72,54 +72,61 @@ async def _fazer_login(page: Page, email: str, senha: str) -> bool:
         await _screenshot(page, "01b_sem_email_field")
         return False
 
-    await page.fill('input[type="email"]', email)
-    await page.fill('input[type="password"]', senha)
-    botao = page.locator(
-        'button:has-text("Entrar"), button:has-text("Sign In"), button[type="submit"]'
-    )
-    await _screenshot(page, "02_pre_click_login")
-    await botao.first.click(timeout=10000)
+    # Limpa e digita campo a campo simulando teclado real
+    email_input = page.locator('input[type="email"]').first
+    await email_input.click()
+    await email_input.triple_click()
+    await page.keyboard.type(email, delay=50)
 
-    # Aguarda o formulário de login sumir (indica login bem-sucedido)
+    await page.wait_for_timeout(300)
+
+    senha_input = page.locator('input[type="password"]').first
+    await senha_input.click()
+    await senha_input.triple_click()
+    await page.keyboard.type(senha, delay=50)
+
+    await page.wait_for_timeout(500)
+    await _screenshot(page, "02_pre_submit")
+
+    # Tenta clicar no botão; fallback: Enter
     try:
-        await page.wait_for_selector(
-            'input[type="email"]', state="hidden", timeout=20000
+        botao = page.locator(
+            'button:has-text("Entrar"), button:has-text("Sign In"), button[type="submit"]'
         )
+        await botao.first.click(timeout=8000)
     except Exception:
-        pass  # Pode já ter sumido
+        await page.keyboard.press("Enter")
 
-    # Aguarda conteúdo do dashboard aparecer (dados reais do SPA)
-    try:
-        await page.wait_for_function(
-            """() => {
-                const t = (document.body.innerText || '').toLowerCase();
-                return t.includes('atendimento') || t.includes('canal') ||
-                       t.includes('venda') || t.includes('r$') ||
-                       t.includes('dashboard');
-            }""",
-            timeout=40000,
-        )
-        print(f"  [DEBUG] login OK + dashboard carregado, URL: {page.url}")
-        await _screenshot(page, "03_dashboard")
-        return True
-    except Exception as e:
-        # Verifica se ainda está na tela de login
+    # Palavras do formulário de login em PT e EN
+    _PALAVRAS_LOGIN = ("entrar", "esqueci minha senha", "lembrar-me",
+                       "sign in", "forget my password", "remember me")
+
+    def _esta_no_login(texto: str) -> bool:
+        t = texto.lower()
+        return any(p in t for p in _PALAVRAS_LOGIN)
+
+    # Aguarda sair do login (máx 30s)
+    deadline = 30
+    for _ in range(deadline):
+        await page.wait_for_timeout(1000)
         try:
-            corpo = (await page.locator("body").text_content(timeout=3000) or "").lower()
-            ainda_login = "sign in" in corpo or "forget my password" in corpo
-            print(f"  [DEBUG] wait_for_function: {e}")
-            print(f"  [DEBUG] ainda no login: {ainda_login}, URL: {page.url}")
-
-            if not ainda_login:
-                # Login funcionou — dashboard é lento, mas estamos autenticados
-                print("  [DEBUG] login OK (formulario sumiu, aguardando dados...)")
-                await page.wait_for_timeout(3000)
-                await _screenshot(page, "03_apos_login")
+            corpo = (await page.locator("body").text_content(timeout=3000) or "")
+            if not _esta_no_login(corpo):
+                print(f"  [DEBUG] login OK, URL: {page.url}")
+                await _screenshot(page, "03_dashboard")
                 return True
         except Exception:
             pass
-        await _screenshot(page, "03_login_falhou")
-        return False
+
+    # Última checagem + dump para diagnóstico
+    try:
+        corpo = (await page.locator("body").text_content(timeout=3000) or "")
+        print(f"  [DEBUG] login FALHOU apos {deadline}s. URL: {page.url}")
+        print(f"  [DEBUG] conteudo atual:\n{corpo[:1500]}")
+    except Exception:
+        pass
+    await _screenshot(page, "03_login_falhou")
+    return False
 
 
 async def _aplicar_filtro_datas(page: Page, inicio: str, fim: str):
