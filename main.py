@@ -148,7 +148,8 @@ async def pipeline():
     print(f"  Farmacias ativas: {len(farmacias)}\n")
 
     print("  Coletando dados...\n")
-    resultados = await coletar_todas(farmacias, paralelo=5)
+    paralelo = int(os.getenv("PARALELO_MAX", "1"))
+    resultados = await coletar_todas(farmacias, paralelo=paralelo)
 
     print("\n  Processando e salvando...\n")
     salvar_resultados(resultados)
