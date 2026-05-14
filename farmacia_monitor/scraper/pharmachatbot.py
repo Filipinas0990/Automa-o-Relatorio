@@ -391,21 +391,40 @@ async def coletar_farmacia(
     inicio = (hoje - timedelta(days=dias)).strftime("%Y-%m-%d")
     fim    = hoje.strftime("%Y-%m-%d")
 
-    context = await browser.new_context(locale="pt-BR")
+    context = await browser.new_context(
+        locale="pt-BR",
+        timezone_id="America/Sao_Paulo",
+        viewport={"width": 1366, "height": 768},
+        user_agent=(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        extra_http_headers={"Accept-Language": "pt-BR,pt;q=0.9"},
+    )
+
+    # Remove marcadores de automação detectados por SPAs
+    await context.add_init_script("""
+        Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+        Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3] });
+        Object.defineProperty(navigator, 'languages', { get: () => ['pt-BR', 'pt'] });
+        window.chrome = { runtime: {} };
+    """)
 
     # Bloqueia fontes externas para acelerar carregamento no servidor
     await context.route(
-        "**/{fonts.googleapis.com,fonts.gstatic.com}/**",
+        "**/fonts.googleapis.com/**",
         lambda route: route.abort(),
     )
     await context.route(
-        "**/*.{woff,woff2,ttf,otf}",
+        "**/fonts.gstatic.com/**",
         lambda route: route.abort(),
     )
 
     page = await context.new_page()
 
     try:
+        url_base = url_base.rstrip("/")
         await page.goto(f"{url_base}/", timeout=20000)
 
         if not await _fazer_login(page, email, senha):
@@ -479,7 +498,13 @@ async def coletar_todas(farmacias: list[dict], paralelo: int = 5) -> list[DadosF
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(
             headless=True,
-            args=["--no-sandbox", "--disable-dev-shm-usage"],
+            args=[
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-blink-features=AutomationControlled",
+                "--disable-infobars",
+                "--window-size=1366,768",
+            ],
         )
 
         for i in range(0, len(farmacias), paralelo):
