@@ -68,7 +68,7 @@ async def _fazer_login(page: Page, email: str, senha: str) -> bool:
 
     # Espera campo de email aparecer + React hidratar
     try:
-        await page.wait_for_selector('input[type="email"]', timeout=15000)
+        await page.wait_for_selector('input[type="email"]', timeout=30000)
         await page.wait_for_timeout(2000)  # React precisa de tempo para hidratar
     except Exception:
         print("  [DEBUG] campo email nao encontrado")
