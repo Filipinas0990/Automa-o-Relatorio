@@ -97,18 +97,25 @@ async def _fazer_login(page: Page, email: str, senha: str) -> bool:
                        t.includes('venda') || t.includes('r$') ||
                        t.includes('dashboard');
             }""",
-            timeout=30000,
+            timeout=40000,
         )
-        print(f"  [DEBUG] login OK, URL: {page.url}")
+        print(f"  [DEBUG] login OK + dashboard carregado, URL: {page.url}")
         await _screenshot(page, "03_dashboard")
         return True
     except Exception as e:
-        # Verifica se ainda está no login
+        # Verifica se ainda está na tela de login
         try:
             corpo = (await page.locator("body").text_content(timeout=3000) or "").lower()
             ainda_login = "sign in" in corpo or "forget my password" in corpo
-            print(f"  [DEBUG] dashboard nao carregou: {e}")
+            print(f"  [DEBUG] wait_for_function: {e}")
             print(f"  [DEBUG] ainda no login: {ainda_login}, URL: {page.url}")
+
+            if not ainda_login:
+                # Login funcionou — dashboard é lento, mas estamos autenticados
+                print("  [DEBUG] login OK (formulario sumiu, aguardando dados...)")
+                await page.wait_for_timeout(3000)
+                await _screenshot(page, "03_apos_login")
+                return True
         except Exception:
             pass
         await _screenshot(page, "03_login_falhou")
@@ -435,22 +442,21 @@ async def coletar_farmacia(
 
         await _aplicar_filtro_datas(page, inicio, fim)
 
-        # Espera o SPA terminar de carregar os dados (máx 30s)
+        # Espera o SPA terminar de carregar os dados (máx 45s)
         print(f"  [DEBUG] {nome}: aguardando dados carregarem...")
         try:
             await page.wait_for_function(
                 "document.body.innerText.includes('R$') || "
                 "document.body.innerText.includes('atendimento') || "
                 "document.body.innerText.includes('Venda')",
-                timeout=30000,
+                timeout=45000,
             )
             print(f"  [DEBUG] {nome}: dados detectados na página")
         except Exception as e:
             print(f"  [DEBUG] {nome}: timeout aguardando dados: {e}")
-            # Dump dos primeiros 3000 chars da página para diagnóstico
             try:
                 txt = await page.locator("body").text_content(timeout=5000)
-                print(f"  [DEBUG] {nome}: conteúdo da página (3000 chars):\n{(txt or '')[:3000]}")
+                print(f"  [DEBUG] {nome}: conteudo da pagina:\n{(txt or '')[:2000]}")
             except Exception:
                 pass
             await _screenshot(page, "05_sem_dados")
