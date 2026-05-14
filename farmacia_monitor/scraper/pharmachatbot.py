@@ -1,9 +1,13 @@
 import re
 import asyncio
+import os
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field
 from typing import Optional
 from playwright.async_api import async_playwright, Page, Browser
+
+DEBUG_SCREENSHOTS = os.getenv("DEBUG_SCREENSHOTS", "false").lower() == "true"
+DEBUG_DIR = "/app/logs/debug_screenshots"
 
 
 @dataclass
@@ -37,12 +41,43 @@ def _parse_inteiro(texto: str) -> int:
     return int(limpo) if limpo else 0
 
 
+async def _screenshot(page: Page, nome: str):
+    if not DEBUG_SCREENSHOTS:
+        return
+    try:
+        os.makedirs(DEBUG_DIR, exist_ok=True)
+        ts = datetime.now().strftime("%H%M%S")
+        path = f"{DEBUG_DIR}/{ts}_{nome}.png"
+        await page.screenshot(path=path, full_page=True)
+        print(f"  [DEBUG] screenshot: {path}")
+    except Exception as ex:
+        print(f"  [DEBUG] screenshot falhou: {ex}")
+
+
 async def _fazer_login(page: Page, email: str, senha: str) -> bool:
+    await _screenshot(page, "01_pre_login")
+    print(f"  [DEBUG] URL atual: {page.url}")
+    print(f"  [DEBUG] tentando login: {email}")
+
+    # Espera campo de email aparecer
+    try:
+        await page.wait_for_selector('input[type="email"]', timeout=10000)
+    except Exception:
+        print("  [DEBUG] campo email nao encontrado, HTML:")
+        try:
+            html = await page.content()
+            print(html[:2000])
+        except Exception:
+            pass
+        await _screenshot(page, "01b_sem_email_field")
+        return False
+
     await page.fill('input[type="email"]', email)
     await page.fill('input[type="password"]', senha)
     botao = page.locator(
         'button:has-text("Entrar"), button:has-text("Sign In"), button[type="submit"]'
     )
+    await _screenshot(page, "02_pre_click_login")
     await botao.first.click(timeout=10000)
     try:
         await page.wait_for_function(
@@ -51,8 +86,12 @@ async def _fazer_login(page: Page, email: str, senha: str) -> bool:
         base = page.url.split("/")[0] + "//" + page.url.split("/")[2]
         await page.goto(f"{base}/dashboard", timeout=15000)
         await page.wait_for_load_state("networkidle", timeout=15000)
+        print(f"  [DEBUG] login OK, URL: {page.url}")
+        await _screenshot(page, "03_dashboard")
         return True
-    except Exception:
+    except Exception as e:
+        print(f"  [DEBUG] login FALHOU: {e}, URL: {page.url}")
+        await _screenshot(page, "03_login_falhou")
         return False
 
 
@@ -100,6 +139,8 @@ async def _aplicar_filtro_datas(page: Page, inicio: str, fim: str):
             await page.wait_for_timeout(600)
     except Exception:
         pass
+
+    await _screenshot(page, "04_apos_filtro")
 
 
 async def _extrair_canais_pizza(page: Page, titulo: str) -> dict:
@@ -350,12 +391,15 @@ async def coletar_farmacia(
             _extrair_vendas_badge(page),
             _extrair_total_atendimentos(page),
         )
+        print(f"  [DEBUG] {nome}: receita={receita} vendas={vendas} atend={total_atend}")
 
         # Extrai dados do gráfico de canais de divulgação
         canais_raw = await _extrair_canais_pizza(
             page, "Quantidade de atendimentos por canal de divulga"
         )
         mapeado = _mapear_canais(canais_raw)
+        print(f"  [DEBUG] {nome}: canais_raw={canais_raw}")
+        await _screenshot(page, "05_final")
 
         return DadosFarmacia(
             nome=nome,
