@@ -119,13 +119,36 @@ def salvar_resultados(dados_coletados):
             db.add(coleta)
             db.flush()
 
-            # Salva breakdown completo de todos os canais
-            for nome_canal, total in dado.canais.items():
+            # Normaliza canais_vendas pelo nome em minúsculas para cruzar com pizza
+            vendas_por_canal = {
+                k.strip().lower(): v
+                for k, v in dado.canais_vendas.items()
+            }
+
+            # Salva breakdown completo: atendimentos (pizza) + vendas/receita (barras)
+            nomes_salvos: set[str] = set()
+            for nome_canal, total_atend in dado.canais.items():
+                norm = nome_canal.strip().lower()
+                info_venda = vendas_por_canal.get(norm, {})
                 db.add(ColetaCanal(
                     coleta_id=coleta.id,
                     canal=nome_canal,
-                    atendimentos=total,
+                    atendimentos=total_atend,
+                    vendas=info_venda.get("vendas", 0),
+                    receita_vendas=info_venda.get("receita", 0),
                 ))
+                nomes_salvos.add(norm)
+
+            # Canais que só aparecem no gráfico de barras (não estão na pizza)
+            for nome_canal, info_venda in dado.canais_vendas.items():
+                if nome_canal.strip().lower() not in nomes_salvos:
+                    db.add(ColetaCanal(
+                        coleta_id=coleta.id,
+                        canal=nome_canal,
+                        atendimentos=0,
+                        vendas=info_venda.get("vendas", 0),
+                        receita_vendas=info_venda.get("receita", 0),
+                    ))
 
             alertas = score_info.get("alertas", [])
             alerta_str = " | ".join(alertas) if alertas else "OK"

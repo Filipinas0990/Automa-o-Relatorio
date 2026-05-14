@@ -376,7 +376,10 @@ def get_painel(
 
     # Canais: agrega da última coleta de cada farmácia filtrada
     canais_rows = db.execute(text(f"""
-        SELECT cc.canal, SUM(cc.atendimentos)::int AS total
+        SELECT cc.canal,
+               SUM(cc.atendimentos)::int          AS total_atendimentos,
+               SUM(cc.vendas)::int                AS total_vendas,
+               SUM(cc.receita_vendas)::numeric    AS total_receita_vendas
         FROM coleta_canais cc
         JOIN (
             SELECT DISTINCT ON (farmacia_id) id AS coleta_id, farmacia_id
@@ -386,18 +389,27 @@ def get_painel(
         JOIN farmacias f ON f.id = latest.farmacia_id
         WHERE f.ativa = TRUE {filtro_sql}
         GROUP BY cc.canal
-        ORDER BY total DESC
+        ORDER BY total_atendimentos DESC
     """), params).mappings().all()
 
     # Agrega por nome padronizado (Google / Meta / Grupos / outros)
-    canais_agg: dict[str, int] = {}
+    canais_agg: dict[str, dict] = {}
     for row in canais_rows:
         nome_std = _mapear_nome_canal(row["canal"])
-        canais_agg[nome_std] = canais_agg.get(nome_std, 0) + int(row["total"] or 0)
+        if nome_std not in canais_agg:
+            canais_agg[nome_std] = {"atendimentos": 0, "vendas": 0, "receita_vendas": 0.0}
+        canais_agg[nome_std]["atendimentos"]   += int(row["total_atendimentos"] or 0)
+        canais_agg[nome_std]["vendas"]         += int(row["total_vendas"] or 0)
+        canais_agg[nome_std]["receita_vendas"] += float(row["total_receita_vendas"] or 0)
 
     canais = [
-        {"nome": nome, "atendimentos": total}
-        for nome, total in sorted(canais_agg.items(), key=lambda x: -x[1])
+        {
+            "nome":           nome,
+            "atendimentos":   dados["atendimentos"],
+            "vendas":         dados["vendas"],
+            "receita_vendas": round(dados["receita_vendas"], 2),
+        }
+        for nome, dados in sorted(canais_agg.items(), key=lambda x: -x[1]["atendimentos"])
     ]
 
     return {
@@ -459,7 +471,11 @@ def get_farmacias(
         canais_params["gid"] = filtro
 
     canais_rows = db.execute(text(f"""
-        SELECT latest.farmacia_id, cc.canal, SUM(cc.atendimentos)::int AS total
+        SELECT latest.farmacia_id,
+               cc.canal,
+               SUM(cc.atendimentos)::int       AS total_atendimentos,
+               SUM(cc.vendas)::int             AS total_vendas,
+               SUM(cc.receita_vendas)::numeric AS total_receita_vendas
         FROM coleta_canais cc
         JOIN (
             SELECT DISTINCT ON (farmacia_id) id AS coleta_id, farmacia_id
@@ -469,16 +485,20 @@ def get_farmacias(
         JOIN farmacias f ON f.id = latest.farmacia_id
         WHERE f.ativa = TRUE {canais_filtro_sql}
         GROUP BY latest.farmacia_id, cc.canal
-        ORDER BY latest.farmacia_id, total DESC
+        ORDER BY latest.farmacia_id, total_atendimentos DESC
     """), canais_params).mappings().all()
 
     # Agrupa canais por farmacia_id com nome padronizado
-    canais_por_farmacia: dict[int, dict[str, int]] = {}
+    canais_por_farmacia: dict[int, dict[str, dict]] = {}
     for cr in canais_rows:
         fid = int(cr["farmacia_id"])
         nome_std = _mapear_nome_canal(cr["canal"])
         canais_por_farmacia.setdefault(fid, {})
-        canais_por_farmacia[fid][nome_std] = canais_por_farmacia[fid].get(nome_std, 0) + int(cr["total"] or 0)
+        if nome_std not in canais_por_farmacia[fid]:
+            canais_por_farmacia[fid][nome_std] = {"atendimentos": 0, "vendas": 0, "receita_vendas": 0.0}
+        canais_por_farmacia[fid][nome_std]["atendimentos"]   += int(cr["total_atendimentos"] or 0)
+        canais_por_farmacia[fid][nome_std]["vendas"]         += int(cr["total_vendas"] or 0)
+        canais_por_farmacia[fid][nome_std]["receita_vendas"] += float(cr["total_receita_vendas"] or 0)
 
     resultado = []
     for r in rows:
@@ -492,9 +512,14 @@ def get_farmacias(
 
         fid = int(r["farmacia_id"])
         canais = [
-            {"nome": nome, "atendimentos": total}
-            for nome, total in sorted(
-                canais_por_farmacia.get(fid, {}).items(), key=lambda x: -x[1]
+            {
+                "nome":           nome,
+                "atendimentos":   dados["atendimentos"],
+                "vendas":         dados["vendas"],
+                "receita_vendas": round(dados["receita_vendas"], 2),
+            }
+            for nome, dados in sorted(
+                canais_por_farmacia.get(fid, {}).items(), key=lambda x: -x[1]["atendimentos"]
             )
         ]
 
@@ -638,6 +663,57 @@ def download_xlsx(
         buffer,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename=relatorio_{periodo_inicio}.xlsx"},
+    )
+
+
+@app.get("/api/relatorios/{periodo_inicio}/csv")
+def download_csv(
+    periodo_inicio: str,
+    _: GestorTrafego = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """CSV otimizado para importação no Power BI (UTF-8 com BOM, separador vírgula)."""
+    import csv
+
+    rows = db.execute(text("""
+        SELECT f.nome, c.periodo_inicio, c.periodo_fim,
+               c.receita_total, c.total_atendimentos,
+               c.vendas_realizadas, c.score_criticidade, c.nivel_alerta
+        FROM coletas c
+        JOIN farmacias f ON f.id = c.farmacia_id
+        WHERE c.periodo_inicio::TEXT = :periodo
+        ORDER BY c.score_criticidade DESC
+    """), {"periodo": periodo_inicio}).mappings().all()
+
+    if not rows:
+        raise HTTPException(status_code=404, detail="Periodo nao encontrado")
+
+    buffer = io.StringIO()
+    # BOM UTF-8 para Power BI reconhecer acentos corretamente
+    buffer.write("﻿")
+    writer = csv.writer(buffer)
+    writer.writerow([
+        "Farmacia", "Periodo_Inicio", "Periodo_Fim",
+        "Receita_BRL", "Total_Atendimentos", "Vendas_Realizadas",
+        "Score_Criticidade", "Nivel_Alerta",
+    ])
+    for r in rows:
+        writer.writerow([
+            r["nome"],
+            str(r["periodo_inicio"]),
+            str(r["periodo_fim"]),
+            float(r["receita_total"] or 0),
+            int(r["total_atendimentos"] or 0),
+            int(r["vendas_realizadas"] or 0),
+            float(r["score_criticidade"] or 0),
+            r["nivel_alerta"],
+        ])
+
+    content = buffer.getvalue().encode("utf-8-sig")
+    return StreamingResponse(
+        io.BytesIO(content),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f"attachment; filename=relatorio_{periodo_inicio}.csv"},
     )
 
 

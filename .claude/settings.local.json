@@ -16,7 +16,10 @@
       "PowerShell(python -m pip install cryptography --quiet 2>&1)",
       "PowerShell(python -c \"from cryptography.fernet import Fernet; print\\('OK'\\)\")",
       "Bash(ls \"c:\\\\Users\\\\Grupo Symbol Digital\\\\Desktop\\\\AUTOMAÇÂO\\\\\")",
-      "Read(//c/Users/Grupo Symbol Digital/Desktop/**)"
+      "Read(//c/Users/Grupo Symbol Digital/Desktop/**)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\Grupo Symbol Digital\\\\Desktop\\\\AUTOMAÇÂO\\\\farmacia_monitor\\\\api\\\\\" -Recurse -File | Select-Object -ExpandProperty FullName)"
     ]
   }
 }

@@ -23,8 +23,10 @@ class DadosFarmacia:
     # Vendas
     vendas_realizadas: int = 0      # quantidade
     receita_total: float = 0.0      # faturamento total R$
-    # Todos os canais coletados (para armazenar breakdown completo)
+    # Atendimentos por canal (gráfico pizza)
     canais: dict = field(default_factory=dict)
+    # Vendas e receita por canal (gráfico barras) — {nome: {"vendas": int, "receita": float}}
+    canais_vendas: dict = field(default_factory=dict)
     erro: Optional[str] = None
 
 
@@ -321,6 +323,122 @@ async def _extrair_canais_pizza(page: Page, titulo: str) -> dict:
     return canais
 
 
+async def _extrair_canais_barras_vendas(page: Page) -> dict:
+    """
+    Extrai o gráfico de barras de vendas por canal.
+    Tooltip esperado: 'canal: X / total: Y / total em vendas: R$Z'
+    Retorna: {canal_name: {"vendas": int, "receita": float}}
+    """
+    # Método 1: React fiber — varre SVGs com barras buscando campo monetário
+    fiber_result = await page.evaluate("""
+        () => {
+            function getFiberKey(el) {
+                return Object.keys(el).find(k =>
+                    k.startsWith('__reactFiber') ||
+                    k.startsWith('__reactInternalInstance')
+                );
+            }
+            function walkFiber(fiber, depth) {
+                if (!fiber || depth > 30) return [];
+                const out = [];
+                const props = fiber.memoizedProps || {};
+                if (Array.isArray(props.data) && props.data.length > 0) {
+                    const sample = props.data[0];
+                    const keys = Object.keys(sample);
+                    const nomeKey = keys.find(k => ['nome','canal','name','label'].includes(k.toLowerCase()));
+                    // Campo monetário: valor > 500 e nome contém "vend" ou "receita"
+                    const receitaKey = keys.find(k =>
+                        typeof sample[k] === 'number' && sample[k] > 500 &&
+                        /vend|receita|revenue/i.test(k)
+                    );
+                    // Fallback: qualquer campo numérico > 1000 (provável R$)
+                    const receitaFallback = !receitaKey && keys.find(k =>
+                        k !== nomeKey && typeof sample[k] === 'number' && sample[k] > 1000
+                    );
+                    const rKey = receitaKey || receitaFallback;
+                    if (nomeKey && rKey) {
+                        const vendaKey = keys.find(k => k !== nomeKey && k !== rKey && typeof sample[k] === 'number');
+                        props.data.forEach(d => {
+                            const nome = d[nomeKey] ? String(d[nomeKey]) : '';
+                            if (nome && rKey in d) {
+                                out.push({
+                                    nome,
+                                    vendas: vendaKey ? Number(d[vendaKey]) : 0,
+                                    receita: Number(d[rKey]),
+                                });
+                            }
+                        });
+                    }
+                }
+                if (fiber.child)   out.push(...walkFiber(fiber.child,   depth + 1));
+                if (fiber.sibling) out.push(...walkFiber(fiber.sibling, depth + 1));
+                return out;
+            }
+            const svgs = document.querySelectorAll('svg');
+            for (const svg of svgs) {
+                if (svg.querySelectorAll('rect').length < 2) continue;
+                const key = getFiberKey(svg);
+                if (!key) continue;
+                const items = walkFiber(svg[key], 0);
+                if (items.length > 0 && items.some(i => i.receita > 0)) {
+                    const res = {};
+                    items.forEach(i => { res[i.nome] = {vendas: i.vendas, receita: i.receita}; });
+                    return res;
+                }
+            }
+            return {};
+        }
+    """)
+
+    if fiber_result and any(v.get("receita", 0) > 0 for v in fiber_result.values()):
+        return fiber_result
+
+    # Método 2: hover nos <rect> de todos os SVGs, lê tooltip com "total em vendas"
+    resultado: dict = {}
+    vistos: set = set()
+
+    rects = page.locator('svg rect[width][height]')
+    total_rects = await rects.count()
+
+    for i in range(total_rects):
+        try:
+            rect = rects.nth(i)
+            h = await rect.get_attribute("height")
+            if not h or float(h) < 5:
+                continue
+
+            await rect.hover(force=True, timeout=3000)
+            await page.wait_for_timeout(300)
+
+            tooltip = page.locator(
+                '[class*="recharts-tooltip-wrapper"], '
+                '[class*="tooltip"], [class*="Tooltip"]'
+            ).filter(has_text=re.compile(r"total em vendas", re.IGNORECASE))
+
+            if await tooltip.count() == 0:
+                continue
+
+            texto = (await tooltip.first.text_content(timeout=2000) or "").strip()
+            if not texto or texto in vistos:
+                continue
+            vistos.add(texto)
+
+            canal_m   = re.search(r"canal[:\s]+(.+?)(?:\n|total|$)", texto, re.IGNORECASE)
+            total_m   = re.search(r"\btotal\b(?!\s+em)[:\s]+([\d.,]+)", texto, re.IGNORECASE)
+            receita_m = re.search(r"total\s+em\s+vendas[:\s]+R?\$?\s*([\d.,]+)", texto, re.IGNORECASE)
+
+            if canal_m and receita_m:
+                nome    = canal_m.group(1).strip()
+                vendas  = _parse_inteiro(total_m.group(1)) if total_m else 0
+                receita = _parse_moeda("R$" + receita_m.group(1))
+                if nome and receita > 0:
+                    resultado[nome] = {"vendas": vendas, "receita": receita}
+        except Exception:
+            continue
+
+    return resultado
+
+
 async def _extrair_receita(page: Page) -> float:
     try:
         corpo = await page.locator("body").text_content(timeout=5000)
@@ -531,9 +649,11 @@ async def _coletar_com_browser(
         canais_raw = await _extrair_canais_pizza(
             page, "Quantidade de atendimentos por canal de divulga"
         )
+        canais_vendas = await _extrair_canais_barras_vendas(page)
         mapeado = _mapear_canais(canais_raw)
         if DEBUG_SCREENSHOTS:
             print(f"  [DEBUG] {nome}: canais_raw={canais_raw}")
+            print(f"  [DEBUG] {nome}: canais_vendas={canais_vendas}")
         await _screenshot(page, "05_final")
 
         return DadosFarmacia(
@@ -547,6 +667,7 @@ async def _coletar_com_browser(
             vendas_realizadas=vendas,
             receita_total=receita,
             canais=canais_raw,
+            canais_vendas=canais_vendas,
         )
 
     except Exception as e:

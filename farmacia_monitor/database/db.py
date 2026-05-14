@@ -88,10 +88,12 @@ class Coleta(Base):
 class ColetaCanal(Base):
     __tablename__ = "coleta_canais"
 
-    id           = Column(Integer, primary_key=True)
-    coleta_id    = Column(Integer, ForeignKey("coletas.id", ondelete="CASCADE"), nullable=False)
-    canal        = Column(String(80), nullable=False)
-    atendimentos = Column(Integer, default=0)
+    id             = Column(Integer, primary_key=True)
+    coleta_id      = Column(Integer, ForeignKey("coletas.id", ondelete="CASCADE"), nullable=False)
+    canal          = Column(String(80), nullable=False)
+    atendimentos   = Column(Integer, default=0)
+    vendas         = Column(Integer, default=0)
+    receita_vendas = Column(Numeric(12, 2), default=0)
 
     coleta = relationship("Coleta", back_populates="canais")
 
