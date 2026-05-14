@@ -55,13 +55,16 @@ async def _screenshot(page: Page, nome: str):
 
 
 async def _fazer_login(page: Page, email: str, senha: str) -> bool:
-    print(f"  [DEBUG] URL atual: {page.url}")
-    print(f"  [DEBUG] tentando login: {email}")
+    if DEBUG_SCREENSHOTS:
+        print(f"  [DEBUG] URL atual: {page.url}")
+        print(f"  [DEBUG] tentando login: {email}")
 
     # Coleta respostas de rede para diagnóstico
     _respostas = []
-    page.on("response", lambda r: _respostas.append(f"{r.status} {r.url}"))
-    page.on("console", lambda m: print(f"  [CONSOLE] {m.type}: {m.text}") if m.type in ("error", "warning") else None)
+    _respostas: list[str] = []
+    if DEBUG_SCREENSHOTS:
+        page.on("response", lambda r: _respostas.append(f"{r.status} {r.url}"))
+        page.on("console", lambda m: print(f"  [CONSOLE] {m.type}: {m.text}") if m.type in ("error", "warning") else None)
 
     # Espera campo de email aparecer + React hidratar
     try:
@@ -81,10 +84,10 @@ async def _fazer_login(page: Page, email: str, senha: str) -> bool:
     await page.fill('input[type="password"]', senha)
     await page.wait_for_timeout(600)
 
-    # Verifica se os campos foram preenchidos
-    val_email = await page.input_value('input[type="email"]')
-    val_senha = await page.input_value('input[type="password"]')
-    print(f"  [DEBUG] campos: email={repr(val_email[:10]+'...')} senha={'*'*len(val_senha)}")
+    if DEBUG_SCREENSHOTS:
+        val_email = await page.input_value('input[type="email"]')
+        val_senha = await page.input_value('input[type="password"]')
+        print(f"  [DEBUG] campos: email={repr(val_email[:10]+'...')} senha={'*'*len(val_senha)}")
 
     await _screenshot(page, "02_pre_submit")
 
@@ -93,7 +96,8 @@ async def _fazer_login(page: Page, email: str, senha: str) -> bool:
         'button:has-text("Entrar"), button:has-text("Sign In"), button[type="submit"]'
     )
     n_botoes = await botao.count()
-    print(f"  [DEBUG] botoes encontrados: {n_botoes}")
+    if DEBUG_SCREENSHOTS:
+        print(f"  [DEBUG] botoes encontrados: {n_botoes}")
     if n_botoes > 0:
         await botao.first.click()
     else:
@@ -101,9 +105,9 @@ async def _fazer_login(page: Page, email: str, senha: str) -> bool:
 
     await page.wait_for_timeout(2000)
 
-    # Loga respostas de rede capturadas
-    for r in _respostas[-10:]:
-        print(f"  [NET] {r}")
+    if DEBUG_SCREENSHOTS:
+        for r in _respostas[-10:]:
+            print(f"  [NET] {r}")
 
     # Palavras da tela de login em PT e EN
     _PALAVRAS_LOGIN = ("esqueci minha senha", "lembrar-me", "forget my password", "remember me")
@@ -118,14 +122,15 @@ async def _fazer_login(page: Page, email: str, senha: str) -> bool:
         try:
             corpo = (await page.locator("body").text_content(timeout=3000) or "")
             if not _esta_no_login(corpo):
-                print(f"  [DEBUG] login OK em {i+1}s, URL: {page.url}")
+                if DEBUG_SCREENSHOTS:
+                    print(f"  [DEBUG] login OK em {i+1}s, URL: {page.url}")
                 await _screenshot(page, "03_dashboard")
                 return True
-            # Verifica se apareceu mensagem de erro
-            erros = [ln for ln in corpo.splitlines()
-                     if any(w in ln.lower() for w in ("incorret", "inválid", "erro", "error", "invalid"))]
-            if erros:
-                print(f"  [DEBUG] mensagem de erro na pagina: {erros[:3]}")
+            if DEBUG_SCREENSHOTS:
+                erros = [ln for ln in corpo.splitlines()
+                         if any(w in ln.lower() for w in ("incorret", "inválid", "erro", "error", "invalid"))]
+                if erros:
+                    print(f"  [DEBUG] mensagem de erro na pagina: {erros[:3]}")
         except Exception:
             pass
 
@@ -458,21 +463,9 @@ async def coletar_farmacia(
             )
 
         # Login redireciona para /newsletter — navega para o painel de analytics
-        print(f"  [DEBUG] {nome}: pos-login={page.url}")
-
-        # Tenta /dashboard primeiro; se redirecionar para login, tenta /reports
-        for tentativa in ("/dashboard", "/reports", "/home", "/"):
-            destino = f"{url_base}{tentativa}"
-            print(f"  [DEBUG] {nome}: tentando {destino}")
-            await page.goto(destino, timeout=30000)
-            await page.wait_for_load_state("networkidle", timeout=20000)
-            await page.wait_for_timeout(2000)
-            corpo = (await page.locator("body").text_content(timeout=5000) or "").lower()
-            ainda_login = any(p in corpo for p in ("esqueci minha senha", "forget my password"))
-            print(f"  [DEBUG] {nome}: URL={page.url} | login={ainda_login}")
-            if not ainda_login:
-                break
-
+        await page.goto(f"{url_base}/dashboard", timeout=30000)
+        await page.wait_for_load_state("networkidle", timeout=20000)
+        await page.wait_for_timeout(2000)
         await _screenshot(page, "04_dashboard")
 
         await _aplicar_filtro_datas(page, inicio, fim)
@@ -502,14 +495,16 @@ async def coletar_farmacia(
             _extrair_vendas_badge(page),
             _extrair_total_atendimentos(page),
         )
-        print(f"  [DEBUG] {nome}: receita={receita} vendas={vendas} atend={total_atend}")
+        if DEBUG_SCREENSHOTS:
+            print(f"  [DEBUG] {nome}: receita={receita} vendas={vendas} atend={total_atend}")
 
         # Extrai dados do gráfico de canais de divulgação
         canais_raw = await _extrair_canais_pizza(
             page, "Quantidade de atendimentos por canal de divulga"
         )
         mapeado = _mapear_canais(canais_raw)
-        print(f"  [DEBUG] {nome}: canais_raw={canais_raw}")
+        if DEBUG_SCREENSHOTS:
+            print(f"  [DEBUG] {nome}: canais_raw={canais_raw}")
         await _screenshot(page, "05_final")
 
         return DadosFarmacia(
