@@ -48,7 +48,7 @@ async def _screenshot(page: Page, nome: str):
         os.makedirs(DEBUG_DIR, exist_ok=True)
         ts = datetime.now().strftime("%H%M%S")
         path = f"{DEBUG_DIR}/{ts}_{nome}.png"
-        await page.screenshot(path=path, full_page=True)
+        await page.screenshot(path=path, full_page=True, timeout=8000)
         print(f"  [DEBUG] screenshot: {path}")
     except Exception as ex:
         print(f"  [DEBUG] screenshot falhou: {ex}")
@@ -392,7 +392,18 @@ async def coletar_farmacia(
     fim    = hoje.strftime("%Y-%m-%d")
 
     context = await browser.new_context(locale="pt-BR")
-    page    = await context.new_page()
+
+    # Bloqueia fontes externas para acelerar carregamento no servidor
+    await context.route(
+        "**/{fonts.googleapis.com,fonts.gstatic.com}/**",
+        lambda route: route.abort(),
+    )
+    await context.route(
+        "**/*.{woff,woff2,ttf,otf}",
+        lambda route: route.abort(),
+    )
+
+    page = await context.new_page()
 
     try:
         await page.goto(f"{url_base}/", timeout=20000)
