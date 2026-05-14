@@ -178,7 +178,7 @@ async def _aplicar_filtro_datas(page: Page, inicio: str, fim: str):
     if await salvar_btn.count() > 0:
         await salvar_btn.first.click()
 
-    await page.wait_for_load_state("networkidle", timeout=20000)
+    await page.wait_for_load_state("networkidle", timeout=30000)
     await page.wait_for_timeout(1500)
 
     # Fecha o painel com Escape
@@ -454,7 +454,8 @@ async def coletar_farmacia(
 
     try:
         url_base = url_base.rstrip("/")
-        await page.goto(f"{url_base}/", timeout=20000)
+        # domcontentloaded = não espera recursos externos (Stripe, fonts, etc.)
+        await page.goto(f"{url_base}/", timeout=60000, wait_until="domcontentloaded")
 
         if not await _fazer_login(page, email, senha):
             return DadosFarmacia(
@@ -463,8 +464,8 @@ async def coletar_farmacia(
             )
 
         # Login redireciona para /newsletter — navega para o painel de analytics
-        await page.goto(f"{url_base}/dashboard", timeout=30000)
-        await page.wait_for_load_state("networkidle", timeout=20000)
+        await page.goto(f"{url_base}/dashboard", timeout=60000, wait_until="domcontentloaded")
+        await page.wait_for_load_state("networkidle", timeout=30000)
         await page.wait_for_timeout(2000)
         await _screenshot(page, "04_dashboard")
 

@@ -46,7 +46,7 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-farmacia}:${POSTGRES_PASSWORD:-farmacia123}@postgres:5432/${POSTGRES_DB:-farmacia_monitor}
       HEADLESS: "true"
-      PARALELO_MAX: "5"
+      PARALELO_MAX: "3"
       DEBUG_SCREENSHOTS: "${DEBUG_SCREENSHOTS:-false}"
     volumes:
       - .:/app
