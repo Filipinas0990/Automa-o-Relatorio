@@ -79,30 +79,38 @@ async def _fazer_login(page: Page, email: str, senha: str) -> bool:
     )
     await _screenshot(page, "02_pre_click_login")
     await botao.first.click(timeout=10000)
+
+    # Aguarda o formulário de login sumir (indica login bem-sucedido)
     try:
-        # Aguarda sair da tela de login
-        await page.wait_for_function(
-            "!window.location.pathname.includes('login') && "
-            "!window.location.hash.includes('login')",
-            timeout=15000
+        await page.wait_for_selector(
+            'input[type="email"]', state="hidden", timeout=20000
         )
-        url_pos_login = page.url
-        print(f"  [DEBUG] redirecionado para: {url_pos_login}")
+    except Exception:
+        pass  # Pode já ter sumido
 
-        # Só navega para /dashboard se não estiver em uma rota de dados
-        if "/login" in url_pos_login or url_pos_login.endswith("/"):
-            base = url_pos_login.split("/")[0] + "//" + url_pos_login.split("/")[2]
-            await page.goto(f"{base}/dashboard", timeout=20000)
-
-        # Espera a página carregar completamente
-        await page.wait_for_load_state("networkidle", timeout=20000)
-        await page.wait_for_timeout(2000)  # SPA: aguarda render inicial
-
+    # Aguarda conteúdo do dashboard aparecer (dados reais do SPA)
+    try:
+        await page.wait_for_function(
+            """() => {
+                const t = (document.body.innerText || '').toLowerCase();
+                return t.includes('atendimento') || t.includes('canal') ||
+                       t.includes('venda') || t.includes('r$') ||
+                       t.includes('dashboard');
+            }""",
+            timeout=30000,
+        )
         print(f"  [DEBUG] login OK, URL: {page.url}")
         await _screenshot(page, "03_dashboard")
         return True
     except Exception as e:
-        print(f"  [DEBUG] login FALHOU: {e}, URL: {page.url}")
+        # Verifica se ainda está no login
+        try:
+            corpo = (await page.locator("body").text_content(timeout=3000) or "").lower()
+            ainda_login = "sign in" in corpo or "forget my password" in corpo
+            print(f"  [DEBUG] dashboard nao carregou: {e}")
+            print(f"  [DEBUG] ainda no login: {ainda_login}, URL: {page.url}")
+        except Exception:
+            pass
         await _screenshot(page, "03_login_falhou")
         return False
 
