@@ -328,8 +328,79 @@ async def _extrair_canais_barras_vendas(page: Page) -> dict:
     Extrai o gráfico de barras de vendas por canal.
     Tooltip esperado: 'canal: X / total: Y / total em vendas: R$Z'
     Retorna: {canal_name: {"vendas": int, "receita": float}}
+
+    Recharts dispara tooltip via mouse position no container do SVG,
+    NÃO em hover de elementos individuais — por isso o sweep horizontal.
     """
-    # ── Método 1: React fiber — varre toda a árvore buscando dados monetários ──
+    resultado: dict = {}
+    vistos: set = set()
+
+    # Varre cada SVG que parece gráfico de barras
+    all_svgs = page.locator("svg")
+    total_svgs = await all_svgs.count()
+
+    for j in range(total_svgs):
+        svg = all_svgs.nth(j)
+        rect_count = await svg.locator("rect").count()
+        if rect_count < 3:
+            continue
+
+        box = await svg.bounding_box()
+        if not box or box["width"] < 100 or box["height"] < 40:
+            continue
+
+        # Rola o SVG para o centro da viewport
+        try:
+            await svg.scroll_into_view_if_needed(timeout=2000)
+            await page.wait_for_timeout(400)
+        except Exception:
+            continue
+
+        # Atualiza bounding box após scroll
+        box = await svg.bounding_box()
+        if not box:
+            continue
+
+        # Sweep horizontal: move o mouse em ~25 posições ao longo da largura do gráfico
+        # Recharts mostra o tooltip com base na posição X do mouse dentro do SVG
+        steps = 25
+        cy = box["y"] + box["height"] * 0.5
+
+        for s in range(steps):
+            cx = box["x"] + (box["width"] / steps) * (s + 0.5)
+            await page.mouse.move(cx, cy)
+            await page.wait_for_timeout(250)
+
+            tooltip = page.locator(
+                '[class*="recharts-tooltip-wrapper"], '
+                '[class*="tooltip"], [class*="Tooltip"]'
+            )
+            if await tooltip.count() == 0:
+                continue
+
+            texto = (await tooltip.first.text_content(timeout=1000) or "").strip()
+            if not texto or texto in vistos:
+                continue
+            if "total em vendas" not in texto.lower():
+                continue
+            vistos.add(texto)
+
+            canal_m   = re.search(r"canal[:\s]+(.+?)(?:\n|total|$)", texto, re.IGNORECASE)
+            total_m   = re.search(r"\btotal\b(?!\s+em)[:\s]+([\d.,]+)", texto, re.IGNORECASE)
+            receita_m = re.search(r"total\s+em\s+vendas[:\s]+R?\$?\s*([\d.,]+)", texto, re.IGNORECASE)
+
+            if canal_m and receita_m:
+                nome    = canal_m.group(1).strip()
+                vendas  = _parse_inteiro(total_m.group(1)) if total_m else 0
+                receita = _parse_moeda("R$" + receita_m.group(1))
+                if nome and receita > 0:
+                    resultado[nome] = {"vendas": vendas, "receita": receita}
+
+        if resultado:
+            print(f"  [DEBUG] canais_vendas via sweep SVG #{j}: {resultado}")
+            return resultado
+
+    # ── Fallback: React fiber — busca dados monetários nos props do gráfico ──
     fiber_result = await page.evaluate("""
         () => {
             function getFiberKey(el) {
@@ -339,39 +410,27 @@ async def _extrair_canais_barras_vendas(page: Page) -> dict:
                 );
             }
             function walkFiber(fiber, depth, seen) {
-                if (!fiber || depth > 60) return [];
-                if (seen.has(fiber)) return [];
+                if (!fiber || depth > 60 || seen.has(fiber)) return [];
                 seen.add(fiber);
                 const out = [];
                 const props = fiber.memoizedProps || {};
                 if (Array.isArray(props.data) && props.data.length >= 2) {
                     const sample = props.data[0];
                     const keys = Object.keys(sample);
-                    // Qualquer chave string (nome do canal)
                     const nomeKey = keys.find(k => typeof sample[k] === 'string' && sample[k].length > 2);
-                    // Qualquer campo numérico grande (receita R$)
                     const bigKey  = keys.find(k => k !== nomeKey && typeof sample[k] === 'number' && sample[k] > 100);
-                    // Campo numérico menor (qtd vendas)
                     const cntKey  = keys.find(k => k !== nomeKey && k !== bigKey && typeof sample[k] === 'number');
-                    if (nomeKey && bigKey) {
-                        const hasReceita = props.data.some(d => Number(d[bigKey]) > 100);
-                        if (hasReceita) {
-                            props.data.forEach(d => {
-                                const nome = String(d[nomeKey] || '');
-                                if (nome) out.push({
-                                    nome,
-                                    vendas:  cntKey ? Number(d[cntKey]) : 0,
-                                    receita: Number(d[bigKey]),
-                                });
-                            });
-                        }
+                    if (nomeKey && bigKey && props.data.some(d => Number(d[bigKey]) > 100)) {
+                        props.data.forEach(d => {
+                            const nome = String(d[nomeKey] || '');
+                            if (nome) out.push({nome, vendas: cntKey ? Number(d[cntKey]) : 0, receita: Number(d[bigKey])});
+                        });
                     }
                 }
                 out.push(...walkFiber(fiber.child,   depth + 1, seen));
                 out.push(...walkFiber(fiber.sibling, depth + 1, seen));
                 return out;
             }
-            // Varre TODOS os SVGs com barras
             const seen = new WeakSet();
             for (const svg of document.querySelectorAll('svg')) {
                 if (svg.querySelectorAll('rect').length < 2) continue;
@@ -391,85 +450,6 @@ async def _extrair_canais_barras_vendas(page: Page) -> dict:
     if fiber_result and any(v.get("receita", 0) > 0 for v in fiber_result.values()):
         print(f"  [DEBUG] canais_vendas via fiber: {fiber_result}")
         return fiber_result
-
-    # ── Método 2: mouse.move() com coordenadas absolutas (mais confiável em headless) ──
-    # Rola até o primeiro SVG com barras
-    await page.evaluate("""
-        () => {
-            const svg = [...document.querySelectorAll('svg')].find(
-                s => s.querySelectorAll('rect[width][height]').length >= 3
-            );
-            if (svg) svg.scrollIntoView({behavior: 'instant', block: 'center'});
-        }
-    """)
-    await page.wait_for_timeout(800)
-
-    resultado: dict = {}
-    vistos: set = set()
-    rects = page.locator('svg rect[width][height]')
-    total_rects = await rects.count()
-
-    for i in range(total_rects):
-        try:
-            rect = rects.nth(i)
-            h = await rect.get_attribute("height")
-            if not h or float(h) < 5:
-                continue
-
-            try:
-                await rect.scroll_into_view_if_needed(timeout=2000)
-            except Exception:
-                pass
-
-            box = await rect.bounding_box()
-            if not box:
-                continue
-
-            cx = box["x"] + box["width"] / 2
-            cy = box["y"] + box["height"] / 2
-
-            # Move o mouse para as coordenadas absolutas (mais confiável que .hover())
-            await page.mouse.move(cx, cy)
-            await page.wait_for_timeout(600)
-
-            # Dispara eventos JS como reforço caso o Recharts precise deles
-            await page.evaluate("""
-                ([x, y]) => {
-                    const el = document.elementFromPoint(x, y);
-                    if (!el) return;
-                    ['mouseover','mouseenter','mousemove'].forEach(t =>
-                        el.dispatchEvent(new MouseEvent(t, {bubbles: true, cancelable: true, view: window, clientX: x, clientY: y}))
-                    );
-                }
-            """, [cx, cy])
-            await page.wait_for_timeout(400)
-
-            tooltip = page.locator(
-                '[class*="recharts-tooltip-wrapper"], '
-                '[class*="tooltip"], [class*="Tooltip"]'
-            )
-            if await tooltip.count() == 0:
-                continue
-
-            texto = (await tooltip.first.text_content(timeout=2000) or "").strip()
-            if not texto or texto in vistos:
-                continue
-            if "total em vendas" not in texto.lower():
-                continue
-            vistos.add(texto)
-
-            canal_m   = re.search(r"canal[:\s]+(.+?)(?:\n|total|$)", texto, re.IGNORECASE)
-            total_m   = re.search(r"\btotal\b(?!\s+em)[:\s]+([\d.,]+)", texto, re.IGNORECASE)
-            receita_m = re.search(r"total\s+em\s+vendas[:\s]+R?\$?\s*([\d.,]+)", texto, re.IGNORECASE)
-
-            if canal_m and receita_m:
-                nome    = canal_m.group(1).strip()
-                vendas  = _parse_inteiro(total_m.group(1)) if total_m else 0
-                receita = _parse_moeda("R$" + receita_m.group(1))
-                if nome and receita > 0:
-                    resultado[nome] = {"vendas": vendas, "receita": receita}
-        except Exception:
-            continue
 
     return resultado
 
