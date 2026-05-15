@@ -725,12 +725,20 @@ async def _coletar_com_browser(
         # Fallback: usa dados capturados via interceptação de rede
         if not canais_vendas and _rede_canais_vendas:
             canais_vendas = _rede_canais_vendas
-            print(f"  [DEBUG] {nome}: canais_vendas via REDE: {canais_vendas}")
+
+        # FILTRO CRÍTICO: mantém em canais_vendas APENAS os canais que existem
+        # na pizza chart. Evita que contatos individuais apareçam como canais.
+        if canais_raw and canais_vendas:
+            nomes_validos = {k.strip().lower() for k in canais_raw.keys()}
+            canais_vendas = {
+                nome: dados
+                for nome, dados in canais_vendas.items()
+                if nome.strip().lower() in nomes_validos
+            }
 
         mapeado = _mapear_canais(canais_raw)
         print(f"  [DEBUG] {nome}: canais_raw={canais_raw}")
         print(f"  [DEBUG] {nome}: canais_vendas={canais_vendas}")
-        print(f"  [DEBUG] {nome}: _rede_canais_vendas={_rede_canais_vendas}")
         await _screenshot(page, "05_final")
 
         return DadosFarmacia(
