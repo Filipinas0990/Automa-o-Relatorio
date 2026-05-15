@@ -125,11 +125,23 @@ def salvar_resultados(dados_coletados):
                 for k, v in dado.canais_vendas.items()
             }
 
+            def _match_canal(nome_pizza: str) -> dict:
+                """Busca vendas/receita para um canal da pizza, com fallback fuzzy."""
+                chave = nome_pizza.strip().lower()
+                if chave in vendas_por_canal:
+                    return vendas_por_canal[chave]
+                # Fuzzy: verifica se algum token do nome da API está contido no nome da pizza
+                for k, v in vendas_por_canal.items():
+                    tokens = k.split()
+                    if any(t in chave for t in tokens if len(t) > 3):
+                        return v
+                return {}
+
             # Salva breakdown completo: atendimentos (pizza) + vendas/receita (barras)
             nomes_salvos: set[str] = set()
             for nome_canal, total_atend in dado.canais.items():
                 norm = nome_canal.strip().lower()
-                info_venda = vendas_por_canal.get(norm, {})
+                info_venda = _match_canal(nome_canal)
                 db.add(ColetaCanal(
                     coleta_id=coleta.id,
                     canal=nome_canal,
