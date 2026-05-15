@@ -367,66 +367,124 @@ def _buscar_canal_receita_em_json(obj, _depth: int = 0) -> dict:
     return resultado
 
 
-async def _buscar_vendas_via_fetch(page: Page, inicio: str, fim: str) -> dict:
+async def _extrair_canais_barras_fiber(page: Page) -> dict:
     """
-    Faz fetch direto ao endpoint /api/crm-dashboard/sales-by-source-channel
-    usando a sessão autenticada já presente no browser (cookies + token).
-    Retorna {canal: {"vendas": int, "receita": float}}.
+    Lê dados do gráfico de barras 'vendas por canal' via React fiber.
+    Procura props.data com estrutura {label, total, price} nas árvores
+    de componentes React dentro do container do gráfico.
     """
-    try:
-        items = await page.evaluate(f"""
-            async () => {{
-                const base = window.location.origin;
-                // Tenta diferentes chaves de token usadas pelo PharmaChatBot
-                const token = localStorage.getItem('token') ||
-                              localStorage.getItem('authToken') ||
-                              localStorage.getItem('access_token') ||
-                              localStorage.getItem('jwt') || '';
+    await page.evaluate("""
+        () => {
+            const h = [...document.querySelectorAll('*')].find(e =>
+                e.children.length === 0 &&
+                (e.innerText || '').toLowerCase().includes('vendas por canal')
+            );
+            if (h) h.scrollIntoView({behavior:'instant', block:'center'});
+        }
+    """)
+    await page.wait_for_timeout(600)
 
-                const paramSets = [
-                    `startDate={inicio}&endDate={fim}`,
-                    `start={inicio}&end={fim}`,
-                    `dataInicio={inicio}&dataFim={fim}`,
-                    ``,
-                ];
+    raw = await page.evaluate("""
+        () => {
+            function getFiberKey(el) {
+                return Object.keys(el).find(k =>
+                    k.startsWith('__reactFiber') ||
+                    k.startsWith('__reactInternalInstance')
+                );
+            }
 
-                const headers = {{ 'Content-Type': 'application/json' }};
-                if (token) headers['Authorization'] = 'Bearer ' + token;
+            function walkFiber(fiber, depth) {
+                if (!fiber || depth > 50) return null;
+                const props = fiber.memoizedProps || {};
 
-                for (const params of paramSets) {{
-                    const url = `${{base}}/api/crm-dashboard/sales-by-source-channel${{params ? '?' + params : ''}}`;
-                    try {{
-                        const resp = await fetch(url, {{ credentials: 'include', headers }});
-                        if (!resp.ok) continue;
-                        const data = await resp.json();
-                        const arr = Array.isArray(data) ? data : (data && data.data ? data.data : []);
-                        if (arr.length > 0 && 'label' in arr[0]) return arr;
-                    }} catch(e) {{}}
-                }}
-                return null;
-            }}
-        """)
+                // Procura array com {label, total, price}
+                if (Array.isArray(props.data) && props.data.length > 0) {
+                    const s = props.data[0];
+                    if (typeof s.label === 'string' && s.label.length > 1 &&
+                        typeof s.total === 'number' && 'price' in s) {
+                        return props.data;
+                    }
+                }
+                // Também checa props diretas do Recharts (Bar > data)
+                if (Array.isArray(props.points)) {
+                    const s = props.points[0] || {};
+                    if (s.payload && 'label' in s.payload && 'price' in s.payload) {
+                        return props.points.map(p => p.payload);
+                    }
+                }
 
-        if not items or not isinstance(items, list):
-            print(f"  [CANAL] fetch retornou vazio")
-            return {}
+                const r1 = fiber.child   ? walkFiber(fiber.child,   depth + 1) : null;
+                if (r1) return r1;
+                return       fiber.sibling ? walkFiber(fiber.sibling, depth + 1) : null;
+            }
 
-        canais = {}
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            nome    = str(item.get("label", "")).strip()
-            vendas  = int(item.get("total", 0) or 0)
-            receita = float(item.get("price", 0) or 0)
-            if nome:
-                canais[nome] = {"vendas": vendas, "receita": receita}
+            // Localiza o container do gráfico de barras de vendas
+            const headings = [...document.querySelectorAll('*')].filter(e =>
+                e.children.length === 0 &&
+                (e.innerText || '').toLowerCase().includes('vendas por canal')
+            );
 
-        print(f"  [CANAL] fetch ok: {canais}")
-        return canais
+            for (const h of headings) {
+                let el = h.parentElement;
+                for (let i = 0; i < 15; i++) {
+                    if (!el) break;
+                    const svg = el.querySelector('svg');
+                    if (svg) {
+                        // Tenta a partir do SVG
+                        const key = getFiberKey(svg);
+                        if (key) {
+                            const d = walkFiber(svg[key], 0);
+                            if (d) return d;
+                        }
+                        // Tenta a partir de cada rect (barras do BarChart)
+                        for (const rect of svg.querySelectorAll('rect')) {
+                            const k = getFiberKey(rect);
+                            if (!k) continue;
+                            const d = walkFiber(rect[k], 0);
+                            if (d) return d;
+                        }
+                        // Tenta a partir de todos os elementos do container
+                        for (const child of el.querySelectorAll('*')) {
+                            const k = getFiberKey(child);
+                            if (!k) continue;
+                            const d = walkFiber(child[k], 0);
+                            if (d) return d;
+                        }
+                        break;
+                    }
+                    el = el.parentElement;
+                }
+            }
 
-    except Exception as e:
-        print(f"  [CANAL] fetch erro: {e}")
+            // Fallback global: qualquer SVG com barras
+            for (const svg of document.querySelectorAll('svg')) {
+                if (svg.querySelectorAll('rect').length < 2) continue;
+                const key = getFiberKey(svg);
+                if (!key) continue;
+                const d = walkFiber(svg[key], 0);
+                if (d) return d;
+            }
+
+            return null;
+        }
+    """)
+
+    if not raw or not isinstance(raw, list):
+        print(f"  [CANAL] fiber retornou vazio")
         return {}
+
+    canais = {}
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        nome    = str(item.get("label", "")).strip()
+        vendas  = int(item.get("total", 0) or 0)
+        receita = float(item.get("price", 0) or 0)
+        if nome:
+            canais[nome] = {"vendas": vendas, "receita": receita}
+
+    print(f"  [CANAL] fiber: {canais}")
+    return canais
 
 
 async def _extrair_receita(page: Page) -> float:
@@ -679,8 +737,8 @@ async def _coletar_com_browser(
             page, "Quantidade de atendimentos por canal de divulga"
         )
 
-        # Fetch direto à API usando a sessão autenticada do browser
-        canais_vendas = await _buscar_vendas_via_fetch(page, inicio, fim)
+        # Lê dados do gráfico de barras via React fiber
+        canais_vendas = await _extrair_canais_barras_fiber(page)
 
         # Fallback: dados capturados via interceptação de rede
         if not canais_vendas and _rede_canais_api:
