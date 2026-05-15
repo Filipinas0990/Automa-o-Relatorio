@@ -329,6 +329,29 @@ async def _extrair_canais_barras_vendas(page: Page) -> dict:
     Tooltip esperado: 'canal: X / total: Y / total em vendas: R$Z'
     Retorna: {canal_name: {"vendas": int, "receita": float}}
     """
+    # Rola até o gráfico de barras (está abaixo do gráfico de pizza)
+    await page.evaluate("""
+        () => {
+            // Tenta encontrar pelo heading de vendas
+            const heading = [...document.querySelectorAll('*')].find(e => {
+                const t = (e.innerText || '').toLowerCase();
+                return e.children.length === 0 &&
+                       (t.includes('venda') || t.includes('receita')) &&
+                       t.length < 80;
+            });
+            if (heading) {
+                heading.scrollIntoView({behavior: 'instant', block: 'center'});
+                return;
+            }
+            // Fallback: rola até o primeiro SVG com múltiplos rects (gráfico de barras)
+            const svg = [...document.querySelectorAll('svg')].find(
+                s => s.querySelectorAll('rect[width][height]').length >= 3
+            );
+            if (svg) svg.scrollIntoView({behavior: 'instant', block: 'center'});
+        }
+    """)
+    await page.wait_for_timeout(1000)
+
     # Método 1: React fiber — varre SVGs com barras buscando campo monetário
     fiber_result = await page.evaluate("""
         () => {
@@ -407,19 +430,28 @@ async def _extrair_canais_barras_vendas(page: Page) -> dict:
             if not h or float(h) < 5:
                 continue
 
+            # Garante que o elemento está visível antes de fazer hover
+            try:
+                await rect.scroll_into_view_if_needed(timeout=3000)
+            except Exception:
+                pass
             await rect.hover(force=True, timeout=3000)
-            await page.wait_for_timeout(300)
+            await page.wait_for_timeout(500)
 
+            # Detecta qualquer tooltip visível (sem filtrar has_text aqui)
             tooltip = page.locator(
                 '[class*="recharts-tooltip-wrapper"], '
                 '[class*="tooltip"], [class*="Tooltip"]'
-            ).filter(has_text=re.compile(r"total em vendas", re.IGNORECASE))
+            )
 
             if await tooltip.count() == 0:
                 continue
 
             texto = (await tooltip.first.text_content(timeout=2000) or "").strip()
             if not texto or texto in vistos:
+                continue
+            # Só processa se for tooltip do gráfico de barras de vendas
+            if "total em vendas" not in texto.lower():
                 continue
             vistos.add(texto)
 
@@ -651,9 +683,8 @@ async def _coletar_com_browser(
         )
         canais_vendas = await _extrair_canais_barras_vendas(page)
         mapeado = _mapear_canais(canais_raw)
-        if DEBUG_SCREENSHOTS:
-            print(f"  [DEBUG] {nome}: canais_raw={canais_raw}")
-            print(f"  [DEBUG] {nome}: canais_vendas={canais_vendas}")
+        print(f"  [DEBUG] {nome}: canais_raw={canais_raw}")
+        print(f"  [DEBUG] {nome}: canais_vendas={canais_vendas}")
         await _screenshot(page, "05_final")
 
         return DadosFarmacia(
