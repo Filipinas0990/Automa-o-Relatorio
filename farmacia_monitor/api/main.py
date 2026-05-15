@@ -661,10 +661,55 @@ def get_relatorios(
             "periodo_inicio": str(inicio),
             "periodo_fim":    str(fim),
             "data_geracao":   r["data_geracao"],
-            "farmacias":      f"{total}/70",
+            "farmacias":      f"{concluidas}/{total}",
             "status":         status,
         })
     return resultado
+
+
+def _query_relatorio(db: Session, periodo_inicio: str):
+    """Query base compartilhada pelos downloads XLSX e CSV."""
+    rows = db.execute(text("""
+        SELECT
+            f.nome                              AS farmacia,
+            g.nome                              AS gestor,
+            c.periodo_inicio, c.periodo_fim,
+            c.receita_total, c.total_atendimentos,
+            c.vendas_realizadas, c.score_criticidade, c.nivel_alerta,
+            f.meta_receita, f.meta_vendas,
+            CASE
+                WHEN f.meta_receita IS NOT NULL AND c.receita_total < f.meta_receita THEN 'Nao'
+                WHEN f.meta_vendas  IS NOT NULL AND c.vendas_realizadas < f.meta_vendas THEN 'Nao'
+                WHEN f.meta_receita IS NULL AND f.meta_vendas IS NULL THEN 'Sem meta'
+                ELSE 'Sim'
+            END AS atingiu_meta,
+            CASE WHEN f.meta_receita > 0
+                 THEN ROUND(c.receita_total / f.meta_receita * 100, 1)
+                 ELSE NULL END AS pct_meta_receita
+        FROM coletas c
+        JOIN farmacias f ON f.id = c.farmacia_id
+        LEFT JOIN gestores_trafego g ON g.id = f.gestor_id
+        WHERE c.periodo_inicio::TEXT = :periodo
+        ORDER BY c.score_criticidade DESC
+    """), {"periodo": periodo_inicio}).mappings().all()
+    return rows
+
+
+def _query_canais_relatorio(db: Session, periodo_inicio: str):
+    """Canais de vendas para o período (uma linha por farmácia+canal)."""
+    return db.execute(text("""
+        SELECT
+            f.nome AS farmacia,
+            cc.canal,
+            cc.atendimentos,
+            cc.vendas,
+            cc.receita_vendas
+        FROM coleta_canais cc
+        JOIN coletas c  ON c.id  = cc.coleta_id
+        JOIN farmacias f ON f.id = c.farmacia_id
+        WHERE c.periodo_inicio::TEXT = :periodo
+        ORDER BY f.nome, cc.atendimentos DESC
+    """), {"periodo": periodo_inicio}).mappings().all()
 
 
 @app.get("/api/relatorios/{periodo_inicio}/xlsx")
@@ -674,44 +719,85 @@ def download_xlsx(
     db: Session = Depends(get_db),
 ):
     import openpyxl
-    from openpyxl.styles import Font, PatternFill, Alignment
+    from openpyxl.styles import Font, PatternFill, Alignment, numbers
 
-    rows = db.execute(text("""
-        SELECT f.nome, c.periodo_inicio, c.periodo_fim,
-               c.receita_total, c.total_atendimentos,
-               c.vendas_realizadas, c.score_criticidade, c.nivel_alerta
-        FROM coletas c
-        JOIN farmacias f ON f.id = c.farmacia_id
-        WHERE c.periodo_inicio::TEXT = :periodo
-        ORDER BY c.score_criticidade DESC
-    """), {"periodo": periodo_inicio}).mappings().all()
+    rows       = _query_relatorio(db, periodo_inicio)
+    canal_rows = _query_canais_relatorio(db, periodo_inicio)
 
     if not rows:
         raise HTTPException(status_code=404, detail="Periodo nao encontrado")
 
     wb = openpyxl.Workbook()
+
+    # ── Aba 1: Resumo por farmácia ─────────────────────────────────────────────
     ws = wb.active
-    ws.title = "Relatorio Semanal"
-    cabecalho = ["Farmacia", "Periodo Inicio", "Periodo Fim",
-                 "Receita (R$)", "Atendimentos", "Vendas", "Score", "Alerta"]
+    ws.title = "Resumo"
+
+    cabecalho = [
+        "Farmácia", "Gestor", "Período Início", "Período Fim",
+        "Receita (R$)", "Meta Receita (R$)", "% Meta Receita",
+        "Vendas", "Meta Vendas", "Atingiu Meta",
+        "Atendimentos", "Score", "Alerta",
+    ]
     header_fill = PatternFill("solid", fgColor="1A7A4A")
     header_font = Font(bold=True, color="FFFFFF")
     for col, titulo in enumerate(cabecalho, 1):
         cell = ws.cell(row=1, column=col, value=titulo)
-        cell.fill = header_fill
-        cell.font = header_font
+        cell.fill   = header_fill
+        cell.font   = header_font
         cell.alignment = Alignment(horizontal="center")
-        ws.column_dimensions[cell.column_letter].width = max(len(titulo) + 4, 18)
+        ws.column_dimensions[cell.column_letter].width = max(len(titulo) + 2, 16)
 
     cores = {"verde": "C6EFCE", "amarelo": "FFEB9C", "vermelho": "FFC7CE"}
     for linha, r in enumerate(rows, 2):
-        valores = [r["nome"], str(r["periodo_inicio"]), str(r["periodo_fim"]),
-                   float(r["receita_total"] or 0), int(r["total_atendimentos"] or 0),
-                   int(r["vendas_realizadas"] or 0),
-                   float(r["score_criticidade"] or 0), r["nivel_alerta"]]
+        pct = float(r["pct_meta_receita"]) / 100 if r["pct_meta_receita"] else None
+        valores = [
+            r["farmacia"],
+            r["gestor"] or "—",
+            str(r["periodo_inicio"]),
+            str(r["periodo_fim"]),
+            float(r["receita_total"] or 0),
+            float(r["meta_receita"]) if r["meta_receita"] else "—",
+            pct,
+            int(r["vendas_realizadas"] or 0),
+            int(r["meta_vendas"]) if r["meta_vendas"] else "—",
+            r["atingiu_meta"],
+            int(r["total_atendimentos"] or 0),
+            float(r["score_criticidade"] or 0),
+            r["nivel_alerta"],
+        ]
         fill = PatternFill("solid", fgColor=cores.get(r["nivel_alerta"], "FFFFFF"))
         for col, val in enumerate(valores, 1):
-            ws.cell(row=linha, column=col, value=val).fill = fill
+            cell = ws.cell(row=linha, column=col, value=val)
+            cell.fill = fill
+            if col == 7 and pct is not None:   # % meta
+                cell.number_format = "0.0%"
+            if col in (5, 6):                  # receita
+                cell.number_format = '#,##0.00'
+
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = ws.dimensions
+
+    # ── Aba 2: Canais de vendas ────────────────────────────────────────────────
+    ws2 = wb.create_sheet("Canais de Vendas")
+    cab2 = ["Farmácia", "Canal", "Atendimentos", "Vendas", "Receita (R$)"]
+    for col, titulo in enumerate(cab2, 1):
+        cell = ws2.cell(row=1, column=col, value=titulo)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center")
+        ws2.column_dimensions[cell.column_letter].width = max(len(titulo) + 4, 18)
+
+    for linha, r in enumerate(canal_rows, 2):
+        ws2.cell(row=linha, column=1, value=r["farmacia"])
+        ws2.cell(row=linha, column=2, value=r["canal"])
+        ws2.cell(row=linha, column=3, value=int(r["atendimentos"] or 0))
+        ws2.cell(row=linha, column=4, value=int(r["vendas"] or 0))
+        cell = ws2.cell(row=linha, column=5, value=float(r["receita_vendas"] or 0))
+        cell.number_format = '#,##0.00'
+
+    ws2.freeze_panes = "A2"
+    ws2.auto_filter.ref = ws2.dimensions
 
     buffer = io.BytesIO()
     wb.save(buffer)
@@ -729,41 +815,53 @@ def download_csv(
     _: GestorTrafego = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """CSV otimizado para importação no Power BI (UTF-8 com BOM, separador vírgula)."""
+    """CSV otimizado para Power BI — UTF-8 BOM, separador vírgula, dados completos."""
     import csv
 
-    rows = db.execute(text("""
-        SELECT f.nome, c.periodo_inicio, c.periodo_fim,
-               c.receita_total, c.total_atendimentos,
-               c.vendas_realizadas, c.score_criticidade, c.nivel_alerta
-        FROM coletas c
-        JOIN farmacias f ON f.id = c.farmacia_id
-        WHERE c.periodo_inicio::TEXT = :periodo
-        ORDER BY c.score_criticidade DESC
-    """), {"periodo": periodo_inicio}).mappings().all()
+    rows       = _query_relatorio(db, periodo_inicio)
+    canal_rows = _query_canais_relatorio(db, periodo_inicio)
 
     if not rows:
         raise HTTPException(status_code=404, detail="Periodo nao encontrado")
 
     buffer = io.StringIO()
-    # BOM UTF-8 para Power BI reconhecer acentos corretamente
-    buffer.write("﻿")
+    buffer.write("﻿")   # BOM UTF-8 para Power BI
     writer = csv.writer(buffer)
+
+    # Tabela principal
     writer.writerow([
-        "Farmacia", "Periodo_Inicio", "Periodo_Fim",
-        "Receita_BRL", "Total_Atendimentos", "Vendas_Realizadas",
-        "Score_Criticidade", "Nivel_Alerta",
+        "Farmacia", "Gestor", "Periodo_Inicio", "Periodo_Fim",
+        "Receita_BRL", "Meta_Receita_BRL", "Pct_Meta_Receita",
+        "Vendas_Realizadas", "Meta_Vendas", "Atingiu_Meta",
+        "Total_Atendimentos", "Score_Criticidade", "Nivel_Alerta",
     ])
     for r in rows:
         writer.writerow([
-            r["nome"],
+            r["farmacia"],
+            r["gestor"] or "",
             str(r["periodo_inicio"]),
             str(r["periodo_fim"]),
             float(r["receita_total"] or 0),
-            int(r["total_atendimentos"] or 0),
+            float(r["meta_receita"]) if r["meta_receita"] else "",
+            float(r["pct_meta_receita"]) if r["pct_meta_receita"] else "",
             int(r["vendas_realizadas"] or 0),
+            int(r["meta_vendas"]) if r["meta_vendas"] else "",
+            r["atingiu_meta"],
+            int(r["total_atendimentos"] or 0),
             float(r["score_criticidade"] or 0),
             r["nivel_alerta"],
+        ])
+
+    # Linha em branco + tabela de canais
+    writer.writerow([])
+    writer.writerow(["--- CANAIS DE VENDAS ---"])
+    writer.writerow(["Farmacia", "Canal", "Atendimentos", "Vendas", "Receita_BRL"])
+    for r in canal_rows:
+        writer.writerow([
+            r["farmacia"], r["canal"],
+            int(r["atendimentos"] or 0),
+            int(r["vendas"] or 0),
+            float(r["receita_vendas"] or 0),
         ])
 
     content = buffer.getvalue().encode("utf-8-sig")
