@@ -967,6 +967,9 @@ def get_ranking_gestores(
                 if pct >= 100:
                     farmacias_ok += 1
 
+        # Pontos: 1 ponto por farmácia que bateu a meta
+        pontos = farmacias_ok
+
         if farmacias_com_meta > 0:
             percentual_medio = round(soma_pct_meta / farmacias_com_meta, 1)
             taxa_acerto = round(farmacias_ok / farmacias_com_meta * 100, 1)
@@ -980,19 +983,16 @@ def get_ranking_gestores(
             "total_farmacias":       total_farmacias,
             "farmacias_com_meta":    farmacias_com_meta,
             "farmacias_meta_ok":     farmacias_ok,
-            "taxa_acerto":           taxa_acerto,
-            "percentual_medio_meta": percentual_medio,
+            "pontos":                pontos,          # 1 ponto por farmácia que bateu a meta
+            "taxa_acerto":           taxa_acerto,     # % das farmácias com meta que bateram
+            "percentual_medio_meta": percentual_medio, # % médio atingido da meta
             "tem_meta":              farmacias_com_meta > 0,
-            "receita_total":         round(receita_total, 2),
-            "meta_receita_total":    round(meta_receita_total, 2),
-            "vendas_total":          vendas_total,
-            "meta_vendas_total":     meta_vendas_total,
+            "receita_total":         round(receita_total, 2),   # só informativo
+            "vendas_total":          vendas_total,              # só informativo
         })
 
-    # Ordena: gestores com meta primeiro (por taxa_acerto), depois os sem meta
-    ranking.sort(
-        key=lambda x: (x["taxa_acerto"] is None, -(x["taxa_acerto"] or 0))
-    )
+    # Ordena por pontos (farmácias que bateram a meta) — NÃO por faturamento
+    ranking.sort(key=lambda x: (-x["pontos"], -x["taxa_acerto"]))
     for i, item in enumerate(ranking, 1):
         item["posicao"] = i
 
