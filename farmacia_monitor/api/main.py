@@ -947,7 +947,7 @@ def get_ranking_gestores(
         FROM gestores_trafego g
         JOIN farmacias f ON f.gestor_id = g.id AND f.ativa = TRUE
         JOIN coletas c   ON c.farmacia_id = f.id
-                        AND DATE_TRUNC('month', c.data_coleta) = DATE_TRUNC('month', :mes_ref::date)
+                        AND DATE_TRUNC('month', c.data_coleta) = DATE_TRUNC('month', CAST(:mes_ref AS date))
         WHERE g.ativo = TRUE
         GROUP BY g.id, g.nome
         ORDER BY pontos DESC, g.nome
