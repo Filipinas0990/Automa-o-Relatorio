@@ -367,115 +367,66 @@ def _buscar_canal_receita_em_json(obj, _depth: int = 0) -> dict:
     return resultado
 
 
-async def _extrair_canais_barras_vendas(page: Page) -> dict:
+async def _buscar_vendas_via_fetch(page: Page, inicio: str, fim: str) -> dict:
     """
-    Extrai vendas e receita do gráfico de barras 'Quantidade de vendas por canal'.
-    Tooltip: 'canal: X / total: Y / total em vendas: R$Z'
-
-    Usa JS assíncrono com setTimeout entre eventos para dar tempo ao React re-renderizar
-    o tooltip. Esta abordagem é mais confiável em headless do que page.mouse.move().
+    Faz fetch direto ao endpoint /api/crm-dashboard/sales-by-source-channel
+    usando a sessão autenticada já presente no browser (cookies + token).
+    Retorna {canal: {"vendas": int, "receita": float}}.
     """
-    # Rola até o gráfico de barras (fica abaixo da pizza na página)
-    await page.evaluate("""
-        () => {
-            const els = [...document.querySelectorAll('*')];
-            const heading = els.find(e =>
-                e.children.length === 0 &&
-                (e.innerText || '').toLowerCase().includes('vendas por canal')
-            );
-            if (heading) heading.scrollIntoView({behavior:'instant', block:'center'});
-        }
-    """)
-    await page.wait_for_timeout(800)
+    try:
+        items = await page.evaluate(f"""
+            async () => {{
+                const base = window.location.origin;
+                // Tenta diferentes chaves de token usadas pelo PharmaChatBot
+                const token = localStorage.getItem('token') ||
+                              localStorage.getItem('authToken') ||
+                              localStorage.getItem('access_token') ||
+                              localStorage.getItem('jwt') || '';
 
-    # JS assíncrono: dispara mousemove no SVG com 200ms de espera entre cada passo
-    # para o React ter tempo de atualizar o estado do tooltip
-    resultado = await page.evaluate("""
-        async () => {
-            const delay = ms => new Promise(r => setTimeout(r, ms));
-
-            // Encontra o SVG do gráfico de barras de vendas
-            // (tem barras com altura significativa E está abaixo do heading de vendas)
-            let barSvg = null;
-            const headings = [...document.querySelectorAll('*')].filter(e =>
-                e.children.length === 0 &&
-                (e.innerText || '').toLowerCase().includes('vendas por canal')
-            );
-            for (const h of headings) {
-                let el = h.parentElement;
-                for (let i = 0; i < 12; i++) {
-                    if (!el) break;
-                    const svg = el.querySelector('svg');
-                    if (svg && svg.querySelectorAll('rect').length >= 3) {
-                        barSvg = svg;
-                        break;
-                    }
-                    el = el.parentElement;
-                }
-                if (barSvg) break;
-            }
-            // Fallback: qualquer SVG com barras altas
-            if (!barSvg) {
-                barSvg = [...document.querySelectorAll('svg')].find(s =>
-                    [...s.querySelectorAll('rect')].some(r => parseFloat(r.getAttribute('height')||'0') > 30)
-                );
-            }
-            if (!barSvg) return {};
-
-            barSvg.scrollIntoView({behavior:'instant', block:'center'});
-            await delay(600);
-
-            const result = {};
-            const seen = new Set();
-            const box = barSvg.getBoundingClientRect();
-            const steps = 30;
-
-            for (let i = 0; i < steps; i++) {
-                const x = box.left + (box.width / steps) * (i + 0.5);
-                const y = box.top  + box.height * 0.5;
-
-                // Dispara em SVG e no pai (ResponsiveContainer do Recharts)
-                for (const el of [barSvg, barSvg.parentElement]) {
-                    if (!el) continue;
-                    el.dispatchEvent(new MouseEvent('mousemove', {
-                        bubbles:true, cancelable:true, view:window, clientX:x, clientY:y
-                    }));
-                }
-                await delay(200);  // React precisa desse tempo para re-renderizar
-
-                // Lê qualquer tooltip visível
-                const tooltips = [
-                    ...document.querySelectorAll('[class*="recharts-tooltip"]'),
-                    ...document.querySelectorAll('[class*="tooltip"]'),
-                    ...document.querySelectorAll('[class*="Tooltip"]'),
+                const paramSets = [
+                    `startDate={inicio}&endDate={fim}`,
+                    `start={inicio}&end={fim}`,
+                    `dataInicio={inicio}&dataFim={fim}`,
+                    ``,
                 ];
-                for (const tt of tooltips) {
-                    const text = (tt.textContent || '').trim();
-                    if (!text || seen.has(text)) continue;
-                    if (!text.toLowerCase().includes('total em vendas')) continue;
-                    seen.add(text);
 
-                    const cM = text.match(/canal[:\\s]+([^\\n]+)/i);
-                    const tM = text.match(/\\btotal\\b(?!\\s+em)[:\\s]+([\\d.,]+)/i);
-                    const rM = text.match(/total\\s+em\\s+vendas[:\\s]+R?\\$?\\s*([\\d.,]+)/i);
+                const headers = {{ 'Content-Type': 'application/json' }};
+                if (token) headers['Authorization'] = 'Bearer ' + token;
 
-                    if (cM && rM) {
-                        const nome    = cM[1].trim().split('\\n')[0].split('total')[0].trim();
-                        const vendas  = tM ? parseInt((tM[1]||'0').replace(/\\D/g,''))||0 : 0;
-                        const receita = parseFloat((rM[1]||'0').replace(/\\./g,'').replace(',','.'))||0;
-                        if (nome && receita > 0) result[nome] = {vendas, receita};
-                    }
-                }
-            }
-            return result;
-        }
-    """)
+                for (const params of paramSets) {{
+                    const url = `${{base}}/api/crm-dashboard/sales-by-source-channel${{params ? '?' + params : ''}}`;
+                    try {{
+                        const resp = await fetch(url, {{ credentials: 'include', headers }});
+                        if (!resp.ok) continue;
+                        const data = await resp.json();
+                        const arr = Array.isArray(data) ? data : (data && data.data ? data.data : []);
+                        if (arr.length > 0 && 'label' in arr[0]) return arr;
+                    }} catch(e) {{}}
+                }}
+                return null;
+            }}
+        """)
 
-    if resultado and any(v.get("receita", 0) > 0 for v in resultado.values()):
-        print(f"  [DEBUG] canais_vendas via JS-async: {resultado}")
-        return resultado
+        if not items or not isinstance(items, list):
+            print(f"  [CANAL] fetch retornou vazio")
+            return {}
 
-    return {}
+        canais = {}
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            nome    = str(item.get("label", "")).strip()
+            vendas  = int(item.get("total", 0) or 0)
+            receita = float(item.get("price", 0) or 0)
+            if nome:
+                canais[nome] = {"vendas": vendas, "receita": receita}
+
+        print(f"  [CANAL] fetch ok: {canais}")
+        return canais
+
+    except Exception as e:
+        print(f"  [CANAL] fetch erro: {e}")
+        return {}
 
 
 async def _extrair_receita(page: Page) -> float:
@@ -727,23 +678,13 @@ async def _coletar_com_browser(
         canais_raw = await _extrair_canais_pizza(
             page, "Quantidade de atendimentos por canal de divulga"
         )
-        canais_vendas = await _extrair_canais_barras_vendas(page)
 
-        # Fallback 1: endpoint dedicado sales-by-source-channel (dados confiáveis, sem filtro)
+        # Fetch direto à API usando a sessão autenticada do browser
+        canais_vendas = await _buscar_vendas_via_fetch(page, inicio, fim)
+
+        # Fallback: dados capturados via interceptação de rede
         if not canais_vendas and _rede_canais_api:
             canais_vendas = dict(_rede_canais_api)
-
-        # Fallback 2: busca genérica (aplica filtro por nome da pizza para evitar contatos individuais)
-        if not canais_vendas and _rede_canais_gen:
-            if canais_raw:
-                nomes_validos = {k.strip().lower() for k in canais_raw.keys()}
-                canais_vendas = {
-                    nome: dados
-                    for nome, dados in _rede_canais_gen.items()
-                    if nome.strip().lower() in nomes_validos
-                }
-            else:
-                canais_vendas = dict(_rede_canais_gen)
 
         mapeado = _mapear_canais(canais_raw)
         print(f"  [DEBUG] {nome}: canais_raw={canais_raw}")
