@@ -477,9 +477,10 @@ async def _extrair_canais_barras_fiber(page: Page) -> dict:
     for item in raw:
         if not isinstance(item, dict):
             continue
-        nome    = str(item.get("label", "")).strip()
-        vendas  = int(item.get("total", 0) or 0)
-        receita = float(item.get("price", 0) or 0)
+        nome  = str(item.get("label", "")).strip()
+        vendas = int(item.get("total", 0) or 0)
+        price_raw = item.get("price", 0)
+        receita = _parse_moeda(str(price_raw)) if isinstance(price_raw, str) else float(price_raw or 0)
         if nome:
             canais[nome] = {"vendas": vendas, "receita": receita}
 
@@ -671,10 +672,13 @@ async def _coletar_com_browser(
                 for item in items:
                     if not isinstance(item, dict):
                         continue
-                    nome    = str(item.get("label", "")).strip()
-                    vendas  = int(item.get("total", 0) or 0)
-                    receita = float(item.get("price", 0) or 0)
-                    _rede_canais_api[nome] = {"vendas": vendas, "receita": receita}
+                    nome  = str(item.get("label", "")).strip()
+                    vendas = int(item.get("total", 0) or 0)
+                    # price pode vir como float OU string BR ("38.860,97")
+                    price_raw = item.get("price", 0)
+                    receita = _parse_moeda(str(price_raw)) if isinstance(price_raw, str) else float(price_raw or 0)
+                    if nome:
+                        _rede_canais_api[nome] = {"vendas": vendas, "receita": receita}
                 print(f"  [CANAL-API] capturados: {_rede_canais_api}")
                 return
 
