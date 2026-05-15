@@ -36,14 +36,16 @@ class GestorTrafego(Base):
 class Farmacia(Base):
     __tablename__ = "farmacias"
 
-    id        = Column(Integer, primary_key=True)
-    nome      = Column(String(120), nullable=False)
-    url_base  = Column(String(255), nullable=False)
-    email     = Column(String(120), nullable=False)
-    senha_enc = Column(Text, nullable=True)
-    gestor_id = Column(Integer, ForeignKey("gestores_trafego.id", ondelete="SET NULL"), nullable=True)
-    ativa     = Column(Boolean, default=True)
-    criado_em = Column(DateTime(timezone=True), default=datetime.utcnow)
+    id           = Column(Integer, primary_key=True)
+    nome         = Column(String(120), nullable=False)
+    url_base     = Column(String(255), nullable=False)
+    email        = Column(String(120), nullable=False)
+    senha_enc    = Column(Text, nullable=True)
+    gestor_id    = Column(Integer, ForeignKey("gestores_trafego.id", ondelete="SET NULL"), nullable=True)
+    ativa        = Column(Boolean, default=True)
+    criado_em    = Column(DateTime(timezone=True), default=datetime.utcnow)
+    meta_vendas  = Column(Integer,        nullable=True)   # meta semanal de vendas
+    meta_receita = Column(Numeric(12, 2), nullable=True)   # meta semanal de receita R$
 
     gestor  = relationship("GestorTrafego", back_populates="farmacias")
     coletas = relationship("Coleta", back_populates="farmacia", cascade="all, delete")

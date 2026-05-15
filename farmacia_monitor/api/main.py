@@ -113,12 +113,18 @@ class FarmaciaCreate(BaseModel):
     gestor_id: Optional[int] = None
 
 class FarmaciaUpdate(BaseModel):
-    nome:      Optional[str]  = None
-    url_base:  Optional[str]  = None
-    email:     Optional[str]  = None
-    senha:     Optional[str]  = None
-    gestor_id: Optional[int]  = None
-    ativa:     Optional[bool] = None
+    nome:         Optional[str]   = None
+    url_base:     Optional[str]   = None
+    email:        Optional[str]   = None
+    senha:        Optional[str]   = None
+    gestor_id:    Optional[int]   = None
+    ativa:        Optional[bool]  = None
+    meta_vendas:  Optional[int]   = None
+    meta_receita: Optional[float] = None
+
+class MetaUpdate(BaseModel):
+    meta_vendas:  Optional[int]   = None
+    meta_receita: Optional[float] = None
 
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
@@ -296,17 +302,43 @@ def atualizar_farmacia(
     if not farmacia:
         raise HTTPException(status_code=404, detail="Farmacia nao encontrada")
 
-    if dados.nome      is not None: farmacia.nome      = dados.nome
-    if dados.url_base  is not None: farmacia.url_base  = dados.url_base
-    if dados.email     is not None: farmacia.email     = dados.email
-    if dados.gestor_id is not None: farmacia.gestor_id = dados.gestor_id
-    if dados.ativa     is not None: farmacia.ativa     = dados.ativa
+    if dados.nome         is not None: farmacia.nome         = dados.nome
+    if dados.url_base     is not None: farmacia.url_base     = dados.url_base
+    if dados.email        is not None: farmacia.email        = dados.email
+    if dados.gestor_id    is not None: farmacia.gestor_id    = dados.gestor_id
+    if dados.ativa        is not None: farmacia.ativa        = dados.ativa
+    if dados.meta_vendas  is not None: farmacia.meta_vendas  = dados.meta_vendas
+    if dados.meta_receita is not None: farmacia.meta_receita = dados.meta_receita
     if dados.senha:
         from farmacia_monitor.cripto import _fernet
         farmacia.senha_enc = _fernet().encrypt(dados.senha.encode()).decode()
 
     db.commit()
     return {"id": farmacia.id, "nome": farmacia.nome, "ativa": farmacia.ativa}
+
+
+@app.patch("/api/farmacias/{farmacia_id}/meta")
+def atualizar_meta(
+    farmacia_id: int,
+    dados: MetaUpdate,
+    db: Session = Depends(get_db),
+    _: GestorTrafego = Depends(admin_required),
+):
+    """Define ou atualiza a meta semanal de vendas e/ou receita de uma farmácia."""
+    farmacia = db.query(Farmacia).filter(Farmacia.id == farmacia_id).first()
+    if not farmacia:
+        raise HTTPException(status_code=404, detail="Farmacia nao encontrada")
+
+    if dados.meta_vendas  is not None: farmacia.meta_vendas  = dados.meta_vendas
+    if dados.meta_receita is not None: farmacia.meta_receita = dados.meta_receita
+
+    db.commit()
+    return {
+        "id":           farmacia.id,
+        "nome":         farmacia.nome,
+        "meta_vendas":  farmacia.meta_vendas,
+        "meta_receita": float(farmacia.meta_receita) if farmacia.meta_receita else None,
+    }
 
 
 @app.delete("/api/farmacias/{farmacia_id}")
@@ -442,6 +474,7 @@ def get_farmacias(
     sql = """
         SELECT
             f.id AS farmacia_id, f.nome AS farmacia, f.gestor_id, f.ativa,
+            f.meta_vendas, f.meta_receita,
             COALESCE(r.nivel_alerta, 'verde')        AS nivel_alerta,
             COALESCE(r.receita_total, 0)             AS receita_total,
             COALESCE(r.total_atendimentos, 0)        AS total_atendimentos,
@@ -523,16 +556,35 @@ def get_farmacias(
             )
         ]
 
+        receita_atual = float(r["receita_total"] or 0)
+        vendas_atual  = int(r["vendas_realizadas"] or 0)
+        meta_v = r["meta_vendas"]
+        meta_r = float(r["meta_receita"] or 0) if r["meta_receita"] else None
+
+        # Calcula se atingiu a meta e percentual de execução
+        atingiu_meta = None
+        percentual_meta_receita = None
+        percentual_meta_vendas  = None
+        if meta_r:
+            percentual_meta_receita = round(receita_atual / meta_r * 100, 1)
+            atingiu_meta = receita_atual >= meta_r
+        if meta_v:
+            percentual_meta_vendas = round(vendas_atual / meta_v * 100, 1)
+            if atingiu_meta is None:
+                atingiu_meta = vendas_atual >= meta_v
+            else:
+                atingiu_meta = atingiu_meta and (vendas_atual >= meta_v)
+
         resultado.append({
             "id":                       fid,
             "nome":                     r["farmacia"],
             "status":                   label_status,
             "nivel_alerta":             r["nivel_alerta"],
             "gestor_id":                r.get("gestor_id"),
-            "receita_total":            float(r["receita_total"] or 0),
+            "receita_total":            receita_atual,
             "total_atendimentos":       int(r["total_atendimentos"] or 0),
             "atendimentos_finalizados": 0,
-            "vendas_realizadas":        int(r["vendas_realizadas"] or 0),
+            "vendas_realizadas":        vendas_atual,
             "taxa_conversao":           0,
             "variacao_receita":         float(r.get("variacao_receita") or 0),
             "variacao_atendimentos":    0,
@@ -542,6 +594,11 @@ def get_farmacias(
             "periodo_inicio":           str(r["periodo_inicio"]) if r["periodo_inicio"] else None,
             "periodo_fim":              str(r["periodo_fim"]) if r["periodo_fim"] else None,
             "data_coleta":              r["data_coleta"],
+            "meta_vendas":              meta_v,
+            "meta_receita":             meta_r,
+            "atingiu_meta":             atingiu_meta,
+            "percentual_meta_receita":  percentual_meta_receita,
+            "percentual_meta_vendas":   percentual_meta_vendas,
             "canais":                   canais,
         })
 
@@ -746,6 +803,101 @@ async def rodar_agora(
 @app.get("/api/status")
 def get_status():
     return {"pipeline_rodando": _pipeline_rodando, "timestamp": datetime.utcnow().isoformat()}
+
+
+# ── Ranking de Gestores ───────────────────────────────────────────────────────
+
+@app.get("/api/ranking/gestores")
+def get_ranking_gestores(
+    current_user: GestorTrafego = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Retorna o ranking dos gestores de tráfego ordenado por % de meta atingida.
+    Gestores sem meta definida nas farmácias usam variação de receita como proxy.
+    """
+    gestores = db.query(GestorTrafego).filter(GestorTrafego.ativo == True).all()
+
+    ranking = []
+    for g in gestores:
+        farmacias_ativas = [f for f in g.farmacias if f.ativa]
+        if not farmacias_ativas:
+            continue
+
+        total_farmacias     = len(farmacias_ativas)
+        farmacias_com_meta  = 0
+        farmacias_ok        = 0
+        soma_pct_meta       = 0.0
+        receita_total       = 0.0
+        meta_receita_total  = 0.0
+        vendas_total        = 0
+        meta_vendas_total   = 0
+
+        for f in farmacias_ativas:
+            # Pega a coleta mais recente
+            coleta = (
+                db.query(Coleta)
+                .filter(Coleta.farmacia_id == f.id)
+                .order_by(Coleta.data_coleta.desc())
+                .first()
+            )
+            if not coleta:
+                continue
+
+            receita_atual = float(coleta.receita_total or 0)
+            vendas_atual  = int(coleta.vendas_realizadas or 0)
+            receita_total += receita_atual
+            vendas_total  += vendas_atual
+
+            meta_r = float(f.meta_receita or 0)
+            meta_v = int(f.meta_vendas or 0)
+
+            if meta_r or meta_v:
+                farmacias_com_meta += 1
+                meta_receita_total += meta_r
+                meta_vendas_total  += meta_v
+
+                # Percentual de meta baseado em receita (principal) ou vendas
+                if meta_r:
+                    pct = min(receita_atual / meta_r * 100, 150)  # cap 150%
+                elif meta_v:
+                    pct = min(vendas_atual / meta_v * 100, 150)
+                else:
+                    pct = 100.0
+
+                soma_pct_meta += pct
+                if pct >= 100:
+                    farmacias_ok += 1
+
+        if farmacias_com_meta > 0:
+            percentual_medio = round(soma_pct_meta / farmacias_com_meta, 1)
+            taxa_acerto = round(farmacias_ok / farmacias_com_meta * 100, 1)
+        else:
+            percentual_medio = None
+            taxa_acerto      = None
+
+        ranking.append({
+            "gestor_id":            g.id,
+            "gestor_nome":          g.nome,
+            "total_farmacias":      total_farmacias,
+            "farmacias_com_meta":   farmacias_com_meta,
+            "farmacias_meta_ok":    farmacias_ok,
+            "taxa_acerto":          taxa_acerto,           # % farmácias que atingiram meta
+            "percentual_medio_meta": percentual_medio,     # média do % atingido
+            "receita_total":        round(receita_total, 2),
+            "meta_receita_total":   round(meta_receita_total, 2),
+            "vendas_total":         vendas_total,
+            "meta_vendas_total":    meta_vendas_total,
+        })
+
+    # Ordena: gestores com meta primeiro (por taxa_acerto), depois os sem meta
+    ranking.sort(
+        key=lambda x: (x["taxa_acerto"] is None, -(x["taxa_acerto"] or 0))
+    )
+    for i, item in enumerate(ranking, 1):
+        item["posicao"] = i
+
+    return ranking
 
 
 # ── Helper ────────────────────────────────────────────────────────────────────

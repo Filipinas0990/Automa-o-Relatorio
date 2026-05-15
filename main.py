@@ -98,6 +98,20 @@ def salvar_resultados(dados_coletados):
                 metricas_anterior,
             )
 
+            # Se a farmácia tem meta definida e não foi atingida → vermelho obrigatório
+            meta_v = farmacia.meta_vendas
+            meta_r = float(farmacia.meta_receita or 0)
+            atingiu_meta = True
+            if meta_v and dado.vendas_realizadas < meta_v:
+                atingiu_meta = False
+            if meta_r and dado.receita_total < meta_r:
+                atingiu_meta = False
+            if not atingiu_meta:
+                score_info["nivel_alerta"] = "vermelho"
+                if score_info["score_criticidade"] < 50:
+                    score_info["score_criticidade"] = 50.0
+                score_info.setdefault("alertas", []).append("Meta semanal nao atingida")
+
             coleta = Coleta(
                 farmacia_id=farmacia.id,
                 periodo_inicio=dado.periodo_inicio,
