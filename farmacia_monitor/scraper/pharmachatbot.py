@@ -655,16 +655,18 @@ async def _coletar_com_browser(
             # Formato: {"data": [{"label": canal, "total": vendas, "price": receita}]}
             if "sales-by-source-channel" in response.url:
                 items = data if isinstance(data, list) else data.get("data", [])
+                print(f"  [CANAL-API] sales-by-source-channel: {len(items)} items, keys={list(items[0].keys()) if items else []}")
+                if items:
+                    first = items[0]
+                    print(f"  [CANAL-API] primeiro item: label={first.get('label')} total={first.get('total')} price={first.get('price')}")
                 for item in items:
                     if not isinstance(item, dict):
                         continue
                     nome    = str(item.get("label", "")).strip()
                     vendas  = int(item.get("total", 0) or 0)
                     receita = float(item.get("price", 0) or 0)
-                    if nome and receita > 0:
-                        _rede_canais_api[nome] = {"vendas": vendas, "receita": receita}
-                if _rede_canais_api:
-                    print(f"  [REDE-VENDAS] {nome}: capturados {len(_rede_canais_api)} canais")
+                    _rede_canais_api[nome] = {"vendas": vendas, "receita": receita}
+                print(f"  [CANAL-API] capturados: {_rede_canais_api}")
                 return
 
             # Busca genérica em outros endpoints
