@@ -639,8 +639,9 @@ async def _coletar_com_browser(
 
     page = await context.new_page()
 
-    # Intercepta respostas de rede para capturar dados de vendas por canal
-    _rede_canais_vendas: dict = {}
+    # Dados capturados via interceptação de rede
+    _rede_canais_api: dict = {}   # endpoint dedicado (confiável)
+    _rede_canais_gen: dict = {}   # busca genérica (sujeita a filtro)
 
     async def _on_response(response):
         try:
@@ -649,17 +650,27 @@ async def _coletar_com_browser(
             if "json" not in response.headers.get("content-type", ""):
                 return
             data = await response.json()
-            # Log seguro: só mostra URL path + chaves dos campos (sem valores)
-            path = "/" + "/".join(response.url.split("?")[0].split("/")[3:])
-            if isinstance(data, list) and data and isinstance(data[0], dict):
-                print(f"  [REDE] {path} → array[{len(data)}] keys={list(data[0].keys())}")
-            elif isinstance(data, dict):
-                for k, v in data.items():
-                    if isinstance(v, list) and v and isinstance(v[0], dict):
-                        print(f"  [REDE] {path}.{k} → array[{len(v)}] keys={list(v[0].keys())}")
+
+            # Handler dedicado para o endpoint de vendas por canal
+            # Formato: {"data": [{"label": canal, "total": vendas, "price": receita}]}
+            if "sales-by-source-channel" in response.url:
+                items = data if isinstance(data, list) else data.get("data", [])
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    nome    = str(item.get("label", "")).strip()
+                    vendas  = int(item.get("total", 0) or 0)
+                    receita = float(item.get("price", 0) or 0)
+                    if nome and receita > 0:
+                        _rede_canais_api[nome] = {"vendas": vendas, "receita": receita}
+                if _rede_canais_api:
+                    print(f"  [REDE-VENDAS] {nome}: capturados {len(_rede_canais_api)} canais")
+                return
+
+            # Busca genérica em outros endpoints
             achado = _buscar_canal_receita_em_json(data)
             if achado:
-                _rede_canais_vendas.update(achado)
+                _rede_canais_gen.update(achado)
         except Exception:
             pass
 
@@ -716,19 +727,21 @@ async def _coletar_com_browser(
         )
         canais_vendas = await _extrair_canais_barras_vendas(page)
 
-        # Fallback: usa dados capturados via interceptação de rede
-        if not canais_vendas and _rede_canais_vendas:
-            canais_vendas = _rede_canais_vendas
+        # Fallback 1: endpoint dedicado sales-by-source-channel (dados confiáveis, sem filtro)
+        if not canais_vendas and _rede_canais_api:
+            canais_vendas = dict(_rede_canais_api)
 
-        # FILTRO CRÍTICO: mantém em canais_vendas APENAS os canais que existem
-        # na pizza chart. Evita que contatos individuais apareçam como canais.
-        if canais_raw and canais_vendas:
-            nomes_validos = {k.strip().lower() for k in canais_raw.keys()}
-            canais_vendas = {
-                nome: dados
-                for nome, dados in canais_vendas.items()
-                if nome.strip().lower() in nomes_validos
-            }
+        # Fallback 2: busca genérica (aplica filtro por nome da pizza para evitar contatos individuais)
+        if not canais_vendas and _rede_canais_gen:
+            if canais_raw:
+                nomes_validos = {k.strip().lower() for k in canais_raw.keys()}
+                canais_vendas = {
+                    nome: dados
+                    for nome, dados in _rede_canais_gen.items()
+                    if nome.strip().lower() in nomes_validos
+                }
+            else:
+                canais_vendas = dict(_rede_canais_gen)
 
         mapeado = _mapear_canais(canais_raw)
         print(f"  [DEBUG] {nome}: canais_raw={canais_raw}")
