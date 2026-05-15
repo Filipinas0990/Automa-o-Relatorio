@@ -657,6 +657,14 @@ async def _coletar_com_browser(
             if "json" not in response.headers.get("content-type", ""):
                 return
             data = await response.json()
+            # Log seguro: só mostra URL path + chaves dos campos (sem valores)
+            path = "/" + "/".join(response.url.split("?")[0].split("/")[3:])
+            if isinstance(data, list) and data and isinstance(data[0], dict):
+                print(f"  [REDE] {path} → array[{len(data)}] keys={list(data[0].keys())}")
+            elif isinstance(data, dict):
+                for k, v in data.items():
+                    if isinstance(v, list) and v and isinstance(v[0], dict):
+                        print(f"  [REDE] {path}.{k} → array[{len(v)}] keys={list(v[0].keys())}")
             achado = _buscar_canal_receita_em_json(data)
             if achado:
                 _rede_canais_vendas.update(achado)
