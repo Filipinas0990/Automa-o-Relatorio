@@ -562,9 +562,9 @@ def get_farmacias(
         meta_r = float(r["meta_receita"] or 0) if r["meta_receita"] else None
 
         # Calcula se atingiu a meta e percentual de execução
-        atingiu_meta = None
-        percentual_meta_receita = None
-        percentual_meta_vendas  = None
+        atingiu_meta = None          # null = sem meta definida
+        percentual_meta_receita = 0.0
+        percentual_meta_vendas  = 0.0
         if meta_r:
             percentual_meta_receita = round(receita_atual / meta_r * 100, 1)
             atingiu_meta = receita_atual >= meta_r
@@ -971,21 +971,22 @@ def get_ranking_gestores(
             percentual_medio = round(soma_pct_meta / farmacias_com_meta, 1)
             taxa_acerto = round(farmacias_ok / farmacias_com_meta * 100, 1)
         else:
-            percentual_medio = None
-            taxa_acerto      = None
+            percentual_medio = 0.0
+            taxa_acerto      = 0.0
 
         ranking.append({
-            "gestor_id":            g.id,
-            "gestor_nome":          g.nome,
-            "total_farmacias":      total_farmacias,
-            "farmacias_com_meta":   farmacias_com_meta,
-            "farmacias_meta_ok":    farmacias_ok,
-            "taxa_acerto":          taxa_acerto,           # % farmácias que atingiram meta
-            "percentual_medio_meta": percentual_medio,     # média do % atingido
-            "receita_total":        round(receita_total, 2),
-            "meta_receita_total":   round(meta_receita_total, 2),
-            "vendas_total":         vendas_total,
-            "meta_vendas_total":    meta_vendas_total,
+            "gestor_id":             g.id,
+            "gestor_nome":           g.nome,
+            "total_farmacias":       total_farmacias,
+            "farmacias_com_meta":    farmacias_com_meta,
+            "farmacias_meta_ok":     farmacias_ok,
+            "taxa_acerto":           taxa_acerto,
+            "percentual_medio_meta": percentual_medio,
+            "tem_meta":              farmacias_com_meta > 0,
+            "receita_total":         round(receita_total, 2),
+            "meta_receita_total":    round(meta_receita_total, 2),
+            "vendas_total":          vendas_total,
+            "meta_vendas_total":     meta_vendas_total,
         })
 
     # Ordena: gestores com meta primeiro (por taxa_acerto), depois os sem meta
