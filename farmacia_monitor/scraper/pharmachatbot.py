@@ -742,6 +742,14 @@ async def _coletar_com_browser(
         if not canais_vendas and _rede_canais_api:
             canais_vendas = dict(_rede_canais_api)
 
+        # Fallback: deriva totais dos canais quando os badges da página não foram encontrados
+        if receita == 0 and canais_vendas:
+            receita = sum(v.get("receita", 0) for v in canais_vendas.values())
+            print(f"  [DEBUG] {nome}: receita derivada dos canais = {receita}")
+        if vendas == 0 and canais_vendas:
+            vendas = sum(v.get("vendas", 0) for v in canais_vendas.values())
+            print(f"  [DEBUG] {nome}: vendas derivadas dos canais = {vendas}")
+
         mapeado = _mapear_canais(canais_raw)
         print(f"  [DEBUG] {nome}: canais_raw={canais_raw}")
         print(f"  [DEBUG] {nome}: canais_vendas={canais_vendas}")
