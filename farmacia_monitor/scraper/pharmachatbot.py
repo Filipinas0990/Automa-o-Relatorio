@@ -323,6 +323,38 @@ async def _extrair_canais_pizza(page: Page, titulo: str) -> dict:
     return canais
 
 
+def _buscar_canal_receita_em_json(obj, _depth: int = 0) -> dict:
+    """Procura recursivamente em qualquer JSON arrays com {canal_nome, receita}."""
+    if _depth > 8 or not obj:
+        return {}
+    resultado = {}
+    if isinstance(obj, list) and len(obj) >= 2 and isinstance(obj[0], dict):
+        sample = obj[0]
+        keys = list(sample.keys())
+        str_k = [k for k in keys if isinstance(sample.get(k), str) and len(sample.get(k, "")) > 2]
+        big_k = [k for k in keys if isinstance(sample.get(k), (int, float)) and float(sample.get(k, 0)) > 500]
+        if str_k and big_k:
+            nome_k = str_k[0]
+            rec_k  = max(big_k, key=lambda k: max(float(i.get(k, 0)) for i in obj))
+            cnt_k  = next((k for k in keys if k not in (nome_k, rec_k) and isinstance(sample.get(k), (int, float))), None)
+            for item in obj:
+                nome    = str(item.get(nome_k, ""))
+                receita = float(item.get(rec_k, 0))
+                if nome and receita > 100:
+                    resultado[nome] = {
+                        "vendas":  int(item.get(cnt_k, 0)) if cnt_k else 0,
+                        "receita": receita,
+                    }
+    if isinstance(obj, dict):
+        for v in obj.values():
+            resultado.update(_buscar_canal_receita_em_json(v, _depth + 1))
+    elif isinstance(obj, list):
+        for item in obj:
+            if isinstance(item, (dict, list)):
+                resultado.update(_buscar_canal_receita_em_json(item, _depth + 1))
+    return resultado
+
+
 async def _extrair_canais_barras_vendas(page: Page) -> dict:
     """
     Extrai o gráfico de barras de vendas por canal.
@@ -615,6 +647,24 @@ async def _coletar_com_browser(
 
     page = await context.new_page()
 
+    # Intercepta respostas de rede para capturar dados de vendas por canal
+    _rede_canais_vendas: dict = {}
+
+    async def _on_response(response):
+        try:
+            if response.status != 200:
+                return
+            if "json" not in response.headers.get("content-type", ""):
+                return
+            data = await response.json()
+            achado = _buscar_canal_receita_em_json(data)
+            if achado:
+                _rede_canais_vendas.update(achado)
+        except Exception:
+            pass
+
+    page.on("response", _on_response)
+
     try:
         url_base = url_base.rstrip("/")
         await page.goto(f"{url_base}/", timeout=60000, wait_until="domcontentloaded")
@@ -665,9 +715,16 @@ async def _coletar_com_browser(
             page, "Quantidade de atendimentos por canal de divulga"
         )
         canais_vendas = await _extrair_canais_barras_vendas(page)
+
+        # Fallback: usa dados capturados via interceptação de rede
+        if not canais_vendas and _rede_canais_vendas:
+            canais_vendas = _rede_canais_vendas
+            print(f"  [DEBUG] {nome}: canais_vendas via REDE: {canais_vendas}")
+
         mapeado = _mapear_canais(canais_raw)
         print(f"  [DEBUG] {nome}: canais_raw={canais_raw}")
         print(f"  [DEBUG] {nome}: canais_vendas={canais_vendas}")
+        print(f"  [DEBUG] {nome}: _rede_canais_vendas={_rede_canais_vendas}")
         await _screenshot(page, "05_final")
 
         return DadosFarmacia(
