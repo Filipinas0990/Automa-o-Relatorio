@@ -657,6 +657,12 @@ async def _coletar_com_browser(
             if "json" not in response.headers.get("content-type", ""):
                 return
             data = await response.json()
+            corpo = str(data)
+            # Loga apenas respostas com palavras-chave relevantes
+            if any(k in corpo for k in ["canal", "Canal", "atendimento", "vendas", "receita", "totalEm"]):
+                url_curta = response.url.split("?")[0][-80:]
+                print(f"  [REDE-URL] {url_curta}")
+                print(f"  [REDE-AMOSTRA] {corpo[:300]}")
             achado = _buscar_canal_receita_em_json(data)
             if achado:
                 _rede_canais_vendas.update(achado)
