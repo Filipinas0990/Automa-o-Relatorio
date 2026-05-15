@@ -469,7 +469,7 @@ async def _extrair_canais_barras_vendas(page: Page) -> dict:
             }
             return result;
         }
-    """, timeout=30000)
+    """)
 
     if resultado and any(v.get("receita", 0) > 0 for v in resultado.values()):
         print(f"  [DEBUG] canais_vendas via JS-async: {resultado}")
