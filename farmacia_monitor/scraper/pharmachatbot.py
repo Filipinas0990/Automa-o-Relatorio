@@ -329,30 +329,7 @@ async def _extrair_canais_barras_vendas(page: Page) -> dict:
     Tooltip esperado: 'canal: X / total: Y / total em vendas: R$Z'
     Retorna: {canal_name: {"vendas": int, "receita": float}}
     """
-    # Rola até o gráfico de barras (está abaixo do gráfico de pizza)
-    await page.evaluate("""
-        () => {
-            // Tenta encontrar pelo heading de vendas
-            const heading = [...document.querySelectorAll('*')].find(e => {
-                const t = (e.innerText || '').toLowerCase();
-                return e.children.length === 0 &&
-                       (t.includes('venda') || t.includes('receita')) &&
-                       t.length < 80;
-            });
-            if (heading) {
-                heading.scrollIntoView({behavior: 'instant', block: 'center'});
-                return;
-            }
-            // Fallback: rola até o primeiro SVG com múltiplos rects (gráfico de barras)
-            const svg = [...document.querySelectorAll('svg')].find(
-                s => s.querySelectorAll('rect[width][height]').length >= 3
-            );
-            if (svg) svg.scrollIntoView({behavior: 'instant', block: 'center'});
-        }
-    """)
-    await page.wait_for_timeout(1000)
-
-    # Método 1: React fiber — varre SVGs com barras buscando campo monetário
+    # ── Método 1: React fiber — varre toda a árvore buscando dados monetários ──
     fiber_result = await page.evaluate("""
         () => {
             function getFiberKey(el) {
@@ -361,48 +338,46 @@ async def _extrair_canais_barras_vendas(page: Page) -> dict:
                     k.startsWith('__reactInternalInstance')
                 );
             }
-            function walkFiber(fiber, depth) {
-                if (!fiber || depth > 30) return [];
+            function walkFiber(fiber, depth, seen) {
+                if (!fiber || depth > 60) return [];
+                if (seen.has(fiber)) return [];
+                seen.add(fiber);
                 const out = [];
                 const props = fiber.memoizedProps || {};
-                if (Array.isArray(props.data) && props.data.length > 0) {
+                if (Array.isArray(props.data) && props.data.length >= 2) {
                     const sample = props.data[0];
                     const keys = Object.keys(sample);
-                    const nomeKey = keys.find(k => ['nome','canal','name','label'].includes(k.toLowerCase()));
-                    // Campo monetário: valor > 500 e nome contém "vend" ou "receita"
-                    const receitaKey = keys.find(k =>
-                        typeof sample[k] === 'number' && sample[k] > 500 &&
-                        /vend|receita|revenue/i.test(k)
-                    );
-                    // Fallback: qualquer campo numérico > 1000 (provável R$)
-                    const receitaFallback = !receitaKey && keys.find(k =>
-                        k !== nomeKey && typeof sample[k] === 'number' && sample[k] > 1000
-                    );
-                    const rKey = receitaKey || receitaFallback;
-                    if (nomeKey && rKey) {
-                        const vendaKey = keys.find(k => k !== nomeKey && k !== rKey && typeof sample[k] === 'number');
-                        props.data.forEach(d => {
-                            const nome = d[nomeKey] ? String(d[nomeKey]) : '';
-                            if (nome && rKey in d) {
-                                out.push({
+                    // Qualquer chave string (nome do canal)
+                    const nomeKey = keys.find(k => typeof sample[k] === 'string' && sample[k].length > 2);
+                    // Qualquer campo numérico grande (receita R$)
+                    const bigKey  = keys.find(k => k !== nomeKey && typeof sample[k] === 'number' && sample[k] > 100);
+                    // Campo numérico menor (qtd vendas)
+                    const cntKey  = keys.find(k => k !== nomeKey && k !== bigKey && typeof sample[k] === 'number');
+                    if (nomeKey && bigKey) {
+                        const hasReceita = props.data.some(d => Number(d[bigKey]) > 100);
+                        if (hasReceita) {
+                            props.data.forEach(d => {
+                                const nome = String(d[nomeKey] || '');
+                                if (nome) out.push({
                                     nome,
-                                    vendas: vendaKey ? Number(d[vendaKey]) : 0,
-                                    receita: Number(d[rKey]),
+                                    vendas:  cntKey ? Number(d[cntKey]) : 0,
+                                    receita: Number(d[bigKey]),
                                 });
-                            }
-                        });
+                            });
+                        }
                     }
                 }
-                if (fiber.child)   out.push(...walkFiber(fiber.child,   depth + 1));
-                if (fiber.sibling) out.push(...walkFiber(fiber.sibling, depth + 1));
+                out.push(...walkFiber(fiber.child,   depth + 1, seen));
+                out.push(...walkFiber(fiber.sibling, depth + 1, seen));
                 return out;
             }
-            const svgs = document.querySelectorAll('svg');
-            for (const svg of svgs) {
+            // Varre TODOS os SVGs com barras
+            const seen = new WeakSet();
+            for (const svg of document.querySelectorAll('svg')) {
                 if (svg.querySelectorAll('rect').length < 2) continue;
                 const key = getFiberKey(svg);
                 if (!key) continue;
-                const items = walkFiber(svg[key], 0);
+                const items = walkFiber(svg[key], 0, seen);
                 if (items.length > 0 && items.some(i => i.receita > 0)) {
                     const res = {};
                     items.forEach(i => { res[i.nome] = {vendas: i.vendas, receita: i.receita}; });
@@ -414,12 +389,23 @@ async def _extrair_canais_barras_vendas(page: Page) -> dict:
     """)
 
     if fiber_result and any(v.get("receita", 0) > 0 for v in fiber_result.values()):
+        print(f"  [DEBUG] canais_vendas via fiber: {fiber_result}")
         return fiber_result
 
-    # Método 2: hover nos <rect> de todos os SVGs, lê tooltip com "total em vendas"
+    # ── Método 2: mouse.move() com coordenadas absolutas (mais confiável em headless) ──
+    # Rola até o primeiro SVG com barras
+    await page.evaluate("""
+        () => {
+            const svg = [...document.querySelectorAll('svg')].find(
+                s => s.querySelectorAll('rect[width][height]').length >= 3
+            );
+            if (svg) svg.scrollIntoView({behavior: 'instant', block: 'center'});
+        }
+    """)
+    await page.wait_for_timeout(800)
+
     resultado: dict = {}
     vistos: set = set()
-
     rects = page.locator('svg rect[width][height]')
     total_rects = await rects.count()
 
@@ -430,27 +416,44 @@ async def _extrair_canais_barras_vendas(page: Page) -> dict:
             if not h or float(h) < 5:
                 continue
 
-            # Garante que o elemento está visível antes de fazer hover
             try:
-                await rect.scroll_into_view_if_needed(timeout=3000)
+                await rect.scroll_into_view_if_needed(timeout=2000)
             except Exception:
                 pass
-            await rect.hover(force=True, timeout=3000)
-            await page.wait_for_timeout(500)
 
-            # Detecta qualquer tooltip visível (sem filtrar has_text aqui)
+            box = await rect.bounding_box()
+            if not box:
+                continue
+
+            cx = box["x"] + box["width"] / 2
+            cy = box["y"] + box["height"] / 2
+
+            # Move o mouse para as coordenadas absolutas (mais confiável que .hover())
+            await page.mouse.move(cx, cy)
+            await page.wait_for_timeout(600)
+
+            # Dispara eventos JS como reforço caso o Recharts precise deles
+            await page.evaluate("""
+                ([x, y]) => {
+                    const el = document.elementFromPoint(x, y);
+                    if (!el) return;
+                    ['mouseover','mouseenter','mousemove'].forEach(t =>
+                        el.dispatchEvent(new MouseEvent(t, {bubbles: true, cancelable: true, view: window, clientX: x, clientY: y}))
+                    );
+                }
+            """, [cx, cy])
+            await page.wait_for_timeout(400)
+
             tooltip = page.locator(
                 '[class*="recharts-tooltip-wrapper"], '
                 '[class*="tooltip"], [class*="Tooltip"]'
             )
-
             if await tooltip.count() == 0:
                 continue
 
             texto = (await tooltip.first.text_content(timeout=2000) or "").strip()
             if not texto or texto in vistos:
                 continue
-            # Só processa se for tooltip do gráfico de barras de vendas
             if "total em vendas" not in texto.lower():
                 continue
             vistos.add(texto)
