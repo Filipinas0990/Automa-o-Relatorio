@@ -19,9 +19,10 @@
 9. [Gestores de Tráfego — CRUD (Admin)](#9-gestores-de-tráfego--crud-admin)
 10. [Relatórios](#10-relatórios)
 11. [Pipeline Manual](#11-pipeline-manual)
-12. [Tabela Resumo de Endpoints](#12-tabela-resumo-de-endpoints)
-13. [Fluxo de Navegação](#13-fluxo-de-navegação)
-14. [Tratamento de Erros](#14-tratamento-de-erros)
+12. [Ranking de Gestores](#12-ranking-de-gestores)
+13. [Tabela Resumo de Endpoints](#13-tabela-resumo-de-endpoints)
+14. [Fluxo de Navegação](#14-fluxo-de-navegação)
+15. [Tratamento de Erros](#15-tratamento-de-erros)
 
 ---
 
@@ -526,7 +527,139 @@ const intervalo = setInterval(async () => {
 
 ---
 
-## 12. Tabela Resumo de Endpoints
+## 12. Ranking de Gestores
+
+> **Autenticação:** Requer JWT (qualquer usuário logado).
+
+### Regras de negócio
+
+- **1 ponto = 1 coleta em que a farmácia atingiu a meta** de vendas e/ou receita
+- Os pontos **acumulam a cada rodada semanal** dentro do mesmo mês
+- **No dia 1 de cada mês os pontos zeram automaticamente** — não há ação necessária no frontend, a API já retorna 0 para todos no início do mês
+- Gestores sem nenhuma coleta no mês aparecem no final da lista com `pontos: 0`
+- Coletas históricas são preservadas — é possível consultar qualquer mês passado
+
+---
+
+### Ranking do mês atual — `GET /api/ranking/gestores`
+
+**Query params opcionais:**
+
+| Parâmetro | Tipo   | Descrição                                | Exemplo         |
+|-----------|--------|------------------------------------------|-----------------|
+| `mes`     | string | Mês no formato `YYYY-MM`. Padrão: atual  | `?mes=2026-04`  |
+
+**Resposta 200:**
+```json
+[
+  {
+    "posicao": 1,
+    "gestor_id": 3,
+    "gestor_nome": "Carlos Souza",
+    "pontos": 8,
+    "total_farmacias": 4,
+    "farmacias_com_coleta": 4,
+    "coletas_no_mes": 12,
+    "taxa_acerto": 66.7,
+    "mes": "2026-05"
+  },
+  {
+    "posicao": 3,
+    "gestor_id": 7,
+    "gestor_nome": "João Pedro",
+    "pontos": 0,
+    "total_farmacias": 2,
+    "farmacias_com_coleta": 0,
+    "coletas_no_mes": 0,
+    "taxa_acerto": 0.0,
+    "mes": "2026-05"
+  }
+]
+```
+
+**Campos:**
+
+| Campo                  | Tipo   | Descrição                                                                   |
+|------------------------|--------|-----------------------------------------------------------------------------|
+| `posicao`              | int    | Posição no ranking — 1 = melhor do mês                                      |
+| `gestor_id`            | int    | ID do gestor                                                                |
+| `gestor_nome`          | string | Nome do gestor                                                              |
+| `pontos`               | int    | Pontos acumulados no mês                                                    |
+| `total_farmacias`      | int    | Total de farmácias ativas vinculadas ao gestor                              |
+| `farmacias_com_coleta` | int    | Farmácias que tiveram ao menos 1 coleta no mês                              |
+| `coletas_no_mes`       | int    | Total de rodadas de coleta realizadas no mês para as farmácias desse gestor |
+| `taxa_acerto`          | float  | `pontos / coletas_no_mes × 100` — percentual de coletas que bateram a meta  |
+| `mes`                  | string | Mês de referência no formato `YYYY-MM`                                      |
+
+**Seletor de mês histórico:**
+```js
+// Popular dropdown com os últimos 6 meses (gerar no frontend)
+function gerarMeses(n = 6) {
+  const meses = []
+  const agora = new Date()
+  for (let i = 0; i < n; i++) {
+    const d = new Date(agora.getFullYear(), agora.getMonth() - i, 1)
+    meses.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`)
+  }
+  return meses  // ["2026-05", "2026-04", "2026-03", ...]
+}
+
+// Ao mudar a seleção:
+const res = await fetch(`${BASE_URL}/api/ranking/gestores?mes=${mesSelecionado}`, {
+  headers: { Authorization: `Bearer ${token}` }
+})
+```
+
+---
+
+### Histórico dos últimos 6 meses — `GET /api/ranking/gestores/historico`
+
+Retorna uma lista plana com pontos por gestor por mês. Ideal para gráfico de evolução.
+
+**Resposta 200:**
+```json
+[
+  { "gestor_id": 3, "gestor_nome": "Carlos Souza", "mes": "2026-05", "pontos": 8,  "coletas_no_mes": 12 },
+  { "gestor_id": 1, "gestor_nome": "Ana Lima",     "mes": "2026-05", "pontos": 5,  "coletas_no_mes": 9  },
+  { "gestor_id": 3, "gestor_nome": "Carlos Souza", "mes": "2026-04", "pontos": 11, "coletas_no_mes": 16 },
+  { "gestor_id": 1, "gestor_nome": "Ana Lima",     "mes": "2026-04", "pontos": 3,  "coletas_no_mes": 8  }
+]
+```
+
+> **Atenção:** Os dados vêm ordenados por `mes DESC`. Para um gráfico de linha, agrupar por `gestor_id` e ordenar por `mes ASC` no cliente.
+
+**Exemplo de transformação para gráfico:**
+```js
+// Agrupa por gestor e ordena por mês crescente
+function transformarParaGrafico(dados) {
+  const porGestor = {}
+  dados.forEach(({ gestor_id, gestor_nome, mes, pontos }) => {
+    if (!porGestor[gestor_id]) porGestor[gestor_id] = { nome: gestor_nome, serie: [] }
+    porGestor[gestor_id].serie.push({ mes, pontos })
+  })
+  Object.values(porGestor).forEach(g => g.serie.sort((a, b) => a.mes.localeCompare(b.mes)))
+  return Object.values(porGestor)
+}
+// Retorna: [{ nome: "Carlos", serie: [{mes:"2026-03",pontos:5}, {mes:"2026-04",pontos:11}, ...] }, ...]
+```
+
+---
+
+### Rota sugerida
+
+```
+/ranking-gestores    → Ranking do mês atual + seletor de mês + gráfico de evolução
+```
+
+**Quem pode ver:**
+- Admin: vê todos os gestores
+- Gestor comum: vê apenas a sua própria posição no ranking
+
+> **Nota:** O endpoint já filtra pela role automaticamente via token JWT — sem parâmetro extra necessário para o gestor comum.
+
+---
+
+## 13. Tabela Resumo de Endpoints
 
 | Método | Endpoint | Auth | Admin? | Descrição |
 |---|---|---|---|---|
@@ -547,10 +680,12 @@ const intervalo = setInterval(async () => {
 | `GET` | `/api/relatorios/:data/xlsx` | ✅ | — | Download Excel |
 | `POST` | `/api/rodar-agora` | ✅ | ✅ | Disparar pipeline |
 | `GET` | `/api/status` | ❌ | — | Status do pipeline |
+| `GET` | `/api/ranking/gestores` | ✅ | — | Ranking mensal de gestores |
+| `GET` | `/api/ranking/gestores/historico` | ✅ | — | Evolução últimos 6 meses |
 
 ---
 
-## 13. Fluxo de Navegação
+## 14. Fluxo de Navegação
 
 ```
 /setup               → Criar super admin (uma única vez)
@@ -564,6 +699,7 @@ const intervalo = setInterval(async () => {
 /gestores/novo       → Formulário de cadastro (admin)
 /gestores/:id/editar → Formulário de edição (admin)
 /relatorios          → Lista de relatórios + download Excel
+/ranking-gestores    → Ranking mensal de gestores + gráfico de evolução
 ```
 
 **Proteção de rotas:**
@@ -573,7 +709,7 @@ const intervalo = setInterval(async () => {
 
 ---
 
-## 14. Tratamento de Erros
+## 15. Tratamento de Erros
 
 Todos os erros seguem o formato:
 ```json

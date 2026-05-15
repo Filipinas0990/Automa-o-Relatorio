@@ -907,96 +907,134 @@ def get_status():
 
 @app.get("/api/ranking/gestores")
 def get_ranking_gestores(
+    mes: Optional[str] = None,   # formato YYYY-MM; omitir = mês atual
     current_user: GestorTrafego = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """
-    Retorna o ranking dos gestores de tráfego ordenado por % de meta atingida.
-    Gestores sem meta definida nas farmácias usam variação de receita como proxy.
+    Ranking mensal de gestores por pontos.
+    1 ponto = 1 coleta onde a farmácia atingiu a meta (atingiu_meta=true).
+    Pontos acumulam a cada rodada semanal dentro do mesmo mês.
+    Zera automaticamente na virada do mês — sem cron necessário.
+
+    Query params:
+      mes: YYYY-MM (opcional). Omitir retorna o mês corrente.
+
+    Exemplo: GET /api/ranking/gestores?mes=2026-04
     """
-    gestores = db.query(GestorTrafego).filter(GestorTrafego.ativo == True).all()
+    # Resolve o mês-alvo
+    if mes:
+        try:
+            mes_dt = datetime.strptime(mes, "%Y-%m")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Formato de mes invalido. Use YYYY-MM.")
+    else:
+        mes_dt = datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+    mes_inicio = mes_dt.replace(day=1)
+
+    rows = db.execute(text("""
+        SELECT
+            g.id                                            AS gestor_id,
+            g.nome                                          AS gestor_nome,
+            COUNT(*) FILTER (WHERE c.atingiu_meta = TRUE)   AS pontos,
+            COUNT(*)                                        AS coletas_no_mes,
+            COUNT(DISTINCT c.farmacia_id)                   AS farmacias_com_coleta,
+            (
+                SELECT COUNT(*) FROM farmacias f2
+                WHERE f2.gestor_id = g.id AND f2.ativa = TRUE
+            )                                               AS total_farmacias
+        FROM gestores_trafego g
+        JOIN farmacias f ON f.gestor_id = g.id AND f.ativa = TRUE
+        JOIN coletas c   ON c.farmacia_id = f.id
+                        AND DATE_TRUNC('month', c.data_coleta) = DATE_TRUNC('month', :mes_ref::date)
+        WHERE g.ativo = TRUE
+        GROUP BY g.id, g.nome
+        ORDER BY pontos DESC, g.nome
+    """), {"mes_ref": mes_inicio.strftime("%Y-%m-01")}).mappings().all()
+
+    # Gestores sem coleta no mês ainda aparecem com 0 pontos
+    gestores_com_coleta = {r["gestor_id"] for r in rows}
+    todos_gestores = db.query(GestorTrafego).filter(
+        GestorTrafego.ativo == True
+    ).all()
 
     ranking = []
-    for g in gestores:
-        farmacias_ativas = [f for f in g.farmacias if f.ativa]
-        if not farmacias_ativas:
-            continue
 
-        total_farmacias     = len(farmacias_ativas)
-        farmacias_com_meta  = 0
-        farmacias_ok        = 0
-        soma_pct_meta       = 0.0
-        receita_total       = 0.0
-        meta_receita_total  = 0.0
-        vendas_total        = 0
-        meta_vendas_total   = 0
-
-        for f in farmacias_ativas:
-            # Pega a coleta mais recente
-            coleta = (
-                db.query(Coleta)
-                .filter(Coleta.farmacia_id == f.id)
-                .order_by(Coleta.data_coleta.desc())
-                .first()
-            )
-            if not coleta:
-                continue
-
-            receita_atual = float(coleta.receita_total or 0)
-            vendas_atual  = int(coleta.vendas_realizadas or 0)
-            receita_total += receita_atual
-            vendas_total  += vendas_atual
-
-            meta_r = float(f.meta_receita or 0)
-            meta_v = int(f.meta_vendas or 0)
-
-            if meta_r or meta_v:
-                farmacias_com_meta += 1
-                meta_receita_total += meta_r
-                meta_vendas_total  += meta_v
-
-                # Percentual de meta baseado em receita (principal) ou vendas
-                if meta_r:
-                    pct = min(receita_atual / meta_r * 100, 150)  # cap 150%
-                elif meta_v:
-                    pct = min(vendas_atual / meta_v * 100, 150)
-                else:
-                    pct = 100.0
-
-                soma_pct_meta += pct
-                if pct >= 100:
-                    farmacias_ok += 1
-
-        # Pontos: 1 ponto por farmácia que bateu a meta
-        pontos = farmacias_ok
-
-        if farmacias_com_meta > 0:
-            percentual_medio = round(soma_pct_meta / farmacias_com_meta, 1)
-            taxa_acerto = round(farmacias_ok / farmacias_com_meta * 100, 1)
-        else:
-            percentual_medio = 0.0
-            taxa_acerto      = 0.0
-
+    for i, r in enumerate(rows, 1):
+        coletas = int(r["coletas_no_mes"] or 0)
+        pontos  = int(r["pontos"] or 0)
+        taxa    = round(pontos / coletas * 100, 1) if coletas > 0 else 0.0
         ranking.append({
-            "gestor_id":             g.id,
-            "gestor_nome":           g.nome,
-            "total_farmacias":       total_farmacias,
-            "farmacias_com_meta":    farmacias_com_meta,
-            "farmacias_meta_ok":     farmacias_ok,
-            "pontos":                pontos,          # 1 ponto por farmácia que bateu a meta
-            "taxa_acerto":           taxa_acerto,     # % das farmácias com meta que bateram
-            "percentual_medio_meta": percentual_medio, # % médio atingido da meta
-            "tem_meta":              farmacias_com_meta > 0,
-            "receita_total":         round(receita_total, 2),   # só informativo
-            "vendas_total":          vendas_total,              # só informativo
+            "posicao":             i,
+            "gestor_id":           r["gestor_id"],
+            "gestor_nome":         r["gestor_nome"],
+            "pontos":              pontos,
+            "total_farmacias":     int(r["total_farmacias"] or 0),
+            "farmacias_com_coleta": int(r["farmacias_com_coleta"] or 0),
+            "coletas_no_mes":      coletas,
+            "taxa_acerto":         taxa,
+            "mes":                 mes_inicio.strftime("%Y-%m"),
         })
 
-    # Ordena por pontos (farmácias que bateram a meta) — NÃO por faturamento
-    ranking.sort(key=lambda x: (-x["pontos"], -x["taxa_acerto"]))
-    for i, item in enumerate(ranking, 1):
-        item["posicao"] = i
+    # Adiciona gestores ativos sem nenhuma coleta no mês (pontos = 0)
+    proxima_posicao = len(ranking) + 1
+    for g in todos_gestores:
+        if g.id not in gestores_com_coleta:
+            total = len([f for f in g.farmacias if f.ativa])
+            if total == 0:
+                continue
+            ranking.append({
+                "posicao":             proxima_posicao,
+                "gestor_id":           g.id,
+                "gestor_nome":         g.nome,
+                "pontos":              0,
+                "total_farmacias":     total,
+                "farmacias_com_coleta": 0,
+                "coletas_no_mes":      0,
+                "taxa_acerto":         0.0,
+                "mes":                 mes_inicio.strftime("%Y-%m"),
+            })
+            proxima_posicao += 1
 
     return ranking
+
+
+@app.get("/api/ranking/gestores/historico")
+def get_historico_gestores(
+    current_user: GestorTrafego = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Retorna os últimos 6 meses de pontuação por gestor.
+    Útil para gráfico de evolução no frontend.
+    """
+    rows = db.execute(text("""
+        SELECT
+            g.id                                            AS gestor_id,
+            g.nome                                          AS gestor_nome,
+            TO_CHAR(DATE_TRUNC('month', c.data_coleta), 'YYYY-MM') AS mes,
+            COUNT(*) FILTER (WHERE c.atingiu_meta = TRUE)   AS pontos,
+            COUNT(*)                                        AS coletas_no_mes
+        FROM gestores_trafego g
+        JOIN farmacias f ON f.gestor_id = g.id AND f.ativa = TRUE
+        JOIN coletas c   ON c.farmacia_id = f.id
+                        AND c.data_coleta >= NOW() - INTERVAL '6 months'
+        WHERE g.ativo = TRUE
+        GROUP BY g.id, g.nome, DATE_TRUNC('month', c.data_coleta)
+        ORDER BY mes DESC, pontos DESC
+    """)).mappings().all()
+
+    return [
+        {
+            "gestor_id":      r["gestor_id"],
+            "gestor_nome":    r["gestor_nome"],
+            "mes":            r["mes"],
+            "pontos":         int(r["pontos"] or 0),
+            "coletas_no_mes": int(r["coletas_no_mes"] or 0),
+        }
+        for r in rows
+    ]
 
 
 # ── Helper ────────────────────────────────────────────────────────────────────

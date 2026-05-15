@@ -113,6 +113,7 @@ def salvar_resultados(dados_coletados):
                 score_info.setdefault("alertas", []).append("Meta semanal nao atingida")
 
             coleta = Coleta(
+                atingiu_meta=atingiu_meta,
                 farmacia_id=farmacia.id,
                 periodo_inicio=dado.periodo_inicio,
                 periodo_fim=dado.periodo_fim,

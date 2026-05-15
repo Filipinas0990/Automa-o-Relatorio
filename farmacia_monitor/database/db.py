@@ -82,6 +82,7 @@ class Coleta(Base):
 
     score_criticidade = Column(Numeric(5, 2), default=0)
     nivel_alerta      = Column(String(10), default="verde", nullable=False)
+    atingiu_meta      = Column(Boolean, default=False, nullable=False)
 
     farmacia = relationship("Farmacia", back_populates="coletas")
     canais   = relationship("ColetaCanal", back_populates="coleta", cascade="all, delete")
