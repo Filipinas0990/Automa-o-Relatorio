@@ -180,8 +180,8 @@ async def _aplicar_filtro_datas(page: Page, inicio: str, fim: str):
             await date_inputs.nth(1).type(br_fim)
 
     salvar_btn = page.locator('button:has-text("Salvar"), button:has-text("Save")')
-    if await salvar_btn.count() > 0:
-        await salvar_btn.first.click()
+    if await salvar_btn.count() > 0 and await salvar_btn.first.is_enabled():
+        await salvar_btn.first.click(timeout=8000)
 
     try:
         await page.wait_for_load_state("networkidle", timeout=20000)
