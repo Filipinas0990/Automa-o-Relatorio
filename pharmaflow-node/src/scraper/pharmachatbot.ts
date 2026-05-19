@@ -52,38 +52,34 @@ const EMAIL_SELETORES = [
 ];
 
 async function fazerLogin(page: Page, email: string, senha: string): Promise<boolean> {
-  console.log(`  [LOGIN] iniciando para: ${email} | url: ${page.url()}`);
+  console.log(`  [LOGIN] iniciando | url: ${page.url()}`);
 
-  // Aguarda SPA renderizar (sem networkidle não há garantia do form estar pronto)
-  try { await page.waitForLoadState('networkidle', { timeout: 15000 }); }
-  catch { /* ok — SPA com requisições contínuas pode não alcançar networkidle */ }
-
-  // Tenta cada seletor com timeout curto individualmente
-  let emailLocator: Locator | null = null;
-  for (const sel of EMAIL_SELETORES) {
+  // Espera o React renderizar o formulário de login (1 selector combinado, timeout longo)
+  const SEL_EMAIL = 'input[type="email"], input[name="email"], input[name="username"], input[name="login"], input[type="text"]';
+  try {
+    await page.waitForSelector(SEL_EMAIL, { timeout: 25000 });
+  } catch (e) {
+    // Diagnóstico: lista inputs visíveis para depuração
     try {
-      await page.locator(sel).first().waitFor({ state: 'visible', timeout: 5000 });
-      emailLocator = page.locator(sel).first();
-      console.log(`  [LOGIN] campo encontrado: ${sel}`);
-      break;
-    } catch { /* tenta próximo */ }
-  }
-
-  if (!emailLocator) {
-    const inputs = await page.evaluate(() =>
-      Array.from(document.querySelectorAll('input')).map(i =>
-        `type=${i.type} name=${i.name} id=${i.id} placeholder=${i.placeholder}`
-      )
-    );
-    console.log(`  [LOGIN] falha — nenhum campo encontrado. URL: ${page.url()}`);
-    console.log(`  [LOGIN] inputs na página: ${JSON.stringify(inputs)}`);
+      const inputs = await page.evaluate(() =>
+        Array.from(document.querySelectorAll('input')).map(i =>
+          `type=${i.type} name=${i.name} id=${i.id} ph=${i.placeholder}`
+        )
+      );
+      console.log(`  [LOGIN] falha — sem campo email. URL: ${page.url()} | inputs: ${JSON.stringify(inputs)}`);
+    } catch {
+      console.log(`  [LOGIN] falha — página inacessível. URL: ${page.url()} | err: ${(e as Error).message}`);
+    }
     return false;
   }
+
+  const emailLocator: Locator = page.locator(SEL_EMAIL).first();
+  console.log(`  [LOGIN] campo encontrado, preenchendo...`);
 
   await screenshot(page, '01_pre_login');
   await emailLocator.fill(email);
   await page.waitForTimeout(400);
-  await page.fill('input[type="password"]', senha);
+  await page.locator('input[type="password"]').first().fill(senha);
   await page.waitForTimeout(600);
 
   await screenshot(page, '02_pre_submit');
@@ -528,6 +524,8 @@ async function _coletarComBrowser(
     Object.defineProperty(navigator, 'languages',  { get: () => ['pt-BR', 'pt'] });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (window as any).chrome = { runtime: {} };
+    // Impede que o site feche a janela (anti-bot detection)
+    window.close = () => {};
   });
 
   await context.route('**/fonts.googleapis.com/**', r => r.abort());
@@ -565,7 +563,8 @@ async function _coletarComBrowser(
 
   try {
     urlBase = urlBase.replace(/\/$/, '');
-    await page.goto(`${urlBase}/`, { timeout: 60000, waitUntil: 'domcontentloaded' });
+    // 'load' espera o bundle JS (React) ser carregado, não só o HTML inicial
+    await page.goto(`${urlBase}/`, { timeout: 60000, waitUntil: 'load' });
 
     if (!await fazerLogin(page, email, senha)) return errResult('Falha no login');
 
