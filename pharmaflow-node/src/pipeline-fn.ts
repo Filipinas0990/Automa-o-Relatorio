@@ -98,25 +98,14 @@ async function salvarResultados(dadosColetados: DadosFarmacia[]): Promise<void> 
       return {};
     }
 
-    const salvos = new Set<string>();
+    // Salva apenas os canais do gráfico de pizza (canais reais de marketing)
+    // canaisVendas é usado apenas para enriquecer com dados de vendas/receita
     for (const [nome, totalAtend] of Object.entries(dado.canais || {})) {
       const info = matchCanal(nome);
       await db.insert(coletaCanais).values({
         coletaId:      coleta.id,
         canal:         nome,
         atendimentos:  totalAtend,
-        vendas:        info.vendas  || 0,
-        receitaVendas: String(info.receita || 0),
-      });
-      salvos.add(nome.trim().toLowerCase());
-    }
-
-    for (const [nome, info] of Object.entries(dado.canaisVendas || {})) {
-      if (salvos.has(nome.trim().toLowerCase())) continue;
-      await db.insert(coletaCanais).values({
-        coletaId:      coleta.id,
-        canal:         nome,
-        atendimentos:  0,
         vendas:        info.vendas  || 0,
         receitaVendas: String(info.receita || 0),
       });
