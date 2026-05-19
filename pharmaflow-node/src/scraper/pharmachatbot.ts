@@ -356,7 +356,7 @@ async function extrairCanaisBarrasFiber(page: Page): Promise<Record<string, { ve
   });
 
   if (!raw || !Array.isArray(raw)) {
-    console.log('  [CANAL] fiber retornou vazio');
+    if (DEBUG) console.log('  [CANAL] fiber retornou vazio');
     return {};
   }
 
@@ -370,7 +370,7 @@ async function extrairCanaisBarrasFiber(page: Page): Promise<Record<string, { ve
     if (nome) canais[nome] = { vendas, receita };
   }
 
-  console.log('  [CANAL] fiber:', JSON.stringify(canais));
+  if (DEBUG) console.log('  [CANAL] fiber:', JSON.stringify(canais));
   return canais;
 }
 
@@ -590,7 +590,6 @@ async function _coletarComBrowser(
 
     await aplicarFiltroDatas(page, inicio, fim);
 
-    console.log(`  [DEBUG] ${nome}: aguardando dados carregarem...`);
     try {
       await page.waitForFunction(
         () => document.body.innerText.includes('R$') ||
@@ -598,10 +597,7 @@ async function _coletarComBrowser(
               document.body.innerText.includes('Venda'),
         { timeout: 45000 }
       );
-      console.log(`  [DEBUG] ${nome}: dados detectados na página`);
-    } catch (e: unknown) {
-      console.log(`  [DEBUG] ${nome}: timeout aguardando dados: ${(e as Error).message}`);
-    }
+    } catch { /* continua mesmo sem detectar dados */ }
 
     const [receita, vendas, totalAtend] = await Promise.all([
       extrairReceita(page),
@@ -609,7 +605,7 @@ async function _coletarComBrowser(
       extrairTotalAtendimentos(page),
     ]);
 
-    if (DEBUG) console.log(`  [DEBUG] ${nome}: receita=${receita} vendas=${vendas} atend=${totalAtend}`);
+    console.log(`  [${nome}] receita=R$${receita.toFixed(2)} vendas=${vendas} atend=${totalAtend}`);
 
     const canaisRaw    = await extrairCanaisPizza(page);
     let   canaisVendas = await extrairCanaisBarrasFiber(page);
@@ -623,16 +619,13 @@ async function _coletarComBrowser(
 
     if (receitaFinal === 0 && Object.keys(canaisVendas).length) {
       receitaFinal = Object.values(canaisVendas).reduce((s, v) => s + (v.receita || 0), 0);
-      console.log(`  [DEBUG] ${nome}: receita derivada dos canais = ${receitaFinal}`);
     }
     if (vendasFinal === 0 && Object.keys(canaisVendas).length) {
       vendasFinal = Object.values(canaisVendas).reduce((s, v) => s + (v.vendas || 0), 0);
-      console.log(`  [DEBUG] ${nome}: vendas derivadas dos canais = ${vendasFinal}`);
     }
 
     const mapeado = mapearCanais(canaisRaw);
-    console.log(`  [DEBUG] ${nome}: canais_raw=${JSON.stringify(canaisRaw)}`);
-    console.log(`  [DEBUG] ${nome}: canais_vendas=${JSON.stringify(canaisVendas)}`);
+    if (DEBUG) console.log(`  [DEBUG] ${nome}: canais=${JSON.stringify(canaisRaw)}`);
     await screenshot(page, '05_final');
 
     return {
