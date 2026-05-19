@@ -37,7 +37,7 @@ services:
     build: ./pharmaflow-node
     container_name: farmacia_scraper
     restart: "no"
-    command: node src/pipeline.js
+    command: node dist/pipeline.js
     env_file: .env
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-farmacia}:${POSTGRES_PASSWORD:-farmacia123}@postgres:5432/${POSTGRES_DB:-farmacia_monitor}
