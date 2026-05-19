@@ -14,6 +14,7 @@ import {
 import type { Gestor } from '../database/schema';
 import { encrypt, decrypt } from '../cripto';
 import { pipeline } from '../pipeline-fn';
+import { logger } from '../logger';
 
 // ── Module augmentation — adiciona `user` ao FastifyRequest ───────────────────
 
@@ -23,7 +24,7 @@ declare module 'fastify' {
   }
 }
 
-const app = Fastify({ logger: false });
+const app = Fastify({ logger });
 app.register(cors,      { origin: '*' });
 app.register(formbody);
 
@@ -619,7 +620,7 @@ app.post('/api/rodar-agora', { preHandler: [autenticar, apenasAdmin] }, async (_
   reply.send({ status: 'iniciado', mensagem: 'Pipeline iniciado em background' });
   setImmediate(async () => {
     try { await pipeline(); }
-    catch (e) { console.error('[PIPELINE]', e); }
+    catch (e) { logger.error({ err: e }, 'Erro no pipeline manual'); }
     finally { pipelineRodando = false; }
   });
 });
@@ -718,7 +719,7 @@ app.get('/api/ranking/gestores/historico', { preHandler: autenticar }, async () 
 // ── Tratamento global de erros ────────────────────────────────────────────────
 
 app.setErrorHandler((error, _request, reply) => {
-  console.error(error);
+  logger.error({ err: error }, 'Erro interno não tratado');
   reply.code(500).send({ detail: 'Erro interno do servidor' });
 });
 

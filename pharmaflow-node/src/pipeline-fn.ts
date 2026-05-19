@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { logger } from './logger';
 import { eq, and, isNotNull, desc } from 'drizzle-orm';
 import { db }                        from './database/db';
 import { farmacias, coletas, coletaCanais } from './database/schema';
@@ -28,10 +29,10 @@ async function coletaAnterior(farmaciaId: number) {
 
 async function salvarResultados(dadosColetados: DadosFarmacia[]): Promise<void> {
   for (const dado of dadosColetados) {
-    if (dado.erro) { console.log(`  [ERRO]  ${dado.nome}: ${dado.erro}`); continue; }
+    if (dado.erro) { logger.error({ farmacia: dado.nome, erro: dado.erro }, 'Coleta falhou'); continue; }
 
     const [farmacia] = await db.select().from(farmacias).where(eq(farmacias.nome, dado.nome));
-    if (!farmacia) { console.log(`  [AVISO] ${dado.nome} não encontrada.`); continue; }
+    if (!farmacia) { logger.warn({ farmacia: dado.nome }, 'Farmácia não encontrada no banco'); continue; }
 
     const anterior = await coletaAnterior(farmacia.id);
     const metricasAnterior = anterior ? {
@@ -121,29 +122,30 @@ async function salvarResultados(dadosColetados: DadosFarmacia[]): Promise<void> 
       });
     }
 
-    const alerta = scoreInfo.alertas.length ? scoreInfo.alertas.join(' | ') : 'OK';
-    console.log(
-      `  [${scoreInfo.nivelAlerta.toUpperCase().padEnd(8)}] ${dado.nome.padEnd(40)} ` +
-      `Score: ${scoreInfo.scoreCriticidade.toFixed(1).padStart(5)} | ${alerta}`
-    );
+    logger.info({
+      farmacia:    dado.nome,
+      nivelAlerta: scoreInfo.nivelAlerta,
+      score:       scoreInfo.scoreCriticidade,
+      alertas:     scoreInfo.alertas,
+      atingiuMeta,
+      receita:     dado.receitaTotal,
+      vendas:      dado.vendasRealizadas,
+    }, 'Coleta salva');
   }
 }
 
 export async function pipeline(): Promise<void> {
-  const now = new Date().toLocaleString('pt-BR');
-  console.log(`\n${'='.repeat(60)}\n  Pipeline iniciado: ${now}\n${'='.repeat(60)}\n`);
+  logger.info('Pipeline iniciado');
 
   const farmsAtivas = await carregarFarmacias();
-  console.log(`  Farmacias ativas: ${farmsAtivas.length}\n  Coletando dados...\n`);
+  logger.info({ total: farmsAtivas.length }, 'Farmácias ativas carregadas');
 
   const paralelo   = parseInt(process.env.PARALELO_MAX || '1', 10);
   const resultados = await coletarTodas(farmsAtivas, paralelo);
 
-  console.log('\n  Processando e salvando...\n');
   await salvarResultados(resultados);
 
-  const erros = resultados.filter(r => r.erro);
-  console.log(
-    `\n${'='.repeat(60)}\n  Concluído: ${resultados.length - erros.length}/${resultados.length}\n${'='.repeat(60)}\n`
-  );
+  const erros    = resultados.filter(r => r.erro);
+  const sucessos = resultados.length - erros.length;
+  logger.info({ sucessos, erros: erros.length, total: resultados.length }, 'Pipeline concluído');
 }

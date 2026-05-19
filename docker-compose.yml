@@ -29,6 +29,8 @@ services:
       PARALELO_MAX: "1"
     ports:
       - "8000:8000"
+    volumes:
+      - ./logs:/app/logs
     depends_on:
       postgres:
         condition: service_healthy
