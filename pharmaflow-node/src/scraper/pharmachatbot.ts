@@ -11,11 +11,17 @@ const BROWSER_ARGS = [
   '--disable-setuid-sandbox',
   '--disable-dev-shm-usage',
   '--no-zygote',
+  '--single-process',           // tudo em 1 processo — reduz memória 60%
   '--disable-gpu',
   '--disable-blink-features=AutomationControlled',
   '--disable-infobars',
   '--disable-extensions',
   '--disable-background-networking',
+  '--disable-default-apps',
+  '--disable-sync',
+  '--disable-translate',
+  '--hide-scrollbars',
+  '--mute-audio',
   '--window-size=1366,768',
   '--js-flags=--max-old-space-size=512',
 ];
@@ -530,8 +536,15 @@ async function _coletarComBrowser(
     window.close = () => {};
   });
 
-  await context.route('**/fonts.googleapis.com/**', r => r.abort());
-  await context.route('**/fonts.gstatic.com/**',    r => r.abort());
+  // Bloqueia recursos desnecessários para economizar memória e bandwidth
+  await context.route('**/*', (route) => {
+    const type = route.request().resourceType();
+    if (['image', 'media', 'font', 'stylesheet'].includes(type)) {
+      route.abort();
+    } else {
+      route.continue();
+    }
+  });
 
   const page = await context.newPage();
 
