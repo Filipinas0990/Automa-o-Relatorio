@@ -56,16 +56,9 @@ async function salvarResultados(dadosColetados: DadosFarmacia[]): Promise<void> 
       metricasAnterior
     );
 
-    const metaV = farmacia.metaVendas  ? farmacia.metaVendas                    : null;
-    const metaR = farmacia.metaReceita ? parseFloat(farmacia.metaReceita)        : null;
-    const temMeta = metaV !== null || metaR !== null;
-    let atingiuMeta = false;
-    if (temMeta) {
-      atingiuMeta = true;
-      if (metaV && dado.vendasRealizadas < metaV) atingiuMeta = false;
-      if (metaR && dado.receitaTotal     < metaR) atingiuMeta = false;
-    }
-    if (!atingiuMeta) {
+    const metaR = farmacia.metaReceita ? parseFloat(farmacia.metaReceita) : null;
+    const atingiuMeta = metaR !== null ? dado.receitaTotal >= metaR : false;
+    if (metaR !== null && !atingiuMeta) {
       scoreInfo.nivelAlerta = 'vermelho';
       if (scoreInfo.scoreCriticidade < 50) scoreInfo.scoreCriticidade = 50;
       scoreInfo.alertas.push('Meta semanal não atingida');
