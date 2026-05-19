@@ -1,0 +1,34 @@
+{
+  "name": "pharmaflow-node",
+  "version": "2.0.0",
+  "description": "PharmaFlow - Sistema de monitoramento de farmácias",
+  "main": "dist/api/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/api/index.js",
+    "pipeline": "node dist/pipeline.js",
+    "dev": "ts-node src/api/index.ts",
+    "dev:pipeline": "ts-node src/pipeline.ts"
+  },
+  "dependencies": {
+    "@fastify/cors": "^9.0.1",
+    "@fastify/formbody": "^7.4.0",
+    "bcrypt": "^5.1.1",
+    "dotenv": "^16.4.5",
+    "drizzle-orm": "^0.31.2",
+    "exceljs": "^4.4.0",
+    "fastify": "^4.28.1",
+    "jsonwebtoken": "^9.0.2",
+    "pg": "^8.11.5",
+    "playwright": "^1.45.0"
+  },
+  "devDependencies": {
+    "@types/bcrypt": "^5.0.2",
+    "@types/jsonwebtoken": "^9.0.6",
+    "@types/node": "^20.14.0",
+    "@types/pg": "^8.11.6",
+    "drizzle-kit": "^0.22.4",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.5.2"
+  }
+}

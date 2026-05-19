@@ -20,18 +20,13 @@ services:
       retries: 5
 
   api:
-    build: .
+    build: ./pharmaflow-node
     container_name: farmacia_api
     restart: unless-stopped
-    command: uvicorn farmacia_monitor.api.main:app --host 0.0.0.0 --port 8000 --reload
     env_file: .env
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-farmacia}:${POSTGRES_PASSWORD:-farmacia123}@postgres:5432/${POSTGRES_DB:-farmacia_monitor}
-      HEADLESS: "true"
       PARALELO_MAX: "1"
-    volumes:
-      - .:/app
-      - ./config:/app/config
     ports:
       - "8000:8000"
     depends_on:
@@ -39,19 +34,16 @@ services:
         condition: service_healthy
 
   scraper:
-    build: .
+    build: ./pharmaflow-node
     container_name: farmacia_scraper
     restart: "no"
-    command: python main.py
+    command: node src/pipeline.js
     env_file: .env
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-farmacia}:${POSTGRES_PASSWORD:-farmacia123}@postgres:5432/${POSTGRES_DB:-farmacia_monitor}
-      HEADLESS: "true"
       PARALELO_MAX: "1"
       DEBUG_SCREENSHOTS: "${DEBUG_SCREENSHOTS:-false}"
     volumes:
-      - .:/app
-      - ./config:/app/config
       - ./logs:/app/logs
     depends_on:
       postgres:
@@ -59,7 +51,6 @@ services:
     profiles:
       - scraper
     # Cron na VPS chama: docker compose run --rm scraper
-    # O container sobe, coleta tudo e some automaticamente
 
 volumes:
   postgres_data:
