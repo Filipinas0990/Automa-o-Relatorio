@@ -43,11 +43,23 @@ async function screenshot(page: Page, nome: string): Promise<void> {
   }
 }
 
+const EMAIL_SEL = [
+  'input[type="email"]',
+  'input[name="email"]',
+  'input[name="username"]',
+  'input[name="login"]',
+  'input[id*="email" i]',
+  'input[placeholder*="email" i]',
+  'input[placeholder*="usuário" i]',
+  'input[placeholder*="usuario" i]',
+  'input[type="text"]',
+].join(', ');
+
 async function fazerLogin(page: Page, email: string, senha: string): Promise<boolean> {
   if (DEBUG) console.log(`  [DEBUG] tentando login: ${email}`);
 
   try {
-    await page.waitForSelector('input[type="email"]', { timeout: 30000 });
+    await page.waitForSelector(EMAIL_SEL, { timeout: 30000 });
     await page.waitForTimeout(2000);
   } catch {
     console.log('  [DEBUG] campo email não encontrado');
@@ -55,7 +67,7 @@ async function fazerLogin(page: Page, email: string, senha: string): Promise<boo
   }
 
   await screenshot(page, '01_pre_login');
-  await page.fill('input[type="email"]', email);
+  await page.locator(EMAIL_SEL).first().fill(email);
   await page.waitForTimeout(400);
   await page.fill('input[type="password"]', senha);
   await page.waitForTimeout(600);
