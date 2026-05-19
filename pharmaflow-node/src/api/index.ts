@@ -21,7 +21,25 @@ declare module 'fastify' {
   }
 }
 
-const app = Fastify({ logger });
+const app = Fastify({
+  logger: {
+    level: process.env.LOG_LEVEL || 'info',
+    transport: {
+      targets: [
+        {
+          target: 'pino-pretty',
+          level: process.env.LOG_LEVEL || 'info',
+          options: { colorize: true, translateTime: 'yyyy-mm-dd HH:MM:ss', ignore: 'pid,hostname' },
+        },
+        {
+          target: 'pino/file',
+          level: 'info',
+          options: { destination: '/app/logs/pharmaflow.log', mkdir: true },
+        },
+      ],
+    },
+  },
+});
 app.register(cors,      { origin: '*' });
 app.register(formbody);
 
