@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import { chromium } from 'playwright';
-import type { Browser, Page } from 'playwright';
+import type { Browser, Page, Locator } from 'playwright';
 import type { DadosFarmacia, FarmaciaParaColeta } from '../types';
 
 const DEBUG = (process.env.DEBUG_SCREENSHOTS || 'false').toLowerCase() === 'true';
@@ -43,31 +43,45 @@ async function screenshot(page: Page, nome: string): Promise<void> {
   }
 }
 
-const EMAIL_SEL = [
+const EMAIL_SELETORES = [
   'input[type="email"]',
   'input[name="email"]',
   'input[name="username"]',
   'input[name="login"]',
-  'input[id*="email" i]',
-  'input[placeholder*="email" i]',
-  'input[placeholder*="usuário" i]',
-  'input[placeholder*="usuario" i]',
   'input[type="text"]',
-].join(', ');
+];
 
 async function fazerLogin(page: Page, email: string, senha: string): Promise<boolean> {
-  if (DEBUG) console.log(`  [DEBUG] tentando login: ${email}`);
+  console.log(`  [LOGIN] iniciando para: ${email} | url: ${page.url()}`);
 
-  try {
-    await page.waitForSelector(EMAIL_SEL, { timeout: 30000 });
-    await page.waitForTimeout(2000);
-  } catch {
-    console.log('  [DEBUG] campo email não encontrado');
+  // Aguarda SPA renderizar (sem networkidle não há garantia do form estar pronto)
+  try { await page.waitForLoadState('networkidle', { timeout: 15000 }); }
+  catch { /* ok — SPA com requisições contínuas pode não alcançar networkidle */ }
+
+  // Tenta cada seletor com timeout curto individualmente
+  let emailLocator: Locator | null = null;
+  for (const sel of EMAIL_SELETORES) {
+    try {
+      await page.locator(sel).first().waitFor({ state: 'visible', timeout: 5000 });
+      emailLocator = page.locator(sel).first();
+      console.log(`  [LOGIN] campo encontrado: ${sel}`);
+      break;
+    } catch { /* tenta próximo */ }
+  }
+
+  if (!emailLocator) {
+    const inputs = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('input')).map(i =>
+        `type=${i.type} name=${i.name} id=${i.id} placeholder=${i.placeholder}`
+      )
+    );
+    console.log(`  [LOGIN] falha — nenhum campo encontrado. URL: ${page.url()}`);
+    console.log(`  [LOGIN] inputs na página: ${JSON.stringify(inputs)}`);
     return false;
   }
 
   await screenshot(page, '01_pre_login');
-  await page.locator(EMAIL_SEL).first().fill(email);
+  await emailLocator.fill(email);
   await page.waitForTimeout(400);
   await page.fill('input[type="password"]', senha);
   await page.waitForTimeout(600);
@@ -83,7 +97,7 @@ async function fazerLogin(page: Page, email: string, senha: string): Promise<boo
 
   await page.waitForTimeout(2000);
 
-  const PALAVRAS_LOGIN = ['esqueci minha senha', 'lembrar-me', 'forget my password', 'remember me'];
+  const PALAVRAS_LOGIN = ['esqueci minha senha', 'escique minha senha', 'lembrar-me', 'forget my password', 'remember me', 'r/me'];
 
   for (let i = 0; i < 30; i++) {
     await page.waitForTimeout(1000);
