@@ -5,14 +5,11 @@ import formbody from '@fastify/formbody';
 import bcrypt   from 'bcrypt';
 import jwt      from 'jsonwebtoken';
 import ExcelJS  from 'exceljs';
-import { eq, and, isNotNull, desc, sql } from 'drizzle-orm';
+import { eq, and, sql } from 'drizzle-orm';
 import { db } from '../database/db';
-import {
-  gestoresTrafego, farmacias, coletas, coletaCanais,
-  vwRankingAtual, vwEvolucaoSemanal,
-} from '../database/schema';
+import { gestoresTrafego, farmacias } from '../database/schema';
 import type { Gestor } from '../database/schema';
-import { encrypt, decrypt } from '../cripto';
+import { encrypt } from '../cripto';
 import { pipeline } from '../pipeline-fn';
 import { logger } from '../logger';
 
@@ -27,6 +24,13 @@ declare module 'fastify' {
 const app = Fastify({ logger });
 app.register(cors,      { origin: '*' });
 app.register(formbody);
+
+// Aceita corpo vazio com Content-Type: application/json (ex: /api/rodar-agora)
+app.addContentTypeParser('application/json', { parseAs: 'string' }, (_req, body, done) => {
+  if (!body || body === '') { done(null, {}); return; }
+  try { done(null, JSON.parse(body as string)); }
+  catch (e) { done(e as Error, undefined); }
+});
 
 const JWT_SECRET   = process.env.JWT_SECRET_KEY || 'troque-no-env-do-servidor';
 const TOKEN_EXPIRE = '8h';
