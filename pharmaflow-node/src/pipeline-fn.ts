@@ -58,9 +58,13 @@ async function salvarResultados(dadosColetados: DadosFarmacia[]): Promise<void> 
 
     const metaV = farmacia.metaVendas  ? farmacia.metaVendas                    : null;
     const metaR = farmacia.metaReceita ? parseFloat(farmacia.metaReceita)        : null;
-    let atingiuMeta = true;
-    if (metaV && dado.vendasRealizadas < metaV) atingiuMeta = false;
-    if (metaR && dado.receitaTotal     < metaR) atingiuMeta = false;
+    const temMeta = metaV !== null || metaR !== null;
+    let atingiuMeta = false;
+    if (temMeta) {
+      atingiuMeta = true;
+      if (metaV && dado.vendasRealizadas < metaV) atingiuMeta = false;
+      if (metaR && dado.receitaTotal     < metaR) atingiuMeta = false;
+    }
     if (!atingiuMeta) {
       scoreInfo.nivelAlerta = 'vermelho';
       if (scoreInfo.scoreCriticidade < 50) scoreInfo.scoreCriticidade = 50;
