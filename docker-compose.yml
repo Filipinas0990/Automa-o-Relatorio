@@ -39,6 +39,7 @@ services:
     build: ./pharmaflow-node
     container_name: farmacia_scraper
     restart: "no"
+    shm_size: '256m'
     command: node dist/pipeline.js
     env_file: .env
     environment:

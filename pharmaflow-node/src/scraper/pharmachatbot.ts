@@ -8,14 +8,16 @@ const DEBUG_DIR = '/app/logs/debug_screenshots';
 
 const BROWSER_ARGS = [
   '--no-sandbox',
+  '--disable-setuid-sandbox',
   '--disable-dev-shm-usage',
+  '--no-zygote',
   '--disable-gpu',
   '--disable-blink-features=AutomationControlled',
   '--disable-infobars',
   '--disable-extensions',
   '--disable-background-networking',
   '--window-size=1366,768',
-  '--js-flags=--max-old-space-size=256',
+  '--js-flags=--max-old-space-size=512',
 ];
 
 function parseMoeda(texto: string | number): number {
