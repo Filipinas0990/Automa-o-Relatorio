@@ -31,7 +31,9 @@ async function salvarResultados(dadosColetados: DadosFarmacia[]): Promise<void> 
   for (const dado of dadosColetados) {
     if (dado.erro) { logger.error({ farmacia: dado.nome, erro: dado.erro }, 'Coleta falhou'); continue; }
 
-    const [farmacia] = await db.select().from(farmacias).where(eq(farmacias.nome, dado.nome));
+    const [farmacia] = await db.select().from(farmacias).where(
+      and(eq(farmacias.nome, dado.nome), eq(farmacias.ativa, true))
+    );
     if (!farmacia) { logger.warn({ farmacia: dado.nome }, 'Farmácia não encontrada no banco'); continue; }
 
     const anterior = await coletaAnterior(farmacia.id);
