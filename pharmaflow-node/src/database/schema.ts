@@ -24,8 +24,10 @@ export const farmacias = pgTable('farmacias', {
   gestorId:    integer('gestor_id').references(() => gestoresTrafego.id),
   ativa:       boolean('ativa').default(true),
   criadoEm:    timestamp('criado_em', { withTimezone: true }).defaultNow(),
-  metaVendas:  integer('meta_vendas'),
-  metaReceita: numeric('meta_receita', { precision: 12, scale: 2 }),
+  metaVendas:       integer('meta_vendas'),
+  metaReceita:      numeric('meta_receita',       { precision: 12, scale: 2 }),
+  metaLeadsGoogle:  integer('meta_leads_google'),
+  metaLeadsMeta:    integer('meta_leads_meta'),
 });
 
 export const coletas = pgTable('coletas', {
@@ -48,6 +50,8 @@ export const coletas = pgTable('coletas', {
   scoreCriticidade:     numeric('score_criticidade',{ precision: 5, scale: 2 }).default('0'),
   nivelAlerta:          varchar('nivel_alerta', { length: 10 }).default('verde').notNull(),
   atingiuMeta:          boolean('atingiu_meta').default(false).notNull(),
+  atingiuMetaGoogle:    boolean('atingiu_meta_google'),
+  atingiuMetaMeta:      boolean('atingiu_meta_meta'),
 });
 
 export const coletaCanais = pgTable('coleta_canais', {

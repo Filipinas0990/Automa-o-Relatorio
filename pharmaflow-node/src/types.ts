@@ -40,9 +40,11 @@ export interface ScoreInfo {
 }
 
 export interface FarmaciaParaColeta {
-  id:      number;
-  nome:    string;
-  urlBase: string;
-  email:   string;
-  senha:   string;
+  id:              number;
+  nome:            string;
+  urlBase:         string;
+  email:           string;
+  senha:           string;
+  metaLeadsGoogle: number | null;
+  metaLeadsMeta:   number | null;
 }

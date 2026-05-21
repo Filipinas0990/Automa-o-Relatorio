@@ -213,14 +213,16 @@ app.put('/api/farmacias/:id', { preHandler: [autenticar, apenasAdmin] }, async (
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const b = request.body as any;
   const dados: Partial<typeof farmacias.$inferInsert> = {};
-  if (b.nome         !== undefined) dados.nome        = b.nome;
-  if (b.url_base     !== undefined) dados.urlBase     = b.url_base;
-  if (b.email        !== undefined) dados.email       = b.email;
-  if (b.gestor_id    !== undefined) dados.gestorId    = b.gestor_id;
-  if (b.ativa        !== undefined) dados.ativa       = b.ativa;
-  if (b.meta_vendas  !== undefined) dados.metaVendas  = b.meta_vendas;
-  if (b.meta_receita !== undefined) dados.metaReceita = b.meta_receita;
-  if (b.senha)                      dados.senhaEnc    = encrypt(b.senha);
+  if (b.nome              !== undefined) dados.nome            = b.nome;
+  if (b.url_base          !== undefined) dados.urlBase         = b.url_base;
+  if (b.email             !== undefined) dados.email           = b.email;
+  if (b.gestor_id         !== undefined) dados.gestorId        = b.gestor_id;
+  if (b.ativa             !== undefined) dados.ativa           = b.ativa;
+  if (b.meta_vendas       !== undefined) dados.metaVendas      = b.meta_vendas;
+  if (b.meta_receita      !== undefined) dados.metaReceita     = b.meta_receita;
+  if (b.meta_leads_google !== undefined) dados.metaLeadsGoogle = b.meta_leads_google;
+  if (b.meta_leads_meta   !== undefined) dados.metaLeadsMeta   = b.meta_leads_meta;
+  if (b.senha)                           dados.senhaEnc        = encrypt(b.senha);
 
   if (Object.keys(dados).length) {
     await db.update(farmacias).set(dados).where(eq(farmacias.id, id));
@@ -237,8 +239,10 @@ app.patch('/api/farmacias/:id/meta', { preHandler: [autenticar, apenasAdmin] }, 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const b = request.body as any;
   const dados: Partial<typeof farmacias.$inferInsert> = {};
-  if (b.meta_vendas  !== undefined) dados.metaVendas  = b.meta_vendas;
-  if (b.meta_receita !== undefined) dados.metaReceita = b.meta_receita;
+  if (b.meta_vendas        !== undefined) dados.metaVendas      = b.meta_vendas;
+  if (b.meta_receita       !== undefined) dados.metaReceita     = b.meta_receita;
+  if (b.meta_leads_google  !== undefined) dados.metaLeadsGoogle = b.meta_leads_google;
+  if (b.meta_leads_meta    !== undefined) dados.metaLeadsMeta   = b.meta_leads_meta;
 
   if (Object.keys(dados).length) {
     await db.update(farmacias).set(dados).where(eq(farmacias.id, id));
@@ -246,8 +250,10 @@ app.patch('/api/farmacias/:id/meta', { preHandler: [autenticar, apenasAdmin] }, 
   const [f] = await db.select().from(farmacias).where(eq(farmacias.id, id));
   return {
     id: f.id, nome: f.nome,
-    meta_vendas:  f.metaVendas,
-    meta_receita: f.metaReceita ? parseFloat(f.metaReceita) : null,
+    meta_vendas:       f.metaVendas,
+    meta_receita:      f.metaReceita      ? parseFloat(f.metaReceita) : null,
+    meta_leads_google: f.metaLeadsGoogle  ?? null,
+    meta_leads_meta:   f.metaLeadsMeta    ?? null,
   };
 });
 
@@ -365,7 +371,7 @@ app.get('/api/farmacias', { preHandler: autenticar }, async (request) => {
 
   const { rows } = await db.execute(sql`
     SELECT f.id AS farmacia_id, f.nome AS farmacia, f.gestor_id, f.ativa,
-           f.meta_vendas, f.meta_receita,
+           f.meta_vendas, f.meta_receita, f.meta_leads_google, f.meta_leads_meta,
            COALESCE(r.nivel_alerta, 'verde')    AS nivel_alerta,
            COALESCE(r.receita_total, 0)         AS receita_total,
            COALESCE(r.total_atendimentos, 0)    AS total_atendimentos,
@@ -443,6 +449,8 @@ app.get('/api/farmacias', { preHandler: autenticar }, async (request) => {
       periodo_fim:    r.periodo_fim    ? String(r.periodo_fim)    : null,
       data_coleta: r.data_coleta,
       meta_vendas: metaV, meta_receita: metaR,
+      meta_leads_google: r.meta_leads_google ? parseInt(r.meta_leads_google) : null,
+      meta_leads_meta:   r.meta_leads_meta   ? parseInt(r.meta_leads_meta)   : null,
       atingiu_meta: atingiuMeta,
       percentual_meta_receita: pctMetaReceita,
       percentual_meta_vendas:  pctMetaVendas,
@@ -667,9 +675,11 @@ app.get('/api/ranking/gestores', { preHandler: autenticar }, async (request, rep
 
   const { rows } = await db.execute(sql`
     SELECT g.id AS gestor_id, g.nome AS gestor_nome,
-           COUNT(*) FILTER (WHERE c.atingiu_meta = TRUE) AS pontos,
-           COUNT(*)                                       AS coletas_no_mes,
-           COUNT(DISTINCT c.farmacia_id)                 AS farmacias_com_coleta,
+           (COUNT(*) FILTER (WHERE c.atingiu_meta = TRUE) +
+            COUNT(*) FILTER (WHERE c.atingiu_meta_google = TRUE) +
+            COUNT(*) FILTER (WHERE c.atingiu_meta_meta = TRUE)) AS pontos,
+           COUNT(*)                                              AS coletas_no_mes,
+           COUNT(DISTINCT c.farmacia_id)                        AS farmacias_com_coleta,
            (SELECT COUNT(*) FROM farmacias f2 WHERE f2.gestor_id = g.id AND f2.ativa = TRUE) AS total_farmacias
     FROM gestores_trafego g
     JOIN farmacias f ON f.gestor_id = g.id AND f.ativa = TRUE
@@ -721,7 +731,9 @@ app.get('/api/ranking/gestores/historico', { preHandler: autenticar }, async () 
   const { rows } = await db.execute(sql`
     SELECT g.id AS gestor_id, g.nome AS gestor_nome,
            TO_CHAR(DATE_TRUNC('month', c.data_coleta), 'YYYY-MM') AS mes,
-           COUNT(*) FILTER (WHERE c.atingiu_meta = TRUE) AS pontos,
+           (COUNT(*) FILTER (WHERE c.atingiu_meta = TRUE) +
+            COUNT(*) FILTER (WHERE c.atingiu_meta_google = TRUE) +
+            COUNT(*) FILTER (WHERE c.atingiu_meta_meta = TRUE)) AS pontos,
            COUNT(*) AS coletas_no_mes
     FROM gestores_trafego g
     JOIN farmacias f ON f.gestor_id = g.id AND f.ativa = TRUE

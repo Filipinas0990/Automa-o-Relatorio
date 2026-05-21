@@ -15,7 +15,11 @@ async function carregarFarmacias(): Promise<(FarmaciaParaColeta & { dias?: numbe
   return rows.map(f => {
     let senha = '';
     try { if (f.senhaEnc) senha = decrypt(f.senhaEnc); } catch { /* sem senha */ }
-    return { id: f.id, nome: f.nome, urlBase: f.urlBase, email: f.email, senha };
+    return {
+      id: f.id, nome: f.nome, urlBase: f.urlBase, email: f.email, senha,
+      metaLeadsGoogle: f.metaLeadsGoogle ?? null,
+      metaLeadsMeta:   f.metaLeadsMeta   ?? null,
+    };
   });
 }
 
@@ -64,6 +68,14 @@ async function salvarResultados(dadosColetados: DadosFarmacia[]): Promise<void> 
       scoreInfo.alertas.push('Meta semanal não atingida');
     }
 
+    // Metas de leads por canal (só Google e Meta)
+    const atingiuMetaGoogle = farmacia.metaLeadsGoogle !== null
+      ? dado.clientesGoogle >= (farmacia.metaLeadsGoogle ?? 0)
+      : null;
+    const atingiuMetaMeta = farmacia.metaLeadsMeta !== null
+      ? dado.clientesFacebook >= (farmacia.metaLeadsMeta ?? 0)
+      : null;
+
     const [coleta] = await db.insert(coletas).values({
       farmaciaId:           farmacia.id,
       periodoInicio:        dado.periodoInicio,
@@ -82,6 +94,8 @@ async function salvarResultados(dadosColetados: DadosFarmacia[]): Promise<void> 
       variacaoVendas:       String(scoreInfo.variacaoVendas),
       variacaoReceita:      String(scoreInfo.variacaoReceita),
       atingiuMeta,
+      atingiuMetaGoogle,
+      atingiuMetaMeta,
     }).returning({ id: coletas.id });
 
     const vendasPorCanal: Record<string, { vendas: number; receita: number }> = {};
