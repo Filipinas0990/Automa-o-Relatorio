@@ -490,7 +490,7 @@ function mapearCanais(canais: Record<string, number>): { google: number; faceboo
 export async function coletarFarmacia(farmacia: FarmaciaParaColeta & { dias?: number }): Promise<DadosFarmacia> {
   const { nome, urlBase, email, senha, dias = 7 } = farmacia;
   const hoje  = new Date();
-  const start = new Date(hoje.getTime() - dias * 86400000);
+  const start = new Date(hoje.getTime() - (dias - 1) * 86400000);
   const fmt   = (d: Date) => d.toISOString().slice(0, 10);
   const inicio = fmt(start);
   const fim    = fmt(hoje);
