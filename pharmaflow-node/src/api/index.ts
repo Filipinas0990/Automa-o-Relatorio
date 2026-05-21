@@ -647,7 +647,7 @@ app.post('/api/rodar-agora', { preHandler: [autenticar, apenasAdmin] }, async (_
   });
 });
 
-app.get('/api/status', async () => ({
+app.get('/api/status', { logLevel: 'silent' }, async () => ({
   pipeline_rodando: pipelineRodando,
   timestamp: new Date().toISOString(),
 }));

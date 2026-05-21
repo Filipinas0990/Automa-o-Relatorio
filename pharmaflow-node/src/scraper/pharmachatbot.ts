@@ -99,6 +99,7 @@ async function fazerLogin(page: Page, email: string, senha: string): Promise<boo
     await page.keyboard.press('Enter');
   }
 
+  console.log(`  [LOGIN] credenciais enviadas, aguardando resposta...`);
   await page.waitForTimeout(2000);
 
   const PALAVRAS_LOGIN = ['esqueci minha senha', 'escique minha senha', 'lembrar-me', 'forget my password', 'remember me', 'r/me'];
@@ -109,14 +110,14 @@ async function fazerLogin(page: Page, email: string, senha: string): Promise<boo
       const corpo = (await page.locator('body').textContent({ timeout: 3000 })) || '';
       const t = corpo.toLowerCase();
       if (!PALAVRAS_LOGIN.some(p => t.includes(p))) {
-        if (DEBUG) console.log(`  [DEBUG] login OK em ${i + 1}s, URL: ${page.url()}`);
+        console.log(`  [LOGIN] OK`);
         await screenshot(page, '03_dashboard');
         return true;
       }
     } catch { /* continua */ }
   }
 
-  if (DEBUG) console.log(`  [DEBUG] login FALHOU. URL: ${page.url()}`);
+  console.log(`  [LOGIN] FALHOU — credenciais incorretas ou timeout (30s)`);
   await screenshot(page, '03_login_falhou');
   return false;
 }
@@ -583,11 +584,13 @@ async function _coletarComBrowser(
 
     if (!await fazerLogin(page, email, senha)) return errResult('Falha no login');
 
+    console.log(`  [${nome}] Navegando para o dashboard...`);
     await page.goto(`${urlBase}/dashboard`, { timeout: 60000, waitUntil: 'domcontentloaded' });
     try { await page.waitForLoadState('networkidle', { timeout: 40000 }); }
     catch { await page.waitForTimeout(4000); }
     await screenshot(page, '04_dashboard');
 
+    console.log(`  [${nome}] Aplicando filtro de datas...`);
     await aplicarFiltroDatas(page, inicio, fim);
 
     try {
@@ -599,6 +602,7 @@ async function _coletarComBrowser(
       );
     } catch { /* continua mesmo sem detectar dados */ }
 
+    console.log(`  [${nome}] Extraindo dados...`);
     const [receita, vendas, totalAtend] = await Promise.all([
       extrairReceita(page),
       extrairVendasBadge(page),
@@ -659,7 +663,7 @@ export async function coletarTodas(
     console.log(`  [${i + 1}/${farmacias.length}] Coletando ${f.nome}...`);
     const resultado = await coletarFarmacia(f);
     resultados.push(resultado);
-    console.log(`  [${i + 1}/${farmacias.length}] ${f.nome}: ${resultado.erro ? 'ERRO' : 'OK'}`);
+    console.log(`  [${i + 1}/${farmacias.length}] ${f.nome}: ${resultado.erro ? `ERRO — ${resultado.erro}` : 'OK'}`);
   }
   return resultados;
 }
