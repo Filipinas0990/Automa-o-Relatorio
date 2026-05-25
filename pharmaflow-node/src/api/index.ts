@@ -282,11 +282,12 @@ app.get('/api/painel', { preHandler: autenticar }, async (request) => {
   const q = request.query as Record<string, string | undefined>;
   const filtroGid = request.user.isAdmin ? (q.gestor_id || null) : String(request.user.id);
   const filtroSql = filtroGid ? sql`AND f.gestor_id = ${filtroGid}` : sql``;
+  const dias      = parseInt(q.dias || '7', 10);
 
   const { rows } = await db.execute(sql`
     SELECT r.* FROM vw_ranking_atual r
     JOIN farmacias f ON f.id = r.farmacia_id
-    WHERE TRUE ${filtroSql}
+    WHERE r.periodo_dias = ${dias} ${filtroSql}
   `);
 
   if (!rows.length) {
@@ -320,7 +321,7 @@ app.get('/api/painel', { preHandler: autenticar }, async (request) => {
            SUM(cc.receita_vendas)::numeric AS total_receita_vendas
     FROM coleta_canais cc
     JOIN (SELECT DISTINCT ON (farmacia_id) id AS coleta_id, farmacia_id
-          FROM coletas ORDER BY farmacia_id, data_coleta DESC) latest
+          FROM coletas WHERE periodo_dias = ${dias} ORDER BY farmacia_id, data_coleta DESC) latest
       ON latest.coleta_id = cc.coleta_id
     JOIN farmacias f ON f.id = latest.farmacia_id
     WHERE f.ativa = TRUE ${filtroSql}
@@ -368,6 +369,7 @@ app.get('/api/farmacias', { preHandler: autenticar }, async (request) => {
   const { status, busca, gestor_id } = q;
   const filtro    = request.user.isAdmin ? (gestor_id || null) : String(request.user.id);
   const filtroSql = filtro ? sql`AND f.gestor_id = ${filtro}` : sql``;
+  const dias      = parseInt(q.dias || '7', 10);
 
   const { rows } = await db.execute(sql`
     SELECT f.id AS farmacia_id, f.nome AS farmacia, f.gestor_id, f.ativa,
@@ -382,7 +384,7 @@ app.get('/api/farmacias', { preHandler: autenticar }, async (request) => {
            COALESCE(r.posicao_ranking, 9999)    AS posicao_ranking,
            r.periodo_inicio, r.periodo_fim, r.data_coleta
     FROM farmacias f
-    LEFT JOIN vw_ranking_atual r ON r.farmacia_id = f.id
+    LEFT JOIN vw_ranking_atual r ON r.farmacia_id = f.id AND r.periodo_dias = ${dias}
     WHERE f.ativa = TRUE ${filtroSql}
     ORDER BY posicao_ranking
   `);
@@ -394,7 +396,7 @@ app.get('/api/farmacias', { preHandler: autenticar }, async (request) => {
            SUM(cc.receita_vendas)::numeric AS total_receita_vendas
     FROM coleta_canais cc
     JOIN (SELECT DISTINCT ON (farmacia_id) id AS coleta_id, farmacia_id
-          FROM coletas ORDER BY farmacia_id, data_coleta DESC) latest
+          FROM coletas WHERE periodo_dias = ${dias} ORDER BY farmacia_id, data_coleta DESC) latest
       ON latest.coleta_id = cc.coleta_id
     JOIN farmacias f ON f.id = latest.farmacia_id
     WHERE f.ativa = TRUE ${filtroSql}
@@ -466,7 +468,8 @@ app.get('/api/farmacias', { preHandler: autenticar }, async (request) => {
 });
 
 app.get('/api/farmacias/:id/evolucao', { preHandler: autenticar }, async (request, reply) => {
-  const id = parseInt((request.params as { id: string }).id, 10);
+  const id   = parseInt((request.params as { id: string }).id, 10);
+  const dias = parseInt((request.query as Record<string, string>).dias || '7', 10);
   if (!request.user.isAdmin) {
     const [f] = await db.select().from(farmacias).where(
       and(eq(farmacias.id, id), eq(farmacias.gestorId, request.user.id))
@@ -474,7 +477,9 @@ app.get('/api/farmacias/:id/evolucao', { preHandler: autenticar }, async (reques
     if (!f) return reply.code(403).send({ detail: 'Acesso negado a esta farmácia' });
   }
   const { rows } = await db.execute(sql`
-    SELECT * FROM vw_evolucao_semanal WHERE farmacia_id = ${id} ORDER BY semana_numero ASC
+    SELECT * FROM vw_evolucao_semanal
+    WHERE farmacia_id = ${id} AND periodo_dias = ${dias}
+    ORDER BY semana_numero ASC
   `);
   return rows;
 });

@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS coletas (
     data_coleta             TIMESTAMPTZ DEFAULT NOW(),
     periodo_inicio          DATE NOT NULL,
     periodo_fim             DATE NOT NULL,
+    periodo_dias            INTEGER DEFAULT 7,
 
     clientes_google         INTEGER DEFAULT 0,
     clientes_facebook       INTEGER DEFAULT 0,
@@ -64,6 +65,7 @@ CREATE INDEX IF NOT EXISTS idx_coletas_farmacia_id  ON coletas(farmacia_id);
 CREATE INDEX IF NOT EXISTS idx_coletas_data_coleta  ON coletas(data_coleta DESC);
 CREATE INDEX IF NOT EXISTS idx_coletas_nivel_alerta ON coletas(nivel_alerta);
 CREATE INDEX IF NOT EXISTS idx_coletas_score        ON coletas(score_criticidade DESC);
+CREATE INDEX IF NOT EXISTS idx_coletas_periodo_dias ON coletas(periodo_dias);
 CREATE INDEX IF NOT EXISTS idx_canais_coleta_id     ON coleta_canais(coleta_id);
 
 -- ============================================================
@@ -71,33 +73,41 @@ CREATE INDEX IF NOT EXISTS idx_canais_coleta_id     ON coleta_canais(coleta_id);
 -- ============================================================
 
 CREATE OR REPLACE VIEW vw_ranking_atual AS
+WITH latest AS (
+    SELECT DISTINCT ON (farmacia_id, periodo_dias)
+        id, farmacia_id, periodo_dias, data_coleta,
+        periodo_inicio, periodo_fim,
+        clientes_google, clientes_facebook, clientes_grupos_oferta,
+        total_atendimentos, vendas_realizadas, receita_total,
+        variacao_google, variacao_facebook, variacao_grupos,
+        variacao_vendas, variacao_receita,
+        score_criticidade, nivel_alerta
+    FROM coletas
+    ORDER BY farmacia_id, periodo_dias, data_coleta DESC
+)
 SELECT
     f.id                        AS farmacia_id,
     f.nome                      AS farmacia,
-    c.data_coleta,
-    c.periodo_inicio,
-    c.periodo_fim,
-    c.clientes_google,
-    c.clientes_facebook,
-    c.clientes_grupos_oferta,
-    c.total_atendimentos,
-    c.vendas_realizadas,
-    c.receita_total,
-    c.variacao_google,
-    c.variacao_facebook,
-    c.variacao_grupos,
-    c.variacao_vendas,
-    c.variacao_receita,
-    c.score_criticidade,
-    c.nivel_alerta,
-    RANK() OVER (ORDER BY c.score_criticidade DESC) AS posicao_ranking
+    l.data_coleta,
+    l.periodo_inicio,
+    l.periodo_fim,
+    l.periodo_dias,
+    l.clientes_google,
+    l.clientes_facebook,
+    l.clientes_grupos_oferta,
+    l.total_atendimentos,
+    l.vendas_realizadas,
+    l.receita_total,
+    l.variacao_google,
+    l.variacao_facebook,
+    l.variacao_grupos,
+    l.variacao_vendas,
+    l.variacao_receita,
+    l.score_criticidade,
+    l.nivel_alerta,
+    RANK() OVER (PARTITION BY l.periodo_dias ORDER BY l.score_criticidade DESC) AS posicao_ranking
 FROM farmacias f
-JOIN coletas c ON c.id = (
-    SELECT id FROM coletas
-    WHERE farmacia_id = f.id
-    ORDER BY data_coleta DESC
-    LIMIT 1
-)
+JOIN latest l ON l.farmacia_id = f.id
 WHERE f.ativa = TRUE;
 
 -- ============================================================
@@ -110,6 +120,7 @@ SELECT
     f.nome          AS farmacia,
     c.periodo_inicio,
     c.periodo_fim,
+    c.periodo_dias,
     c.clientes_google,
     c.clientes_facebook,
     c.clientes_grupos_oferta,
@@ -118,7 +129,7 @@ SELECT
     c.score_criticidade,
     c.nivel_alerta,
     ROW_NUMBER() OVER (
-        PARTITION BY f.id ORDER BY c.data_coleta DESC
+        PARTITION BY f.id, c.periodo_dias ORDER BY c.data_coleta DESC
     ) AS semana_numero
 FROM farmacias f
 JOIN coletas c ON c.farmacia_id = f.id

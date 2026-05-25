@@ -23,15 +23,15 @@ async function carregarFarmacias(): Promise<(FarmaciaParaColeta & { dias?: numbe
   });
 }
 
-async function coletaAnterior(farmaciaId: number) {
+async function coletaAnterior(farmaciaId: number, periodoDias: number) {
   const [ant] = await db.select().from(coletas)
-    .where(eq(coletas.farmaciaId, farmaciaId))
+    .where(and(eq(coletas.farmaciaId, farmaciaId), eq(coletas.periodoDias, periodoDias)))
     .orderBy(desc(coletas.dataColeta))
     .limit(1);
   return ant ?? null;
 }
 
-async function salvarResultados(dadosColetados: DadosFarmacia[]): Promise<void> {
+async function salvarResultados(dadosColetados: DadosFarmacia[], periodoDias: number): Promise<void> {
   for (const dado of dadosColetados) {
     if (dado.erro) { logger.error({ farmacia: dado.nome, erro: dado.erro }, 'Coleta falhou'); continue; }
 
@@ -40,7 +40,7 @@ async function salvarResultados(dadosColetados: DadosFarmacia[]): Promise<void> 
     );
     if (!farmacia) { logger.warn({ farmacia: dado.nome }, 'Farmácia não encontrada no banco'); continue; }
 
-    const anterior = await coletaAnterior(farmacia.id);
+    const anterior = await coletaAnterior(farmacia.id, periodoDias);
     const metricasAnterior = anterior ? {
       clientesGoogle:       anterior.clientesGoogle       ?? 0,
       clientesFacebook:     anterior.clientesFacebook     ?? 0,
@@ -80,6 +80,7 @@ async function salvarResultados(dadosColetados: DadosFarmacia[]): Promise<void> 
       farmaciaId:           farmacia.id,
       periodoInicio:        dado.periodoInicio,
       periodoFim:           dado.periodoFim,
+      periodoDias,
       clientesGoogle:       dado.clientesGoogle,
       clientesFacebook:     dado.clientesFacebook,
       clientesGruposOferta: dado.clientesGruposOferta,
@@ -142,12 +143,22 @@ export async function pipeline(): Promise<void> {
   const farmsAtivas = await carregarFarmacias();
   logger.info({ total: farmsAtivas.length }, 'Farmácias ativas carregadas');
 
-  const paralelo   = parseInt(process.env.PARALELO_MAX || '1', 10);
-  const resultados = await coletarTodas(farmsAtivas, paralelo);
+  const paralelo = parseInt(process.env.PARALELO_MAX || '1', 10);
+  const periodos = [7, 15, 30];
 
-  await salvarResultados(resultados);
+  let totalSucessos = 0;
+  let totalErros    = 0;
 
-  const erros    = resultados.filter(r => r.erro);
-  const sucessos = resultados.length - erros.length;
-  logger.info({ sucessos, erros: erros.length, total: resultados.length }, 'Pipeline concluído');
+  for (const dias of periodos) {
+    logger.info({ dias }, `Coletando período de ${dias} dias`);
+    const farmsComPeriodo = farmsAtivas.map(f => ({ ...f, dias }));
+    const resultados = await coletarTodas(farmsComPeriodo, paralelo);
+    await salvarResultados(resultados, dias);
+    const erros = resultados.filter(r => r.erro);
+    totalSucessos += resultados.length - erros.length;
+    totalErros    += erros.length;
+    logger.info({ dias, sucessos: resultados.length - erros.length, erros: erros.length }, `Período ${dias}d concluído`);
+  }
+
+  logger.info({ totalSucessos, totalErros }, 'Pipeline concluído');
 }

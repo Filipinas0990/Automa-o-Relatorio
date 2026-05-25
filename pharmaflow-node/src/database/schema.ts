@@ -36,6 +36,7 @@ export const coletas = pgTable('coletas', {
   dataColeta:           timestamp('data_coleta', { withTimezone: true }).defaultNow(),
   periodoInicio:        date('periodo_inicio').notNull(),
   periodoFim:           date('periodo_fim').notNull(),
+  periodoDias:          integer('periodo_dias').default(7),
   clientesGoogle:       integer('clientes_google').default(0),
   clientesFacebook:     integer('clientes_facebook').default(0),
   clientesGruposOferta: integer('clientes_grupos_oferta').default(0),
@@ -76,6 +77,7 @@ export const vwRankingAtual = pgView('vw_ranking_atual', {
   variacaoVendas:    numeric('variacao_vendas',    { precision: 8, scale: 2 }),
   scoreCriticidade:  numeric('score_criticidade',  { precision: 5, scale: 2 }),
   posicaoRanking:    integer('posicao_ranking'),
+  periodoDias:       integer('periodo_dias'),
   periodoInicio:     date('periodo_inicio'),
   periodoFim:        date('periodo_fim'),
   dataColeta:        timestamp('data_coleta', { withTimezone: true }),
@@ -84,6 +86,7 @@ export const vwRankingAtual = pgView('vw_ranking_atual', {
 export const vwEvolucaoSemanal = pgView('vw_evolucao_semanal', {
   farmaciaId:        integer('farmacia_id'),
   semanaNumero:      integer('semana_numero'),
+  periodoDias:       integer('periodo_dias'),
   periodoInicio:     date('periodo_inicio'),
   periodoFim:        date('periodo_fim'),
   receitaTotal:      numeric('receita_total',     { precision: 12, scale: 2 }),
