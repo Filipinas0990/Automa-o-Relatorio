@@ -1,20 +1,20 @@
 # PharmaFlow — Automação de Relatórios Semanais
 
-Sistema de coleta, processamento e visualização automática de dados de 70 farmácias clientes de uma agência de marketing, via scraping do painel **PharmaChatBot**.
+Sistema de coleta, processamento e visualização automática de dados de ~70 farmácias clientes de uma agência de marketing, via scraping do painel **PharmaChatBot**.
 
 ---
 
 ## O Problema
 
-A agência atende 70 farmácias, cada uma com um chatbot de atendimento integrado no **PharmaChatBot**. Toda semana, era necessário entrar manualmente em cada painel para identificar quais farmácias estavam com desempenho abaixo do esperado — um processo lento, manual e impossível de escalar.
+A agência atende ~70 farmácias, cada uma com um chatbot de atendimento integrado no **PharmaChatBot**. Toda semana, era necessário entrar manualmente em cada painel para identificar quais farmácias estavam com desempenho abaixo do esperado — um processo lento, manual e impossível de escalar.
 
 ## A Solução
 
 Um pipeline 100% automatizado que:
 
 1. **Entra automaticamente** no painel de cada farmácia todo domingo às 22h
-2. **Coleta os dados** dos últimos 7 dias
-3. **Calcula um score de criticidade** para cada cliente
+2. **Coleta os dados** dos últimos 7, 15 e 30 dias
+3. **Calcula um score de criticidade** comparando com a coleta anterior
 4. **Salva tudo no banco de dados**
 5. Na segunda de manhã, o **dashboard PharmaFlow** já reflete os dados atualizados
 
@@ -23,68 +23,76 @@ Um pipeline 100% automatizado que:
 ## Arquitetura
 
 ```
-farmacias.json (credenciais)
+PostgreSQL (banco)
       │
       ▼
-main.py — Pipeline (todo domingo 22h)
+pipeline.ts — Pipeline (todo domingo 22h)
       │
       ├── Playwright → faz login em cada farmácia
-      │               → aplica filtro dos últimos 7 dias
-      │               → coleta os 4 badges principais
+      │               → coleta métricas dos períodos (7 / 15 / 30 dias)
+      │               → extrai canais via React fiber (Recharts)
       │
-      ├── Score Calculator → calcula criticidade vs semana anterior
+      ├── Score Calculator → calcula criticidade vs coleta anterior
       │
-      └── PostgreSQL → salva histórico semanal
+      └── Drizzle ORM → salva histórico no PostgreSQL
                 │
                 ▼
-           FastAPI (API REST)
+           Fastify (API REST — porta 8000)
                 │
                 ▼
-         PharmaFlow (Frontend)
-         lê o banco toda segunda via JSON
+         PharmaFlow (Frontend Framer)
+         front-end-ecru-two-48.vercel.app
 ```
 
 ---
 
 ## Métricas Coletadas por Farmácia
 
-Extraídas do dashboard do PharmaChatBot após aplicação do filtro de 7 dias:
+Extraídas do dashboard do PharmaChatBot para cada período (7, 15 e 30 dias):
 
 | Métrica | Descrição |
 |---|---|
-| **Atendimentos finalizados** | Conversas encerradas no período |
+| **Clientes Google** | Leads originados do Google |
+| **Clientes Facebook/Meta** | Leads originados do Meta |
+| **Clientes Grupos de Oferta** | Leads originados de grupos |
 | **Total de atendimentos** | Total de conversas iniciadas |
-| **Em andamento** | Atendimentos ainda abertos |
-| **Aguardando atendimento** | Fila de espera em tempo real |
 | **Vendas realizadas** | Pedidos convertidos |
-| **Vendas não realizadas** | Conversas sem conversão |
 | **Receita total** | Faturamento gerado pelo chatbot |
+| **Canais** | Breakdown por canal (pizza chart via React fiber) |
 
 ### Score de Criticidade (0–100)
 
-Calculado automaticamente comparando com a semana anterior:
+Calculado automaticamente comparando com a coleta anterior do mesmo período:
 
-| Fator | Peso |
+**Níveis de alerta:** Verde (baixo risco) · Amarelo (atenção) · Vermelho (50+ ou meta não atingida)
+
+### Metas por Farmácia
+
+Cada farmácia pode ter metas individuais configuradas:
+
+| Meta | Campo |
 |---|---|
-| Queda de atendimentos | 40 pts |
-| Queda de vendas | 30 pts |
-| Queda de receita | 20 pts |
-| Taxa de finalização baixa | 10 pts |
-
-**Níveis de alerta:** 🟢 Verde (0–19) · 🟡 Amarelo (20–49) · 🔴 Vermelho (50+)
+| Meta de receita (R$) | `meta_receita` |
+| Meta de vendas | `meta_vendas` |
+| Meta de leads Google | `meta_leads_google` |
+| Meta de leads Meta | `meta_leads_meta` |
 
 ---
 
 ## Stack Tecnológica
 
-| Camada | Tecnologia | Por quê |
-|---|---|---|
-| Coleta | Python + Playwright | Automação de browser, lida bem com SPAs |
-| Banco de dados | PostgreSQL | Relações entre tabelas, histórico semanal |
-| API | FastAPI | Endpoints JSON para o frontend |
-| Agendamento (VPS) | Cron Job Linux | Nativo, zero dependência |
-| Agendamento (local) | Windows Task Scheduler | Testes locais no Windows |
-| Deploy | Docker + Docker Compose | Portável, fácil de subir na VPS |
+| Camada | Tecnologia |
+|---|---|
+| Runtime | Node.js + TypeScript |
+| Scraper | Playwright (Chromium) |
+| API | Fastify v4 + JWT + bcrypt |
+| ORM | Drizzle ORM |
+| Banco de dados | PostgreSQL 16 |
+| Export | ExcelJS (XLSX) + CSV |
+| Deploy | Docker + Docker Compose |
+| Agendamento (VPS) | Cron Job Linux |
+| Frontend | Framer (externo, integrado via API) |
+| Domínio API | api.pharmarelatorios.online (Nginx + Let's Encrypt) |
 
 ---
 
@@ -92,26 +100,28 @@ Calculado automaticamente comparando com a semana anterior:
 
 ```
 AUTOMAÇÂO/
-├── config/
-│   └── farmacias.json          # credenciais das 70 farmácias (não commitar!)
-├── farmacia_monitor/
-│   ├── scraper/
-│   │   └── pharmachatbot.py    # Playwright: login + filtro + extração
-│   ├── database/
-│   │   └── db.py               # modelos SQLAlchemy (PostgreSQL)
-│   ├── processor/
-│   │   └── score.py            # cálculo de score de criticidade
-│   └── api/
-│       └── main.py             # FastAPI: endpoints JSON para o frontend
+├── pharmaflow-node/
+│   └── src/
+│       ├── api/
+│       │   └── index.ts          # Fastify: todos os endpoints REST
+│       ├── database/
+│       │   ├── db.ts             # conexão Drizzle + pg
+│       │   └── schema.ts         # tabelas e views (Drizzle schema)
+│       ├── scraper/
+│       │   └── pharmachatbot.ts  # Playwright: login + filtro + extração
+│       ├── processor/
+│       │   └── score.ts          # cálculo de score de criticidade
+│       ├── pipeline.ts           # entrypoint do scraper (docker)
+│       ├── pipeline-fn.ts        # lógica principal do pipeline
+│       ├── types.ts              # tipos compartilhados
+│       ├── logger.ts             # pino logger
+│       ├── cripto.ts             # encrypt/decrypt de senhas
+│       └── transactions.ts
 ├── sql/
-│   └── init.sql                # schema, índices e views do banco
-├── main.py                     # pipeline principal (scraper → banco)
-├── testar_scraper.py           # script de teste com Chrome visível
-├── Dockerfile                  # imagem Python + Playwright + Chromium
-├── docker-compose.yml          # postgres + api + scraper
-├── setup_vps.sh                # setup completo em uma VPS Linux
-├── agendar_tarefa.ps1          # agendamento no Windows Task Scheduler
-├── requirements.txt
+│   └── init.sql                  # schema, índices e views do banco
+├── config/                       # credenciais e configurações (não commitar!)
+├── logs/                         # logs do pipeline (montado via volume)
+├── docker-compose.yml
 └── .env.example
 ```
 
@@ -123,75 +133,113 @@ AUTOMAÇÂO/
 
 | Tabela | Descrição |
 |---|---|
-| `farmacias` | Cadastro das 70 farmácias |
-| `coletas` | Métricas semanais + score por farmácia |
-| `coleta_canais` | Breakdown de atendimentos por canal de divulgação |
-| `coleta_conexoes` | Breakdown de atendimentos por conexão |
+| `gestores_trafego` | Usuários gestores (login, JWT, admin flag) |
+| `farmacias` | Cadastro das farmácias com credenciais criptografadas e metas |
+| `coletas` | Métricas semanais + score por farmácia e período |
+| `coleta_canais` | Breakdown de atendimentos/vendas por canal de marketing |
 
-### Views prontas
+### Views
 
-- `vw_ranking_atual` — última coleta de cada farmácia com ranking por score
-- `vw_evolucao_semanal` — últimas 8 semanas por farmácia (para gráfico de evolução)
+| View | Descrição |
+|---|---|
+| `vw_ranking_atual` | Última coleta de cada farmácia com posição de ranking |
+| `vw_evolucao_semanal` | Histórico por farmácia para gráfico de evolução |
 
 ---
 
-## API REST (FastAPI)
+## API REST (Fastify)
+
+### Auth
 
 | Endpoint | Descrição |
 |---|---|
-| `GET /api/painel` | KPIs gerais da semana (soma de todas as farmácias) |
-| `GET /api/farmacias` | Lista de farmácias com status e métricas |
-| `GET /api/farmacias/{id}/evolucao` | Histórico semanal de uma farmácia |
-| `GET /api/relatorios` | Histórico de execuções semanais |
-| `GET /api/relatorios/{data}/xlsx` | Download do relatório em Excel |
-| `POST /api/rodar-agora` | Dispara o pipeline manualmente |
+| `POST /api/auth/login` | Login — retorna JWT (8h) |
+| `GET /api/auth/me` | Dados do usuário autenticado |
+| `POST /api/auth/criar-super-admin` | Cria o primeiro admin (requer `ADMIN_SECRET`) |
+
+### Gestores
+
+| Endpoint | Descrição |
+|---|---|
+| `GET /api/gestores` | Lista gestores com contagem de farmácias |
+| `POST /api/gestores` | Cria gestor (admin) |
+| `PUT /api/gestores/:id` | Edita gestor (admin) |
+| `DELETE /api/gestores/:id` | Desativa gestor (admin) |
+
+### Farmácias
+
+| Endpoint | Descrição |
+|---|---|
+| `GET /api/farmacias` | Lista farmácias com métricas e canais (`?dias=7\|15\|30`) |
+| `POST /api/farmacias` | Cadastra farmácia (admin) |
+| `PUT /api/farmacias/:id` | Edita farmácia (admin) |
+| `PATCH /api/farmacias/:id/meta` | Atualiza metas da farmácia (admin) |
+| `DELETE /api/farmacias/:id` | Desativa farmácia (admin) |
+| `GET /api/farmacias/:id/evolucao` | Histórico semanal de uma farmácia |
+
+### Painel e Relatórios
+
+| Endpoint | Descrição |
+|---|---|
+| `GET /api/painel` | KPIs gerais + canais agregados (`?dias=7\|15\|30`) |
+| `GET /api/relatorios` | Lista de semanas com coletas |
+| `GET /api/relatorios/:periodo/xlsx` | Download do relatório em Excel |
+| `GET /api/relatorios/:periodo/csv` | Download do relatório em CSV (compatível Power BI) |
+| `POST /api/rodar-agora` | Dispara o pipeline manualmente (admin) |
 | `GET /api/status` | Verifica se o pipeline está rodando |
+
+### Ranking de Gestores
+
+| Endpoint | Descrição |
+|---|---|
+| `GET /api/ranking/gestores` | Ranking mensal de gestores por pontos de meta (`?mes=YYYY-MM`) |
+| `GET /api/ranking/gestores/historico` | Histórico de pontos dos últimos 6 meses |
 
 ---
 
 ## Como Rodar Localmente
 
 ### Pré-requisitos
-- Python 3.11+
+
+- Node.js 20+
 - Docker Desktop
 
 ### 1. Instalar dependências
 
 ```bash
-pip install -r requirements.txt
-python -m playwright install chromium
+cd pharmaflow-node
+npm install
+npx playwright install chromium
 ```
 
 ### 2. Configurar variáveis de ambiente
 
 ```bash
 copy .env.example .env
-# edite o .env com as configurações do banco
+# edite o .env com DATABASE_URL, JWT_SECRET_KEY, ADMIN_SECRET, CRYPT_KEY
 ```
 
 ### 3. Subir o banco de dados
 
 ```bash
-docker-compose up postgres -d
+docker compose up postgres -d
 ```
 
-### 4. Testar o scraper (uma farmácia, Chrome visível)
+### 4. Compilar e rodar a API
 
 ```bash
-python testar_scraper.py
+npm run build
+npm start
+# ou em modo dev:
+npm run dev
 ```
 
-### 5. Rodar o pipeline completo
+### 5. Rodar o pipeline manualmente
 
 ```bash
-python main.py
-```
-
-### 6. Subir a API
-
-```bash
-uvicorn farmacia_monitor.api.main:app --reload
-# Acesse: http://localhost:8000/docs
+npm run pipeline
+# ou via docker:
+docker compose run --rm scraper
 ```
 
 ---
@@ -202,61 +250,27 @@ uvicorn farmacia_monitor.api.main:app --reload
 # 1. Envie o projeto para a VPS
 scp -r . root@IP_DA_VPS:/opt/pharmaflow
 
-# 2. Acesse a VPS
+# 2. Acesse a VPS e suba os containers
 ssh root@IP_DA_VPS
-
-# 3. Execute o setup (apenas uma vez)
 cd /opt/pharmaflow
-bash setup_vps.sh
+docker compose up -d --build
 ```
 
-O script `setup_vps.sh` instala o Docker, sobe os containers e registra o cron job automaticamente.
-
-### Verificar que está rodando
+### Cron job (domingo 22h)
 
 ```bash
-docker compose ps          # containers ativos
-crontab -l                 # cron registrado
-docker compose logs -f api # logs da API em tempo real
+crontab -e
+# adicione:
+0 22 * * 0 cd /opt/pharmaflow && docker compose run --rm scraper >> /opt/pharmaflow/logs/cron.log 2>&1
 ```
 
-### Rodar manualmente fora do domingo
+### Verificar funcionamento
 
 ```bash
-docker compose run --rm scraper
+docker compose ps                    # containers ativos
+docker compose logs -f api           # logs da API em tempo real
+docker compose logs scraper          # logs da última execução do scraper
 ```
-
----
-
-## Gerenciar as 70 Farmácias
-
-As credenciais ficam no arquivo `config/farmacias.json`:
-
-```json
-[
-  {
-    "id": 1,
-    "nome": "Nome da Farmácia",
-    "url_base": "https://app13.pharmachatbot.com.br",
-    "email": "email@farmacia.com",
-    "senha": "senha",
-    "ativa": true
-  }
-]
-```
-
-- `ativa: false` pausa a coleta daquela farmácia sem removê-la
-- O arquivo **não deve ser commitado** no Git (está no `.dockerignore`)
-
----
-
-## O que Está Fora do Escopo (versão atual)
-
-- Envio de e-mail ou WhatsApp com o relatório
-- Comparativo por região
-- Módulo de metas e projeções
-- Integração com CRM
-- Tela de cadastro de farmácias pelo dashboard
 
 ---
 
@@ -264,11 +278,12 @@ As credenciais ficam no arquivo `config/farmacias.json`:
 
 | Fase | Descrição | Status |
 |---|---|---|
-| Coleta | Playwright: login + filtro + extração dos 4 badges | ✅ Concluído e testado |
-| Processamento | Score de criticidade vs semana anterior | ✅ Concluído |
+| Coleta | Playwright: login + filtro + extração (7 / 15 / 30 dias) | ✅ Concluído |
+| Processamento | Score de criticidade vs coleta anterior | ✅ Concluído |
 | Banco de dados | PostgreSQL com schema, índices e views | ✅ Concluído |
-| API | FastAPI com todos os endpoints + export XLSX | ✅ Concluído |
-| Agendamento | Cron Linux (VPS) + Task Scheduler (Windows) | ✅ Concluído |
-| Deploy | Docker Compose + script setup_vps.sh | ✅ Concluído |
-| Frontend | PharmaFlow (sistema externo integrado via API) | ✅ Existente |
-| Credenciais | Preenchimento do farmacias.json com as 70 farmácias | 🔲 Pendente |
+| API | Fastify com todos os endpoints + export XLSX/CSV | ✅ Concluído |
+| Autenticação | JWT + bcrypt + roles (admin / gestor) | ✅ Concluído |
+| Ranking de Gestores | Pontuação mensal por metas atingidas | ✅ Concluído |
+| Agendamento | Cron Linux (VPS) | ✅ Concluído |
+| Deploy | Docker Compose (VPS) + Nginx + Let's Encrypt | ✅ Concluído |
+| Frontend | PharmaFlow (Framer, integrado via API) | ✅ Existente |
