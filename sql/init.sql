@@ -13,14 +13,18 @@ CREATE TABLE IF NOT EXISTS gestores_trafego (
 );
 
 CREATE TABLE IF NOT EXISTS farmacias (
-    id          SERIAL PRIMARY KEY,
-    nome        VARCHAR(120) NOT NULL,
-    url_base    VARCHAR(255) NOT NULL,
-    email       VARCHAR(120) NOT NULL,
-    senha_enc   TEXT,
-    gestor_id   INTEGER REFERENCES gestores_trafego(id) ON DELETE SET NULL,
-    ativa       BOOLEAN DEFAULT TRUE,
-    criado_em   TIMESTAMPTZ DEFAULT NOW()
+    id                  SERIAL PRIMARY KEY,
+    nome                VARCHAR(120) NOT NULL,
+    url_base            VARCHAR(255) NOT NULL,
+    email               VARCHAR(120) NOT NULL,
+    senha_enc           TEXT,
+    gestor_id           INTEGER REFERENCES gestores_trafego(id) ON DELETE SET NULL,
+    ativa               BOOLEAN DEFAULT TRUE,
+    criado_em           TIMESTAMPTZ DEFAULT NOW(),
+    meta_vendas         INTEGER,
+    meta_receita        NUMERIC(12, 2),
+    meta_leads_google   INTEGER,
+    meta_leads_meta     INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS coletas (
@@ -46,15 +50,21 @@ CREATE TABLE IF NOT EXISTS coletas (
     variacao_receita        NUMERIC(8, 2) DEFAULT 0,
 
     score_criticidade       NUMERIC(5, 2) DEFAULT 0,
-    nivel_alerta            VARCHAR(10) DEFAULT 'verde'
-        CHECK (nivel_alerta IN ('verde', 'amarelo', 'vermelho'))
+    nivel_alerta            VARCHAR(10) DEFAULT 'verde' NOT NULL
+        CHECK (nivel_alerta IN ('verde', 'amarelo', 'vermelho')),
+
+    atingiu_meta            BOOLEAN DEFAULT FALSE NOT NULL,
+    atingiu_meta_google     BOOLEAN,
+    atingiu_meta_meta       BOOLEAN
 );
 
 CREATE TABLE IF NOT EXISTS coleta_canais (
     id              SERIAL PRIMARY KEY,
     coleta_id       INTEGER NOT NULL REFERENCES coletas(id) ON DELETE CASCADE,
     canal           VARCHAR(80) NOT NULL,
-    atendimentos    INTEGER DEFAULT 0
+    atendimentos    INTEGER DEFAULT 0,
+    vendas          INTEGER DEFAULT 0,
+    receita_vendas  NUMERIC(12, 2) DEFAULT 0
 );
 
 -- ============================================================
