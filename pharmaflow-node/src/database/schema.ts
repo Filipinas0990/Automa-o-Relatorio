@@ -127,9 +127,23 @@ export const reunioes = pgTable('reunioes', {
   atualizadoEm:   timestamp('atualizado_em',{ withTimezone: true }).defaultNow(),
 });
 
+// ── Bloqueios de Agenda (adicionado pela migration 0004) ─────────────────────
+
+export const agendaBloqueios = pgTable('agenda_bloqueios', {
+  id:           serial('id').primaryKey(),
+  data:         date('data').notNull(),
+  horaInicio:   varchar('hora_inicio', { length: 5 }),   // "HH:MM" ou null
+  horaFim:      varchar('hora_fim',    { length: 5 }),
+  diaInteiro:   boolean('dia_inteiro').default(false).notNull(),
+  motivo:       varchar('motivo', { length: 200 }),
+  criadoPorId:  integer('criado_por_id').references(() => gestoresTrafego.id),
+  criadoEm:     timestamp('criado_em', { withTimezone: true }).defaultNow(),
+});
+
 // ── Tipos inferidos do schema (usados pela API e pipeline) ────────────────────
 
-export type Gestor   = typeof gestoresTrafego.$inferSelect;
-export type Farmacia = typeof farmacias.$inferSelect;
-export type Coleta   = typeof coletas.$inferSelect;
-export type Reuniao  = typeof reunioes.$inferSelect;
+export type Gestor         = typeof gestoresTrafego.$inferSelect;
+export type Farmacia       = typeof farmacias.$inferSelect;
+export type Coleta         = typeof coletas.$inferSelect;
+export type Reuniao        = typeof reunioes.$inferSelect;
+export type AgendaBloqueio = typeof agendaBloqueios.$inferSelect;

@@ -8,7 +8,7 @@ import ExcelJS  from 'exceljs';
 import { eq, and, sql } from 'drizzle-orm';
 import { google } from 'googleapis';
 import { db } from '../database/db';
-import { gestoresTrafego, farmacias, reunioes } from '../database/schema';
+import { gestoresTrafego, farmacias, reunioes, agendaBloqueios } from '../database/schema';
 import type { Gestor } from '../database/schema';
 import { encrypt } from '../cripto';
 import { pipeline } from '../pipeline-fn';
@@ -975,6 +975,280 @@ app.delete('/api/auth/google', { preHandler: autenticar }, async (request) => {
   return { mensagem: 'Google Calendar desconectado.' };
 });
 
+// ── Agenda — Verificação de Conflito ─────────────────────────────────────────
+
+interface ResultadoConflito {
+  conflito: boolean;
+  tipo?: 'bloqueio' | 'sobreposicao';
+  detalhe?: string;
+  reuniao_conflitante?: { id: number; titulo: string; data_reuniao: string; duracao_minutos: number };
+}
+
+/**
+ * Verifica se um horário está disponível.
+ * Checa: (1) bloqueios de agenda e (2) sobreposição com reuniões existentes.
+ */
+async function verificarConflito(
+  dataReuniao: Date,
+  duracaoMinutos: number,
+  ignorarReuniaoId?: number,
+): Promise<ResultadoConflito> {
+  const inicio   = dataReuniao;
+  const fim      = new Date(inicio.getTime() + duracaoMinutos * 60_000);
+  const dataStr  = inicio.toISOString().split('T')[0];          // "YYYY-MM-DD"
+  const horaIni  = inicio.toISOString().split('T')[1].slice(0, 5); // "HH:MM" UTC
+  const horaFim  = fim.toISOString().split('T')[1].slice(0, 5);
+
+  // 1. Verifica bloqueios de agenda
+  const { rows: bloqs } = await db.execute(sql`
+    SELECT motivo FROM agenda_bloqueios
+    WHERE data = ${dataStr}::date
+      AND (
+        dia_inteiro = TRUE
+        OR (hora_inicio <= ${horaFim}::time AND hora_fim >= ${horaIni}::time)
+      )
+    LIMIT 1
+  `);
+  if (bloqs.length > 0) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const b = bloqs[0] as any;
+    return {
+      conflito: true,
+      tipo: 'bloqueio',
+      detalhe: b.motivo ? `Agenda fechada: ${b.motivo}` : 'Agenda fechada neste horário.',
+    };
+  }
+
+  // 2. Verifica sobreposição com reuniões existentes
+  const ignorar = ignorarReuniaoId ? sql`AND id != ${ignorarReuniaoId}` : sql``;
+  const { rows: conflitos } = await db.execute(sql`
+    SELECT id, titulo, data_reuniao, duracao_minutos FROM reunioes
+    WHERE status NOT IN ('cancelada')
+    ${ignorar}
+      AND data_reuniao < ${fim.toISOString()}::timestamptz
+      AND (data_reuniao + (duracao_minutos || ' minutes')::interval) > ${inicio.toISOString()}::timestamptz
+    ORDER BY data_reuniao ASC
+    LIMIT 1
+  `);
+  if (conflitos.length > 0) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const c = conflitos[0] as any;
+    const h = new Date(c.data_reuniao).toLocaleTimeString('pt-BR', {
+      hour: '2-digit', minute: '2-digit', timeZone: 'UTC',
+    });
+    return {
+      conflito: true,
+      tipo: 'sobreposicao',
+      detalhe: `Conflito com "${c.titulo}" às ${h}`,
+      reuniao_conflitante: {
+        id:              parseInt(c.id),
+        titulo:          c.titulo,
+        data_reuniao:    String(c.data_reuniao),
+        duracao_minutos: parseInt(c.duracao_minutos),
+      },
+    };
+  }
+
+  return { conflito: false };
+}
+
+// ── Agenda — Endpoints de Disponibilidade e Bloqueios ─────────────────────────
+
+/**
+ * GET /api/agenda/disponibilidade?data=2026-06-05&hora=14:00&duracao=60
+ * Retorna se o horário está disponível + lista de ocupações do dia.
+ */
+app.get('/api/agenda/disponibilidade', { preHandler: autenticar }, async (request, reply) => {
+  const q = request.query as Record<string, string | undefined>;
+  const { data, hora, duracao } = q;
+
+  if (!data) return reply.code(400).send({ detail: 'Parâmetro "data" obrigatório (YYYY-MM-DD).' });
+
+  // Monta o datetime se hora foi fornecida
+  let resultado: ResultadoConflito = { conflito: false };
+  if (hora) {
+    const dur = parseInt(duracao || '60');
+    const dt  = new Date(`${data}T${hora}:00Z`);
+    resultado = await verificarConflito(dt, dur);
+  }
+
+  // Reuniões do dia
+  const { rows: reunioesDia } = await db.execute(sql`
+    SELECT id, titulo, data_reuniao, duracao_minutos, status, farmacia_nome
+    FROM (
+      SELECT r.id, r.titulo, r.data_reuniao, r.duracao_minutos, r.status,
+             f.nome AS farmacia_nome
+      FROM reunioes r
+      JOIN farmacias f ON f.id = r.farmacia_id
+      WHERE r.data_reuniao::date = ${data}::date
+        AND r.status NOT IN ('cancelada')
+    ) sub
+    ORDER BY data_reuniao ASC
+  `);
+
+  // Bloqueios do dia
+  const { rows: bloqueiosDia } = await db.execute(sql`
+    SELECT id, data, hora_inicio, hora_fim, dia_inteiro, motivo
+    FROM agenda_bloqueios
+    WHERE data = ${data}::date
+    ORDER BY hora_inicio ASC NULLS FIRST
+  `);
+
+  // Slots disponíveis (08:00–18:00, blocos de 30 min)
+  const horasOcupadas = new Set<string>();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  for (const r of reunioesDia as any[]) {
+    const ini = new Date(r.data_reuniao);
+    const fim = new Date(ini.getTime() + parseInt(r.duracao_minutos || 60) * 60_000);
+    for (let t = new Date(ini); t < fim; t = new Date(t.getTime() + 30 * 60_000)) {
+      horasOcupadas.add(`${String(t.getUTCHours()).padStart(2,'0')}:${String(t.getUTCMinutes()).padStart(2,'0')}`);
+    }
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const diaBloqueado = (bloqueiosDia as any[]).some(b => b.dia_inteiro);
+  const slots: { hora: string; disponivel: boolean }[] = [];
+  for (let h = 8; h < 18; h++) {
+    for (const m of [0, 30]) {
+      const horario = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
+      slots.push({ hora: horario, disponivel: !diaBloqueado && !horasOcupadas.has(horario) });
+    }
+  }
+
+  return {
+    data,
+    disponivel:   !resultado.conflito,
+    conflito:     resultado,
+    reunioes_dia: reunioesDia,
+    bloqueios:    bloqueiosDia,
+    dia_bloqueado: diaBloqueado,
+    slots,          // grade de 30 em 30 min mostrando livre/ocupado
+  };
+});
+
+/**
+ * GET /api/agenda/calendario?mes=2026-06
+ * Visão mensal: para cada dia mostra qtd de reuniões e se está bloqueado.
+ */
+app.get('/api/agenda/calendario', { preHandler: autenticar }, async (request, reply) => {
+  const q   = request.query as Record<string, string | undefined>;
+  const mes = q.mes || new Date().toISOString().slice(0, 7); // YYYY-MM
+  if (!/^\d{4}-\d{2}$/.test(mes)) return reply.code(400).send({ detail: 'Formato inválido. Use YYYY-MM.' });
+
+  const { rows: reunioesMes } = await db.execute(sql`
+    SELECT data_reuniao::date AS dia, COUNT(*)::int AS total,
+           COUNT(*) FILTER (WHERE status = 'realizada')::int  AS realizadas,
+           COUNT(*) FILTER (WHERE status = 'confirmada')::int AS confirmadas,
+           COUNT(*) FILTER (WHERE status = 'agendada')::int   AS agendadas
+    FROM reunioes
+    WHERE DATE_TRUNC('month', data_reuniao) = DATE_TRUNC('month', ${mes + '-01'}::date)
+      AND status != 'cancelada'
+    GROUP BY data_reuniao::date
+  `);
+
+  const { rows: bloqueiosMes } = await db.execute(sql`
+    SELECT data, dia_inteiro, hora_inicio, hora_fim, motivo
+    FROM agenda_bloqueios
+    WHERE DATE_TRUNC('month', data) = DATE_TRUNC('month', ${mes + '-01'}::date)
+    ORDER BY data ASC
+  `);
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const reunioesPorDia = Object.fromEntries((reunioesMes as any[]).map(r => [String(r.dia), r]));
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const bloqueiosPorDia = Object.fromEntries((bloqueiosMes as any[]).map(b => [String(b.data), b]));
+
+  // Gera todos os dias do mês
+  const [ano, mesNum] = mes.split('-').map(Number);
+  const diasNoMes = new Date(ano, mesNum, 0).getDate();
+  const dias = [];
+  for (let d = 1; d <= diasNoMes; d++) {
+    const dStr = `${mes}-${String(d).padStart(2, '0')}`;
+    dias.push({
+      data:         dStr,
+      reunioes:     reunioesPorDia[dStr] || { total: 0, realizadas: 0, confirmadas: 0, agendadas: 0 },
+      bloqueado:    !!bloqueiosPorDia[dStr]?.dia_inteiro,
+      bloqueio:     bloqueiosPorDia[dStr] || null,
+    });
+  }
+
+  return { mes, dias };
+});
+
+/** POST /api/agenda/bloqueios — bloqueia um dia ou intervalo de horário */
+app.post('/api/agenda/bloqueios', { preHandler: [autenticar, apenasAdmin] }, async (request, reply) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const b = request.body as any;
+  const { data, hora_inicio, hora_fim, dia_inteiro, motivo } = b;
+
+  if (!data) return reply.code(400).send({ detail: 'Campo "data" obrigatório (YYYY-MM-DD).' });
+  if (!dia_inteiro && (!hora_inicio || !hora_fim)) {
+    return reply.code(400).send({ detail: 'Para bloqueio parcial, informe hora_inicio e hora_fim.' });
+  }
+
+  const [novo] = await db.insert(agendaBloqueios).values({
+    data:         data,
+    horaInicio:   dia_inteiro ? null : hora_inicio,
+    horaFim:      dia_inteiro ? null : hora_fim,
+    diaInteiro:   !!dia_inteiro,
+    motivo:       motivo || null,
+    criadoPorId:  request.user.id,
+  }).returning();
+
+  return reply.code(201).send({
+    ...novo,
+    mensagem: dia_inteiro
+      ? `Dia ${data} bloqueado.`
+      : `Horário ${hora_inicio}–${hora_fim} do dia ${data} bloqueado.`,
+  });
+});
+
+/** GET /api/agenda/bloqueios — lista bloqueios (com filtro opcional de mês) */
+app.get('/api/agenda/bloqueios', { preHandler: autenticar }, async (request) => {
+  const q   = request.query as Record<string, string | undefined>;
+  const mes = q.mes;
+
+  const filtroMes = mes
+    ? sql`WHERE DATE_TRUNC('month', data) = DATE_TRUNC('month', ${mes + '-01'}::date)`
+    : sql`WHERE data >= CURRENT_DATE - INTERVAL '7 days'`;
+
+  const { rows } = await db.execute(sql`
+    SELECT ab.*, g.nome AS criado_por_nome
+    FROM agenda_bloqueios ab
+    LEFT JOIN gestores_trafego g ON g.id = ab.criado_por_id
+    ${filtroMes}
+    ORDER BY data ASC, hora_inicio ASC NULLS FIRST
+  `);
+  return rows;
+});
+
+/** DELETE /api/agenda/bloqueios/:id — remove um bloqueio (somente admin) */
+app.delete('/api/agenda/bloqueios/:id', { preHandler: [autenticar, apenasAdmin] }, async (request, reply) => {
+  const id = parseInt((request.params as { id: string }).id, 10);
+  const [existe] = await db.select().from(agendaBloqueios).where(eq(agendaBloqueios.id, id));
+  if (!existe) return reply.code(404).send({ detail: 'Bloqueio não encontrado.' });
+
+  await db.delete(agendaBloqueios).where(eq(agendaBloqueios.id, id));
+  return { mensagem: 'Bloqueio removido.' };
+});
+
+/**
+ * GET /api/agenda/verificar?data=2026-06-05T14:00:00Z&duracao=60&reuniao_id=5
+ * Endpoint rápido de verificação — o frontend chama ao selecionar data/hora no modal.
+ */
+app.get('/api/agenda/verificar', { preHandler: autenticar }, async (request, reply) => {
+  const q = request.query as Record<string, string | undefined>;
+  if (!q.data) return reply.code(400).send({ detail: 'Parâmetro "data" obrigatório (ISO 8601).' });
+
+  const dt      = new Date(q.data);
+  const dur     = parseInt(q.duracao || '60');
+  const ignorar = q.reuniao_id ? parseInt(q.reuniao_id) : undefined;
+
+  if (isNaN(dt.getTime())) return reply.code(400).send({ detail: 'Data inválida.' });
+
+  const resultado = await verificarConflito(dt, dur, ignorar);
+  return resultado;
+});
+
 // ── Reuniões CRUD ─────────────────────────────────────────────────────────────
 
 /** Stats rápidas (deve vir ANTES de /:id para não conflitar) */
@@ -1084,14 +1358,27 @@ app.post('/api/reunioes', { preHandler: autenticar }, async (request, reply) => 
     if (!f) return reply.code(403).send({ detail: 'Acesso negado a esta farmácia.' });
   }
 
+  const dataReuniaoDate = new Date(data_reuniao);
+  const duracaoMin      = duracao_minutos ? parseInt(duracao_minutos) : 60;
+
+  // ── Verifica conflito ANTES de salvar ────────────────────────────────────
+  const conflito = await verificarConflito(dataReuniaoDate, duracaoMin);
+  if (conflito.conflito) {
+    return reply.code(409).send({
+      detail:              conflito.detalhe,
+      tipo_conflito:       conflito.tipo,
+      reuniao_conflitante: conflito.reuniao_conflitante ?? null,
+    });
+  }
+
   const [nova] = await db.insert(reunioes).values({
     farmaciaId:     parseInt(farmacia_id),
     gestorId:       gestor_id ? parseInt(gestor_id) : request.user.id,
     criadoPorId:    request.user.id,
     titulo:         String(titulo),
     descricao:      descricao ?? null,
-    dataReuniao:    new Date(data_reuniao),
-    duracaoMinutos: duracao_minutos ? parseInt(duracao_minutos) : 60,
+    dataReuniao:    dataReuniaoDate,
+    duracaoMinutos: duracaoMin,
     local:          local ?? null,
     linkMeet:       link_meet ?? null,
     status:         'agendada',
@@ -1175,6 +1462,19 @@ app.put('/api/reunioes/:id', { preHandler: autenticar }, async (request, reply) 
   if (b.gestor_id       !== undefined) dados.gestorId       = parseInt(b.gestor_id);
 
   if (Object.keys(dados).length) {
+    // Se mudou data/hora ou duração, revalida conflito
+    if (dados.dataReuniao || dados.duracaoMinutos) {
+      const novaData = dados.dataReuniao ?? existe.dataReuniao;
+      const novaDur  = dados.duracaoMinutos ?? existe.duracaoMinutos ?? 60;
+      const conflito = await verificarConflito(new Date(novaData!), novaDur, id);
+      if (conflito.conflito) {
+        return reply.code(409).send({
+          detail:              conflito.detalhe,
+          tipo_conflito:       conflito.tipo,
+          reuniao_conflitante: conflito.reuniao_conflitante ?? null,
+        });
+      }
+    }
     await db.update(reunioes).set(dados).where(eq(reunioes.id, id));
     // Re-sincroniza com Google Calendar se conectado
     const targetGestor = dados.gestorId ?? existe.gestorId ?? request.user.id;
@@ -1292,6 +1592,175 @@ app.post('/api/reunioes/:id/sync-google', { preHandler: autenticar }, async (req
     logger.error({ err: e }, 'Erro ao sincronizar com Google Calendar');
     return reply.code(502).send({ detail: 'Erro ao comunicar com o Google Calendar.' });
   }
+});
+
+// ── Dashboard — Gráficos de Vendas e Reuniões ─────────────────────────────────
+
+/**
+ * GET /api/dashboard/evolucao
+ * Retorna séries temporais de vendas para os períodos de 7 e 30 dias.
+ * Usado para gráfico de linha/barra mostrando evolução ao longo do tempo.
+ */
+app.get('/api/dashboard/evolucao', { preHandler: autenticar }, async (request) => {
+  const q         = request.query as Record<string, string | undefined>;
+  const filtroGid = request.user.isAdmin
+    ? (q.gestor_id ? sql`AND f.gestor_id = ${parseInt(q.gestor_id)}` : sql``)
+    : sql`AND f.gestor_id = ${request.user.id}`;
+
+  // Todas as coletas dos últimos 90 dias para períodos de 7 e 30 dias
+  const { rows } = await db.execute(sql`
+    SELECT
+      c.data_coleta::date                AS data,
+      c.periodo_dias,
+      SUM(c.vendas_realizadas)::int      AS vendas,
+      ROUND(SUM(c.receita_total), 2)     AS receita,
+      SUM(c.total_atendimentos)::int     AS atendimentos,
+      COUNT(DISTINCT c.farmacia_id)::int AS farmacias
+    FROM coletas c
+    JOIN farmacias f ON f.id = c.farmacia_id
+    WHERE f.ativa = TRUE
+      AND c.periodo_dias IN (7, 30)
+      AND c.data_coleta >= NOW() - INTERVAL '90 days'
+      ${filtroGid}
+    GROUP BY c.data_coleta::date, c.periodo_dias
+    ORDER BY data ASC, c.periodo_dias ASC
+  `);
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const mapPonto = (r: any) => ({
+    data:         String(r.data),
+    vendas:       parseInt(r.vendas       || 0),
+    receita:      parseFloat(r.receita    || 0),
+    atendimentos: parseInt(r.atendimentos || 0),
+  });
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const serie7d  = (rows as any[]).filter(r => parseInt(r.periodo_dias) === 7).map(mapPonto);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const serie30d = (rows as any[]).filter(r => parseInt(r.periodo_dias) === 30).map(mapPonto);
+
+  const ultimo7d  = serie7d[serie7d.length   - 1] ?? null;
+  const ultimo30d = serie30d[serie30d.length - 1] ?? null;
+
+  // Variação: compara a última semana (7d) com a proporção equivalente do mês (30d / 4)
+  const varVendas  = ultimo7d && ultimo30d && ultimo30d.vendas  > 0
+    ? Math.round((ultimo7d.vendas  / (ultimo30d.vendas  / 4) - 1) * 1000) / 10 : null;
+  const varReceita = ultimo7d && ultimo30d && ultimo30d.receita > 0
+    ? Math.round((ultimo7d.receita / (ultimo30d.receita / 4) - 1) * 1000) / 10 : null;
+
+  return {
+    serie_7d:         serie7d,
+    serie_30d:        serie30d,
+    ultimo_7d:        ultimo7d,
+    ultimo_30d:       ultimo30d,
+    variacao_vendas:  varVendas,
+    variacao_receita: varReceita,
+  };
+});
+
+/**
+ * GET /api/dashboard/reunioes-perda
+ * Taxa de reuniões canceladas ("perdidas") globais e por farmácia.
+ * Usado para gráfico de donut + ranking de perda por farmácia.
+ */
+app.get('/api/dashboard/reunioes-perda', { preHandler: autenticar }, async (request) => {
+  const filtroGid = request.user.isAdmin
+    ? sql``
+    : sql`AND (r.gestor_id = ${request.user.id} OR r.criado_por_id = ${request.user.id})`;
+
+  // Totais globais dos últimos 90 dias
+  const { rows: statsRows } = await db.execute(sql`
+    SELECT
+      COUNT(*)::int                                                      AS total,
+      COUNT(*) FILTER (WHERE r.status = 'realizada')::int               AS realizadas,
+      COUNT(*) FILTER (WHERE r.status = 'cancelada')::int               AS canceladas,
+      COUNT(*) FILTER (WHERE r.status = 'confirmada')::int              AS confirmadas,
+      COUNT(*) FILTER (WHERE r.status = 'agendada')::int                AS agendadas
+    FROM reunioes r
+    WHERE r.criado_em >= NOW() - INTERVAL '90 days'
+    ${filtroGid}
+  `);
+
+  // Breakdown por farmácia (top 10)
+  const { rows: porFarmaciaRows } = await db.execute(sql`
+    SELECT
+      f.nome                                                             AS farmacia_nome,
+      COUNT(*)::int                                                      AS total,
+      COUNT(*) FILTER (WHERE r.status = 'realizada')::int               AS realizadas,
+      COUNT(*) FILTER (WHERE r.status = 'cancelada')::int               AS canceladas,
+      COUNT(*) FILTER (WHERE r.status IN ('agendada','confirmada'))::int AS pendentes
+    FROM reunioes r
+    JOIN farmacias f ON f.id = r.farmacia_id
+    WHERE r.criado_em >= NOW() - INTERVAL '90 days'
+    ${filtroGid}
+    GROUP BY f.id, f.nome
+    ORDER BY total DESC
+    LIMIT 10
+  `);
+
+  // Evolução mensal das reuniões (últimos 6 meses)
+  const { rows: evolucaoRows } = await db.execute(sql`
+    SELECT
+      TO_CHAR(DATE_TRUNC('month', r.criado_em), 'YYYY-MM')             AS mes,
+      COUNT(*)::int                                                      AS total,
+      COUNT(*) FILTER (WHERE r.status = 'realizada')::int               AS realizadas,
+      COUNT(*) FILTER (WHERE r.status = 'cancelada')::int               AS canceladas
+    FROM reunioes r
+    WHERE r.criado_em >= NOW() - INTERVAL '6 months'
+    ${filtroGid}
+    GROUP BY DATE_TRUNC('month', r.criado_em)
+    ORDER BY mes ASC
+  `);
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const s       = (statsRows as any[])[0] || {};
+  const total    = parseInt(s.total     || 0);
+  const canceladas = parseInt(s.canceladas || 0);
+  const realizadas = parseInt(s.realizadas || 0);
+
+  return {
+    // KPIs globais
+    total,
+    realizadas,
+    canceladas,
+    confirmadas:      parseInt(s.confirmadas || 0),
+    agendadas:        parseInt(s.agendadas   || 0),
+    taxa_realizacao:  total > 0 ? Math.round(realizadas  / total * 1000) / 10 : 0,
+    taxa_perda:       total > 0 ? Math.round(canceladas  / total * 1000) / 10 : 0,
+
+    // Donut chart: distribuição de status
+    distribuicao: [
+      { status: 'Realizadas',  valor: realizadas,               cor: '#10B981' },
+      { status: 'Canceladas',  valor: canceladas,               cor: '#EF4444' },
+      { status: 'Confirmadas', valor: parseInt(s.confirmadas || 0), cor: '#3B82F6' },
+      { status: 'Agendadas',   valor: parseInt(s.agendadas   || 0), cor: '#F59E0B' },
+    ].filter(d => d.valor > 0),
+
+    // Ranking de perda por farmácia
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    por_farmacia: (porFarmaciaRows as any[]).map(r => ({
+      farmacia_nome: r.farmacia_nome,
+      total:         parseInt(r.total      || 0),
+      realizadas:    parseInt(r.realizadas || 0),
+      canceladas:    parseInt(r.canceladas || 0),
+      pendentes:     parseInt(r.pendentes  || 0),
+      taxa_perda:    parseInt(r.total || 0) > 0
+        ? Math.round(parseInt(r.canceladas || 0) / parseInt(r.total || 0) * 1000) / 10
+        : 0,
+    })),
+
+    // Evolução mensal para gráfico de linha
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    evolucao_mensal: (evolucaoRows as any[]).map(r => ({
+      mes:        r.mes,
+      total:      parseInt(r.total      || 0),
+      realizadas: parseInt(r.realizadas || 0),
+      canceladas: parseInt(r.canceladas || 0),
+      taxa_perda: parseInt(r.total || 0) > 0
+        ? Math.round(parseInt(r.canceladas || 0) / parseInt(r.total || 0) * 1000) / 10
+        : 0,
+    })),
+  };
 });
 
 // ── Tratamento global de erros ────────────────────────────────────────────────
