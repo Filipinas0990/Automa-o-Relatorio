@@ -3,16 +3,22 @@ import {
   serial, integer, varchar, text, boolean, timestamp, date, numeric,
 } from 'drizzle-orm/pg-core';
 
+// ── Re-export para conveniência ───────────────────────────────────────────────
+export type { InferSelectModel } from 'drizzle-orm';
+
 // ── Tabelas ───────────────────────────────────────────────────────────────────
 
 export const gestoresTrafego = pgTable('gestores_trafego', {
-  id:        serial('id').primaryKey(),
-  nome:      varchar('nome', { length: 120 }).notNull(),
-  email:     varchar('email', { length: 120 }).notNull().unique(),
-  senhaHash: varchar('senha_hash', { length: 255 }).notNull(),
-  isAdmin:   boolean('is_admin').default(false).notNull(),
-  ativo:     boolean('ativo').default(true),
-  criadoEm:  timestamp('criado_em', { withTimezone: true }).defaultNow(),
+  id:                   serial('id').primaryKey(),
+  nome:                 varchar('nome',       { length: 120 }).notNull(),
+  email:                varchar('email',      { length: 120 }).notNull().unique(),
+  senhaHash:            varchar('senha_hash', { length: 255 }).notNull(),
+  isAdmin:              boolean('is_admin').default(false).notNull(),
+  ativo:                boolean('ativo').default(true),
+  criadoEm:             timestamp('criado_em', { withTimezone: true }).defaultNow(),
+  // Google Calendar OAuth (adicionado pela migration 0003)
+  googleRefreshToken:   text('google_refresh_token'),
+  googleCalendarId:     varchar('google_calendar_id', { length: 255 }).default('primary'),
 });
 
 export const farmacias = pgTable('farmacias', {
@@ -96,8 +102,34 @@ export const vwEvolucaoSemanal = pgView('vw_evolucao_semanal', {
   nivelAlerta:       varchar('nivel_alerta', { length: 10 }),
 }).existing();
 
+// ── Reuniões com Gestores (adicionado pela migration 0003) ────────────────────
+
+export const reunioes = pgTable('reunioes', {
+  id:             serial('id').primaryKey(),
+  farmaciaId:     integer('farmacia_id').notNull().references(() => farmacias.id),
+  gestorId:       integer('gestor_id').references(() => gestoresTrafego.id),
+  criadoPorId:    integer('criado_por_id').references(() => gestoresTrafego.id),
+
+  titulo:         varchar('titulo',    { length: 200 }).notNull(),
+  descricao:      text('descricao'),
+  dataReuniao:    timestamp('data_reuniao', { withTimezone: true }).notNull(),
+  duracaoMinutos: integer('duracao_minutos').default(60),
+  local:          varchar('local',     { length: 300 }),
+  linkMeet:       varchar('link_meet', { length: 500 }),
+
+  // agendada | confirmada | realizada | cancelada
+  status:         varchar('status', { length: 20 }).default('agendada').notNull(),
+
+  googleEventId:  varchar('google_event_id', { length: 255 }),
+  observacoes:    text('observacoes'),
+
+  criadoEm:       timestamp('criado_em',    { withTimezone: true }).defaultNow(),
+  atualizadoEm:   timestamp('atualizado_em',{ withTimezone: true }).defaultNow(),
+});
+
 // ── Tipos inferidos do schema (usados pela API e pipeline) ────────────────────
 
-export type Gestor  = typeof gestoresTrafego.$inferSelect;
+export type Gestor   = typeof gestoresTrafego.$inferSelect;
 export type Farmacia = typeof farmacias.$inferSelect;
-export type Coleta  = typeof coletas.$inferSelect;
+export type Coleta   = typeof coletas.$inferSelect;
+export type Reuniao  = typeof reunioes.$inferSelect;

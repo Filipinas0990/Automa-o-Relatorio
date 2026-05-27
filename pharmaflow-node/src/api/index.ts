@@ -6,8 +6,9 @@ import bcrypt   from 'bcrypt';
 import jwt      from 'jsonwebtoken';
 import ExcelJS  from 'exceljs';
 import { eq, and, sql } from 'drizzle-orm';
+import { google } from 'googleapis';
 import { db } from '../database/db';
-import { gestoresTrafego, farmacias } from '../database/schema';
+import { gestoresTrafego, farmacias, reunioes } from '../database/schema';
 import type { Gestor } from '../database/schema';
 import { encrypt } from '../cripto';
 import { pipeline } from '../pipeline-fn';
@@ -753,6 +754,512 @@ app.get('/api/ranking/gestores/historico', { preHandler: autenticar }, async () 
     gestor_id: r.gestor_id, gestor_nome: r.gestor_nome, mes: r.mes,
     pontos: parseInt(r.pontos || 0), coletas_no_mes: parseInt(r.coletas_no_mes || 0),
   }));
+});
+
+// ── Google Calendar — helpers ─────────────────────────────────────────────────
+
+const GOOGLE_CLIENT_ID     = process.env.GOOGLE_CLIENT_ID     || '';
+const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
+const GOOGLE_REDIRECT_URI  = process.env.GOOGLE_REDIRECT_URI  ||
+  'https://api.pharmarelatorios.online/api/auth/google/callback';
+const GOOGLE_SCOPES        = ['https://www.googleapis.com/auth/calendar.events'];
+
+function makeOAuth2() {
+  return new google.auth.OAuth2(GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI);
+}
+
+/** Gera URL "Adicionar ao Google Calendar" sem precisar de OAuth (abre no navegador) */
+function googleCalendarLink(r: {
+  titulo: string;
+  descricao?: string | null;
+  dataReuniao: Date | string;
+  duracaoMinutos?: number | null;
+  local?: string | null;
+  linkMeet?: string | null;
+}): string {
+  const inicio = new Date(r.dataReuniao);
+  const fim    = new Date(inicio.getTime() + (r.duracaoMinutos ?? 60) * 60_000);
+  const fmt    = (d: Date) => d.toISOString().replace(/[-:.]/g, '').slice(0, 15) + 'Z';
+  const detalhes = [r.descricao, r.linkMeet ? `\nLink da reunião: ${r.linkMeet}` : '']
+    .filter(Boolean).join('');
+  const p = new URLSearchParams({
+    action:   'TEMPLATE',
+    text:     r.titulo,
+    dates:    `${fmt(inicio)}/${fmt(fim)}`,
+    details:  detalhes,
+    location: r.local ?? '',
+  });
+  return `https://calendar.google.com/calendar/render?${p.toString()}`;
+}
+
+/** Cria (ou atualiza) um evento no Google Calendar do usuário via API */
+async function syncGoogleEvent(gestorId: number, reuniaoId: number): Promise<string | null> {
+  if (!GOOGLE_CLIENT_ID) return null;
+
+  const [gestor] = await db.select().from(gestoresTrafego)
+    .where(eq(gestoresTrafego.id, gestorId));
+  if (!gestor?.googleRefreshToken) return null;
+
+  const [reuniao] = await db.select().from(reunioes).where(eq(reunioes.id, reuniaoId));
+  if (!reuniao) return null;
+
+  const auth = makeOAuth2();
+  auth.setCredentials({ refresh_token: gestor.googleRefreshToken });
+  const cal = google.calendar({ version: 'v3', auth });
+
+  const inicio = new Date(reuniao.dataReuniao);
+  const fim    = new Date(inicio.getTime() + (reuniao.duracaoMinutos ?? 60) * 60_000);
+  const calendarId = gestor.googleCalendarId ?? 'primary';
+
+  const eventBody = {
+    summary:     reuniao.titulo,
+    description: [reuniao.descricao, reuniao.linkMeet ? `Link: ${reuniao.linkMeet}` : '']
+      .filter(Boolean).join('\n'),
+    location:    reuniao.local ?? undefined,
+    start: { dateTime: inicio.toISOString() },
+    end:   { dateTime: fim.toISOString()    },
+    conferenceData: reuniao.linkMeet ? undefined : undefined, // Meet link opcional
+  };
+
+  let eventId = reuniao.googleEventId;
+  if (eventId) {
+    // Atualiza evento existente
+    try {
+      await cal.events.update({ calendarId, eventId, requestBody: eventBody });
+    } catch {
+      // Se não encontrar, cria novo
+      const res = await cal.events.insert({ calendarId, requestBody: eventBody });
+      eventId = res.data.id ?? null;
+    }
+  } else {
+    const res = await cal.events.insert({ calendarId, requestBody: eventBody });
+    eventId = res.data.id ?? null;
+  }
+
+  if (eventId) {
+    await db.update(reunioes)
+      .set({ googleEventId: eventId })
+      .where(eq(reunioes.id, reuniaoId));
+  }
+  return eventId;
+}
+
+/** Remove evento do Google Calendar */
+async function deleteGoogleEvent(gestorId: number, reuniaoId: number): Promise<void> {
+  if (!GOOGLE_CLIENT_ID) return;
+  const [gestor] = await db.select().from(gestoresTrafego).where(eq(gestoresTrafego.id, gestorId));
+  if (!gestor?.googleRefreshToken) return;
+  const [reuniao] = await db.select().from(reunioes).where(eq(reunioes.id, reuniaoId));
+  if (!reuniao?.googleEventId) return;
+
+  const auth = makeOAuth2();
+  auth.setCredentials({ refresh_token: gestor.googleRefreshToken });
+  const cal = google.calendar({ version: 'v3', auth });
+  try {
+    await cal.events.delete({
+      calendarId: gestor.googleCalendarId ?? 'primary',
+      eventId: reuniao.googleEventId,
+    });
+  } catch { /* ignora se já foi deletado */ }
+}
+
+// ── Google OAuth — connect / callback / status / disconnect ──────────────────
+
+/** Inicia o fluxo OAuth2 — redireciona o usuário para o Google */
+app.get('/api/auth/google', { preHandler: autenticar }, async (request, reply) => {
+  if (!GOOGLE_CLIENT_ID) {
+    return reply.code(503).send({ detail: 'Google Calendar não configurado no servidor.' });
+  }
+  // state = base64(userId) para recuperar o gestor no callback
+  const state = Buffer.from(String(request.user.id)).toString('base64url');
+  const url   = makeOAuth2().generateAuthUrl({
+    access_type: 'offline',
+    prompt:      'consent',        // força emissão de refresh_token sempre
+    scope:       GOOGLE_SCOPES,
+    state,
+  });
+  return reply.redirect(url);
+});
+
+/** Callback do Google após autorização */
+app.get('/api/auth/google/callback', async (request, reply) => {
+  if (!GOOGLE_CLIENT_ID) return reply.code(503).send({ detail: 'Google não configurado.' });
+
+  const q     = request.query as Record<string, string>;
+  const code  = q.code;
+  const state = q.state;
+  const error = q.error;
+
+  const frontendUrl = process.env.FRONTEND_URL || 'https://pharmarelatorios.online';
+
+  if (error || !code || !state) {
+    return reply.redirect(`${frontendUrl}/reunioes?google=error`);
+  }
+
+  let gestorId: number;
+  try {
+    gestorId = parseInt(Buffer.from(state, 'base64url').toString(), 10);
+    if (!gestorId || isNaN(gestorId)) throw new Error('state inválido');
+  } catch {
+    return reply.redirect(`${frontendUrl}/reunioes?google=error`);
+  }
+
+  try {
+    const auth = makeOAuth2();
+    const { tokens } = await auth.getToken(code);
+    const refreshToken = tokens.refresh_token;
+
+    if (!refreshToken) {
+      // Usuário já autorizou antes — refresh_token não é reenviado pelo Google
+      return reply.redirect(`${frontendUrl}/reunioes?google=already_connected`);
+    }
+
+    await db.update(gestoresTrafego)
+      .set({ googleRefreshToken: refreshToken })
+      .where(eq(gestoresTrafego.id, gestorId));
+
+    return reply.redirect(`${frontendUrl}/reunioes?google=connected`);
+  } catch (e) {
+    logger.error({ err: e }, 'Erro no callback Google OAuth');
+    return reply.redirect(`${frontendUrl}/reunioes?google=error`);
+  }
+});
+
+/** Status da conexão Google do gestor logado */
+app.get('/api/auth/google/status', { preHandler: autenticar }, async (request) => {
+  const [g] = await db.select({ googleRefreshToken: gestoresTrafego.googleRefreshToken })
+    .from(gestoresTrafego).where(eq(gestoresTrafego.id, request.user.id));
+  return { conectado: !!g?.googleRefreshToken, google_configurado: !!GOOGLE_CLIENT_ID };
+});
+
+/** Desconecta Google Calendar do gestor */
+app.delete('/api/auth/google', { preHandler: autenticar }, async (request) => {
+  await db.update(gestoresTrafego)
+    .set({ googleRefreshToken: null })
+    .where(eq(gestoresTrafego.id, request.user.id));
+  return { mensagem: 'Google Calendar desconectado.' };
+});
+
+// ── Reuniões CRUD ─────────────────────────────────────────────────────────────
+
+/** Stats rápidas (deve vir ANTES de /:id para não conflitar) */
+app.get('/api/reunioes/stats', { preHandler: autenticar }, async (request) => {
+  const filtroGid = request.user.isAdmin
+    ? null
+    : request.user.id;
+
+  const filtroSql = filtroGid
+    ? sql`AND (r.gestor_id = ${filtroGid} OR r.criado_por_id = ${filtroGid})`
+    : sql``;
+
+  const agora       = new Date();
+  const inicioMes   = new Date(agora.getFullYear(), agora.getMonth(), 1);
+
+  const { rows } = await db.execute(sql`
+    SELECT
+      COUNT(*) FILTER (WHERE r.data_reuniao >= ${inicioMes.toISOString()}
+                         AND r.status != 'cancelada')               AS reunioes_mes,
+      COUNT(*) FILTER (WHERE r.status = 'realizada')                AS total_realizadas,
+      COUNT(*) FILTER (WHERE r.data_reuniao >  NOW()
+                         AND r.status IN ('agendada','confirmada')) AS agendadas_futuras,
+      COUNT(*) FILTER (WHERE r.status = 'confirmada'
+                         AND r.data_reuniao > NOW())                AS confirmadas_futuras
+    FROM reunioes r ${filtroSql}
+  `);
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const s = (rows as any[])[0] || {};
+  return {
+    reunioes_mes:       parseInt(s.reunioes_mes       || 0),
+    total_realizadas:   parseInt(s.total_realizadas   || 0),
+    agendadas_futuras:  parseInt(s.agendadas_futuras  || 0),
+    confirmadas_futuras:parseInt(s.confirmadas_futuras|| 0),
+  };
+});
+
+/** Lista reuniões com filtros */
+app.get('/api/reunioes', { preHandler: autenticar }, async (request) => {
+  const q = request.query as Record<string, string | undefined>;
+  const { farmacia_id, status, mes } = q;
+
+  const condicoes: string[] = ['1=1'];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const params: any[] = [];
+
+  if (!request.user.isAdmin) {
+    params.push(request.user.id);
+    condicoes.push(`(r.gestor_id = $${params.length} OR r.criado_por_id = $${params.length})`);
+  }
+  if (farmacia_id) {
+    params.push(parseInt(farmacia_id));
+    condicoes.push(`r.farmacia_id = $${params.length}`);
+  }
+  if (status) {
+    params.push(status);
+    condicoes.push(`r.status = $${params.length}`);
+  }
+  if (mes) {
+    // formato YYYY-MM
+    params.push(`${mes}-01`);
+    condicoes.push(`DATE_TRUNC('month', r.data_reuniao) = DATE_TRUNC('month', $${params.length}::date)`);
+  }
+
+  const where = condicoes.join(' AND ');
+
+  const { rows } = await db.execute(sql`
+    SELECT r.*,
+           f.nome   AS farmacia_nome,
+           g.nome   AS gestor_nome,
+           cp.nome  AS criado_por_nome
+    FROM reunioes r
+    JOIN farmacias f       ON f.id  = r.farmacia_id
+    LEFT JOIN gestores_trafego g  ON g.id  = r.gestor_id
+    LEFT JOIN gestores_trafego cp ON cp.id = r.criado_por_id
+    WHERE ${sql.raw(where)}
+    ORDER BY r.data_reuniao DESC
+  `);
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return (rows as any[]).map(r => ({
+    ...r,
+    google_link: googleCalendarLink({
+      titulo:         r.titulo,
+      descricao:      r.descricao,
+      dataReuniao:    r.data_reuniao,
+      duracaoMinutos: r.duracao_minutos,
+      local:          r.local,
+      linkMeet:       r.link_meet,
+    }),
+  }));
+});
+
+/** Cria nova reunião */
+app.post('/api/reunioes', { preHandler: autenticar }, async (request, reply) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const b = request.body as any;
+  const { farmacia_id, gestor_id, titulo, descricao, data_reuniao,
+          duracao_minutos, local, link_meet } = b;
+
+  if (!farmacia_id || !titulo || !data_reuniao) {
+    return reply.code(400).send({ detail: 'farmacia_id, titulo e data_reuniao são obrigatórios.' });
+  }
+
+  // Gestor não-admin só pode criar para farmácias que ele gerencia
+  if (!request.user.isAdmin) {
+    const [f] = await db.select().from(farmacias).where(
+      and(eq(farmacias.id, parseInt(farmacia_id)), eq(farmacias.gestorId, request.user.id))
+    );
+    if (!f) return reply.code(403).send({ detail: 'Acesso negado a esta farmácia.' });
+  }
+
+  const [nova] = await db.insert(reunioes).values({
+    farmaciaId:     parseInt(farmacia_id),
+    gestorId:       gestor_id ? parseInt(gestor_id) : request.user.id,
+    criadoPorId:    request.user.id,
+    titulo:         String(titulo),
+    descricao:      descricao ?? null,
+    dataReuniao:    new Date(data_reuniao),
+    duracaoMinutos: duracao_minutos ? parseInt(duracao_minutos) : 60,
+    local:          local ?? null,
+    linkMeet:       link_meet ?? null,
+    status:         'agendada',
+  }).returning();
+
+  // Tenta sincronizar automaticamente se o gestor tiver o Google conectado
+  const targetGestorId = nova.gestorId ?? request.user.id;
+  const eventId = await syncGoogleEvent(targetGestorId, nova.id)
+    .catch(() => null);
+
+  return reply.code(201).send({
+    ...nova,
+    google_link: googleCalendarLink({
+      titulo: nova.titulo, descricao: nova.descricao,
+      dataReuniao: nova.dataReuniao, duracaoMinutos: nova.duracaoMinutos,
+      local: nova.local, linkMeet: nova.linkMeet,
+    }),
+    google_event_sincronizado: !!eventId,
+  });
+});
+
+/** Busca reunião por ID */
+app.get('/api/reunioes/:id', { preHandler: autenticar }, async (request, reply) => {
+  const id = parseInt((request.params as { id: string }).id, 10);
+
+  const { rows } = await db.execute(sql`
+    SELECT r.*,
+           f.nome   AS farmacia_nome,
+           g.nome   AS gestor_nome,
+           cp.nome  AS criado_por_nome
+    FROM reunioes r
+    JOIN farmacias f       ON f.id  = r.farmacia_id
+    LEFT JOIN gestores_trafego g  ON g.id  = r.gestor_id
+    LEFT JOIN gestores_trafego cp ON cp.id = r.criado_por_id
+    WHERE r.id = ${id}
+  `);
+
+  if (!rows.length) return reply.code(404).send({ detail: 'Reunião não encontrada.' });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const r = rows[0] as any;
+
+  // Gestor não-admin só acessa se for o gestor ou o criador
+  if (!request.user.isAdmin &&
+      r.gestor_id !== request.user.id &&
+      r.criado_por_id !== request.user.id) {
+    return reply.code(403).send({ detail: 'Acesso negado.' });
+  }
+
+  return {
+    ...r,
+    google_link: googleCalendarLink({
+      titulo: r.titulo, descricao: r.descricao,
+      dataReuniao: r.data_reuniao, duracaoMinutos: r.duracao_minutos,
+      local: r.local, linkMeet: r.link_meet,
+    }),
+  };
+});
+
+/** Atualiza dados da reunião */
+app.put('/api/reunioes/:id', { preHandler: autenticar }, async (request, reply) => {
+  const id = parseInt((request.params as { id: string }).id, 10);
+  const [existe] = await db.select().from(reunioes).where(eq(reunioes.id, id));
+  if (!existe) return reply.code(404).send({ detail: 'Reunião não encontrada.' });
+
+  if (!request.user.isAdmin &&
+      existe.gestorId    !== request.user.id &&
+      existe.criadoPorId !== request.user.id) {
+    return reply.code(403).send({ detail: 'Acesso negado.' });
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const b = request.body as any;
+  const dados: Partial<typeof reunioes.$inferInsert> = {};
+  if (b.titulo          !== undefined) dados.titulo         = b.titulo;
+  if (b.descricao       !== undefined) dados.descricao      = b.descricao;
+  if (b.data_reuniao    !== undefined) dados.dataReuniao    = new Date(b.data_reuniao);
+  if (b.duracao_minutos !== undefined) dados.duracaoMinutos = parseInt(b.duracao_minutos);
+  if (b.local           !== undefined) dados.local          = b.local;
+  if (b.link_meet       !== undefined) dados.linkMeet       = b.link_meet;
+  if (b.observacoes     !== undefined) dados.observacoes    = b.observacoes;
+  if (b.gestor_id       !== undefined) dados.gestorId       = parseInt(b.gestor_id);
+
+  if (Object.keys(dados).length) {
+    await db.update(reunioes).set(dados).where(eq(reunioes.id, id));
+    // Re-sincroniza com Google Calendar se conectado
+    const targetGestor = dados.gestorId ?? existe.gestorId ?? request.user.id;
+    await syncGoogleEvent(targetGestor, id).catch(() => null);
+  }
+
+  const [atualizada] = await db.select().from(reunioes).where(eq(reunioes.id, id));
+  return {
+    ...atualizada,
+    google_link: googleCalendarLink({
+      titulo: atualizada.titulo, descricao: atualizada.descricao,
+      dataReuniao: atualizada.dataReuniao, duracaoMinutos: atualizada.duracaoMinutos,
+      local: atualizada.local, linkMeet: atualizada.linkMeet,
+    }),
+  };
+});
+
+/** Confirma reunião (agendada → confirmada) */
+app.patch('/api/reunioes/:id/confirmar', { preHandler: autenticar }, async (request, reply) => {
+  const id = parseInt((request.params as { id: string }).id, 10);
+  const [existe] = await db.select().from(reunioes).where(eq(reunioes.id, id));
+  if (!existe) return reply.code(404).send({ detail: 'Reunião não encontrada.' });
+  if (existe.status === 'cancelada') return reply.code(400).send({ detail: 'Reunião cancelada não pode ser confirmada.' });
+
+  if (!request.user.isAdmin &&
+      existe.gestorId    !== request.user.id &&
+      existe.criadoPorId !== request.user.id) {
+    return reply.code(403).send({ detail: 'Acesso negado.' });
+  }
+
+  await db.update(reunioes).set({ status: 'confirmada' }).where(eq(reunioes.id, id));
+  await syncGoogleEvent(existe.gestorId ?? request.user.id, id).catch(() => null);
+
+  return { id, status: 'confirmada', mensagem: 'Reunião confirmada.' };
+});
+
+/** Marca reunião como realizada */
+app.patch('/api/reunioes/:id/realizar', { preHandler: autenticar }, async (request, reply) => {
+  const id = parseInt((request.params as { id: string }).id, 10);
+  const [existe] = await db.select().from(reunioes).where(eq(reunioes.id, id));
+  if (!existe) return reply.code(404).send({ detail: 'Reunião não encontrada.' });
+  if (existe.status === 'cancelada') return reply.code(400).send({ detail: 'Reunião cancelada não pode ser marcada como realizada.' });
+
+  if (!request.user.isAdmin &&
+      existe.gestorId    !== request.user.id &&
+      existe.criadoPorId !== request.user.id) {
+    return reply.code(403).send({ detail: 'Acesso negado.' });
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const b = request.body as any;
+  await db.update(reunioes).set({
+    status:      'realizada',
+    observacoes: b?.observacoes ?? existe.observacoes,
+  }).where(eq(reunioes.id, id));
+
+  return { id, status: 'realizada', mensagem: 'Reunião marcada como realizada.' };
+});
+
+/** Cancela reunião */
+app.patch('/api/reunioes/:id/cancelar', { preHandler: autenticar }, async (request, reply) => {
+  const id = parseInt((request.params as { id: string }).id, 10);
+  const [existe] = await db.select().from(reunioes).where(eq(reunioes.id, id));
+  if (!existe) return reply.code(404).send({ detail: 'Reunião não encontrada.' });
+  if (existe.status === 'realizada') return reply.code(400).send({ detail: 'Reunião realizada não pode ser cancelada.' });
+
+  if (!request.user.isAdmin &&
+      existe.gestorId    !== request.user.id &&
+      existe.criadoPorId !== request.user.id) {
+    return reply.code(403).send({ detail: 'Acesso negado.' });
+  }
+
+  await db.update(reunioes).set({ status: 'cancelada' }).where(eq(reunioes.id, id));
+  // Remove do Google Calendar se existir
+  await deleteGoogleEvent(existe.gestorId ?? request.user.id, id).catch(() => null);
+
+  return { id, status: 'cancelada', mensagem: 'Reunião cancelada.' };
+});
+
+/** Gera link direto de "Adicionar ao Google Calendar" para uma reunião */
+app.get('/api/reunioes/:id/google-link', { preHandler: autenticar }, async (request, reply) => {
+  const id = parseInt((request.params as { id: string }).id, 10);
+  const [r] = await db.select().from(reunioes).where(eq(reunioes.id, id));
+  if (!r) return reply.code(404).send({ detail: 'Reunião não encontrada.' });
+
+  return {
+    link: googleCalendarLink({
+      titulo: r.titulo, descricao: r.descricao,
+      dataReuniao: r.dataReuniao, duracaoMinutos: r.duracaoMinutos,
+      local: r.local, linkMeet: r.linkMeet,
+    }),
+  };
+});
+
+/** Força sincronização manual de uma reunião com o Google Calendar do gestor */
+app.post('/api/reunioes/:id/sync-google', { preHandler: autenticar }, async (request, reply) => {
+  const id = parseInt((request.params as { id: string }).id, 10);
+  const [r] = await db.select().from(reunioes).where(eq(reunioes.id, id));
+  if (!r) return reply.code(404).send({ detail: 'Reunião não encontrada.' });
+
+  if (!GOOGLE_CLIENT_ID) {
+    return reply.code(503).send({ detail: 'Google Calendar não configurado no servidor.' });
+  }
+
+  const targetGestorId = r.gestorId ?? request.user.id;
+  try {
+    const eventId = await syncGoogleEvent(targetGestorId, id);
+    if (!eventId) {
+      return reply.code(424).send({
+        detail: 'Google Calendar não conectado. Acesse /api/auth/google para autorizar.',
+      });
+    }
+    return { google_event_id: eventId, mensagem: 'Evento sincronizado com sucesso.' };
+  } catch (e) {
+    logger.error({ err: e }, 'Erro ao sincronizar com Google Calendar');
+    return reply.code(502).send({ detail: 'Erro ao comunicar com o Google Calendar.' });
+  }
 });
 
 // ── Tratamento global de erros ────────────────────────────────────────────────

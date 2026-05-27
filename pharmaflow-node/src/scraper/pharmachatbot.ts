@@ -489,11 +489,25 @@ function mapearCanais(canais: Record<string, number>): { google: number; faceboo
 
 export async function coletarFarmacia(farmacia: FarmaciaParaColeta & { dias?: number }): Promise<DadosFarmacia> {
   const { nome, urlBase, email, senha, dias = 7 } = farmacia;
-  const hoje  = new Date();
-  const start = new Date(hoje.getTime() - (dias - 1) * 86400000);
-  const fmt   = (d: Date) => d.toISOString().slice(0, 10);
-  const inicio = fmt(start);
-  const fim    = fmt(hoje);
+  const hoje = new Date();
+  const fmt  = (d: Date) => d.toISOString().slice(0, 10);
+
+  let inicio: string;
+  let fim: string;
+
+  if (dias === 30) {
+    // Mês anterior completo: 01/MM-1 → último dia de MM-1
+    // Ex: se hoje é 27/05/2026 → 01/04/2026 → 30/04/2026
+    const primeiroDia = new Date(hoje.getFullYear(), hoje.getMonth() - 1, 1);
+    const ultimoDia   = new Date(hoje.getFullYear(), hoje.getMonth(), 0);
+    inicio = fmt(primeiroDia);
+    fim    = fmt(ultimoDia);
+  } else {
+    // 7 e 15 dias: janela rolante até hoje
+    const start = new Date(hoje.getTime() - (dias - 1) * 86400000);
+    inicio = fmt(start);
+    fim    = fmt(hoje);
+  }
 
   const browser = await chromium.launch({ headless: true, args: BROWSER_ARGS });
   try {
