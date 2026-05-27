@@ -195,15 +195,37 @@ app.delete('/api/gestores/:id', { preHandler: [autenticar, apenasAdmin] }, async
 
 app.post('/api/farmacias', { preHandler: [autenticar, apenasAdmin] }, async (request, reply) => {
   const body = request.body as Record<string, unknown>;
-  const { nome, url_base, email, senha, gestor_id } = body as {
-    nome: string; url_base: string; email: string; senha: string; gestor_id?: number;
+  const { nome, url_base, email, senha, gestor_id, tem_chatbot } = body as {
+    nome: string; url_base?: string; email?: string; senha?: string;
+    gestor_id?: number; tem_chatbot?: boolean;
   };
+
+  if (!nome) return reply.code(400).send({ detail: 'Campo "nome" é obrigatório.' });
+
+  const temChatbotBool = tem_chatbot !== false; // default true
+
+  // Campos de chatbot só são obrigatórios quando tem_chatbot = true
+  if (temChatbotBool && (!url_base || !email || !senha)) {
+    return reply.code(400).send({
+      detail: 'Para farmácias com chatbot, os campos url_base, email e senha são obrigatórios.',
+    });
+  }
+
   const [f] = await db.insert(farmacias).values({
-    nome, urlBase: url_base, email,
-    senhaEnc: encrypt(senha),
-    gestorId: gestor_id || null,
+    nome,
+    urlBase:    temChatbotBool ? url_base! : null,
+    email:      temChatbotBool ? email!    : null,
+    senhaEnc:   temChatbotBool && senha ? encrypt(senha) : null,
+    gestorId:   gestor_id || null,
+    temChatbot: temChatbotBool,
   }).returning();
-  return reply.code(201).send({ id: f.id, nome: f.nome, gestor_id: f.gestorId });
+
+  return reply.code(201).send({
+    id:          f.id,
+    nome:        f.nome,
+    gestor_id:   f.gestorId,
+    tem_chatbot: f.temChatbot,
+  });
 });
 
 app.put('/api/farmacias/:id', { preHandler: [autenticar, apenasAdmin] }, async (request, reply) => {
@@ -219,6 +241,7 @@ app.put('/api/farmacias/:id', { preHandler: [autenticar, apenasAdmin] }, async (
   if (b.email             !== undefined) dados.email           = b.email;
   if (b.gestor_id         !== undefined) dados.gestorId        = b.gestor_id;
   if (b.ativa             !== undefined) dados.ativa           = b.ativa;
+  if (b.tem_chatbot       !== undefined) dados.temChatbot      = b.tem_chatbot;
   if (b.meta_vendas       !== undefined) dados.metaVendas      = b.meta_vendas;
   if (b.meta_receita      !== undefined) dados.metaReceita     = b.meta_receita;
   if (b.meta_leads_google !== undefined) dados.metaLeadsGoogle = b.meta_leads_google;
@@ -373,7 +396,7 @@ app.get('/api/farmacias', { preHandler: autenticar }, async (request) => {
   const dias      = parseInt(q.dias || '7', 10);
 
   const { rows } = await db.execute(sql`
-    SELECT f.id AS farmacia_id, f.nome AS farmacia, f.gestor_id, f.ativa,
+    SELECT f.id AS farmacia_id, f.nome AS farmacia, f.gestor_id, f.ativa, f.tem_chatbot,
            f.meta_vendas, f.meta_receita, f.meta_leads_google, f.meta_leads_meta,
            COALESCE(r.nivel_alerta, 'verde')    AS nivel_alerta,
            COALESCE(r.receita_total, 0)         AS receita_total,
@@ -457,6 +480,7 @@ app.get('/api/farmacias', { preHandler: autenticar }, async (request) => {
       atingiu_meta: atingiuMeta,
       percentual_meta_receita: pctMetaReceita,
       percentual_meta_vendas:  pctMetaVendas,
+      tem_chatbot: r.tem_chatbot !== false,
       canais: Object.entries(canaisPorFarmacia[fid] || {})
         .sort((a, b) => b[1].atendimentos - a[1].atendimentos)
         .map(([nome, d]) => ({

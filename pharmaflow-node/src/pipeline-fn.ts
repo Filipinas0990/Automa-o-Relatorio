@@ -10,13 +10,20 @@ import type { DadosFarmacia, FarmaciaParaColeta } from './types';
 
 async function carregarFarmacias(): Promise<(FarmaciaParaColeta & { dias?: number })[]> {
   const rows = await db.select().from(farmacias).where(
-    and(eq(farmacias.ativa, true), isNotNull(farmacias.senhaEnc))
+    and(
+      eq(farmacias.ativa, true),
+      eq(farmacias.temChatbot, true),   // pula farmácias sem chatbot
+      isNotNull(farmacias.senhaEnc),
+    )
   );
   return rows.map(f => {
     let senha = '';
     try { if (f.senhaEnc) senha = decrypt(f.senhaEnc); } catch { /* sem senha */ }
     return {
-      id: f.id, nome: f.nome, urlBase: f.urlBase, email: f.email, senha,
+      id: f.id, nome: f.nome,
+      urlBase: f.urlBase ?? '',   // sempre não-null para farmácias com chatbot
+      email:   f.email   ?? '',
+      senha,
       metaLeadsGoogle: f.metaLeadsGoogle ?? null,
       metaLeadsMeta:   f.metaLeadsMeta   ?? null,
     };
