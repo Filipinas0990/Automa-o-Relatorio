@@ -865,16 +865,51 @@ async function deleteGoogleEvent(gestorId: number, reuniaoId: number): Promise<v
 
 // ── Google OAuth — connect / callback / status / disconnect ──────────────────
 
-/** Inicia o fluxo OAuth2 — redireciona o usuário para o Google */
-app.get('/api/auth/google', { preHandler: autenticar }, async (request, reply) => {
+/** Inicia o fluxo OAuth2 — dois modos:
+ *  1. GET /api/auth/google/url  (fetch com Bearer header) → retorna { url }
+ *  2. GET /api/auth/google?token=JWT  (window.location.href) → redireciona direto
+ */
+
+// Modo 1 — retorna a URL como JSON (frontend faz window.location.href = url)
+app.get('/api/auth/google/url', { preHandler: autenticar }, async (request, reply) => {
   if (!GOOGLE_CLIENT_ID) {
     return reply.code(503).send({ detail: 'Google Calendar não configurado no servidor.' });
   }
-  // state = base64(userId) para recuperar o gestor no callback
   const state = Buffer.from(String(request.user.id)).toString('base64url');
   const url   = makeOAuth2().generateAuthUrl({
     access_type: 'offline',
-    prompt:      'consent',        // força emissão de refresh_token sempre
+    prompt:      'consent',
+    scope:       GOOGLE_SCOPES,
+    state,
+  });
+  return { url };
+});
+
+// Modo 2 — redirect direto (usado via window.location.href com ?token=)
+app.get('/api/auth/google', async (request, reply) => {
+  if (!GOOGLE_CLIENT_ID) {
+    return reply.code(503).send({ detail: 'Google Calendar não configurado no servidor.' });
+  }
+
+  // Aceita token via query param (necessário para window.location.href)
+  const q     = request.query as Record<string, string>;
+  const token = q.token || (request.headers.authorization?.replace('Bearer ', '') ?? '');
+
+  if (!token) return reply.code(401).send({ detail: 'Token não fornecido.' });
+
+  let gestorId: number;
+  try {
+    const payload = jwt.verify(token, JWT_SECRET) as { sub: string };
+    gestorId = parseInt(payload.sub, 10);
+    if (!gestorId) throw new Error('id inválido');
+  } catch {
+    return reply.code(401).send({ detail: 'Token inválido.' });
+  }
+
+  const state = Buffer.from(String(gestorId)).toString('base64url');
+  const url   = makeOAuth2().generateAuthUrl({
+    access_type: 'offline',
+    prompt:      'consent',
     scope:       GOOGLE_SCOPES,
     state,
   });
