@@ -1017,29 +1017,22 @@ app.get('/api/reunioes', { preHandler: autenticar }, async (request) => {
   const q = request.query as Record<string, string | undefined>;
   const { farmacia_id, status, mes } = q;
 
-  const condicoes: string[] = ['1=1'];
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const params: any[] = [];
+  // Filtros como sql fragments com parâmetros seguros (evita o bug do params[])
+  const userFilter = !request.user.isAdmin
+    ? sql`AND (r.gestor_id = ${request.user.id} OR r.criado_por_id = ${request.user.id})`
+    : sql``;
 
-  if (!request.user.isAdmin) {
-    params.push(request.user.id);
-    condicoes.push(`(r.gestor_id = $${params.length} OR r.criado_por_id = $${params.length})`);
-  }
-  if (farmacia_id) {
-    params.push(parseInt(farmacia_id));
-    condicoes.push(`r.farmacia_id = $${params.length}`);
-  }
-  if (status) {
-    params.push(status);
-    condicoes.push(`r.status = $${params.length}`);
-  }
-  if (mes) {
-    // formato YYYY-MM
-    params.push(`${mes}-01`);
-    condicoes.push(`DATE_TRUNC('month', r.data_reuniao) = DATE_TRUNC('month', $${params.length}::date)`);
-  }
+  const farmaciaFilter = farmacia_id
+    ? sql`AND r.farmacia_id = ${parseInt(farmacia_id)}`
+    : sql``;
 
-  const where = condicoes.join(' AND ');
+  const statusFilter = status
+    ? sql`AND r.status = ${status}`
+    : sql``;
+
+  const mesFilter = mes
+    ? sql`AND DATE_TRUNC('month', r.data_reuniao) = DATE_TRUNC('month', ${mes + '-01'}::date)`
+    : sql``;
 
   const { rows } = await db.execute(sql`
     SELECT r.*,
@@ -1050,7 +1043,11 @@ app.get('/api/reunioes', { preHandler: autenticar }, async (request) => {
     JOIN farmacias f       ON f.id  = r.farmacia_id
     LEFT JOIN gestores_trafego g  ON g.id  = r.gestor_id
     LEFT JOIN gestores_trafego cp ON cp.id = r.criado_por_id
-    WHERE ${sql.raw(where)}
+    WHERE 1=1
+    ${userFilter}
+    ${farmaciaFilter}
+    ${statusFilter}
+    ${mesFilter}
     ORDER BY r.data_reuniao DESC
   `);
 
