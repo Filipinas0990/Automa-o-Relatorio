@@ -8,12 +8,13 @@ import { calcularScore }             from './processor/score';
 import { decrypt }                   from './cripto';
 import type { DadosFarmacia, FarmaciaParaColeta } from './types';
 
-async function carregarFarmacias(): Promise<(FarmaciaParaColeta & { dias?: number })[]> {
+async function carregarFarmacias(gestorId?: number): Promise<(FarmaciaParaColeta & { dias?: number })[]> {
   const rows = await db.select().from(farmacias).where(
     and(
       eq(farmacias.ativa, true),
       eq(farmacias.temChatbot, true),   // pula farmácias sem chatbot
       isNotNull(farmacias.senhaEnc),
+      ...(gestorId ? [eq(farmacias.gestorId, gestorId)] : []),
     )
   );
   return rows.map(f => {
@@ -28,6 +29,18 @@ async function carregarFarmacias(): Promise<(FarmaciaParaColeta & { dias?: numbe
       metaLeadsMeta:   f.metaLeadsMeta   ?? null,
     };
   });
+}
+
+export interface PipelineOpcoes {
+  periodos?: number[];  // default [7, 15, 30]
+  gestorId?: number;    // default: todas as farmácias
+}
+
+// Retorna quantas farmácias seriam coletadas sem disparar nada
+export async function previewPipeline(opcoes: PipelineOpcoes = {}): Promise<{ farmaciasTotais: number; nomes: string[]; periodos: number[] }> {
+  const periodos = opcoes.periodos?.length ? opcoes.periodos : [7, 15, 30];
+  const farms = await carregarFarmacias(opcoes.gestorId);
+  return { farmaciasTotais: farms.length, nomes: farms.map(f => f.nome), periodos };
 }
 
 async function coletaAnterior(farmaciaId: number, periodoDias: number) {
@@ -144,14 +157,13 @@ async function salvarResultados(dadosColetados: DadosFarmacia[], periodoDias: nu
   }
 }
 
-export async function pipeline(): Promise<void> {
-  logger.info('Pipeline iniciado');
+export async function pipeline(opcoes: PipelineOpcoes = {}): Promise<{ totalSucessos: number; totalErros: number; farmaciasTotais: number }> {
+  const periodos    = opcoes.periodos?.length ? opcoes.periodos : [7, 15, 30];
+  const farmsAtivas = await carregarFarmacias(opcoes.gestorId);
 
-  const farmsAtivas = await carregarFarmacias();
-  logger.info({ total: farmsAtivas.length }, 'Farmácias ativas carregadas');
+  logger.info({ total: farmsAtivas.length, periodos, gestorId: opcoes.gestorId }, 'Pipeline iniciado');
 
   const paralelo = parseInt(process.env.PARALELO_MAX || '1', 10);
-  const periodos = [7, 15, 30];
 
   let totalSucessos = 0;
   let totalErros    = 0;
@@ -168,4 +180,5 @@ export async function pipeline(): Promise<void> {
   }
 
   logger.info({ totalSucessos, totalErros }, 'Pipeline concluído');
+  return { totalSucessos, totalErros, farmaciasTotais: farmsAtivas.length };
 }

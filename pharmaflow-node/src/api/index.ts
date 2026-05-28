@@ -11,7 +11,7 @@ import { db } from '../database/db';
 import { gestoresTrafego, farmacias, reunioes, agendaBloqueios } from '../database/schema';
 import type { Gestor } from '../database/schema';
 import { encrypt } from '../cripto';
-import { pipeline } from '../pipeline-fn';
+import { pipeline, previewPipeline } from '../pipeline-fn';
 import { logger } from '../logger';
 
 // ── Module augmentation — adiciona `user` ao FastifyRequest ───────────────────
@@ -674,12 +674,29 @@ app.get('/api/relatorios/:periodo/csv', { preHandler: autenticar }, async (reque
 
 let pipelineRodando = false;
 
-app.post('/api/rodar-agora', { preHandler: [autenticar, apenasAdmin] }, async (_request, reply) => {
-  if (pipelineRodando) return { status: 'ja_rodando', mensagem: 'Pipeline já está em execução' };
+// Preview: mostra quantas farmácias e quais períodos seriam coletados
+app.get('/api/rodar-agora/preview', { preHandler: [autenticar, apenasAdmin] }, async (request) => {
+  const q        = request.query as Record<string, string | undefined>;
+  const gestorId = q.gestor_id ? parseInt(q.gestor_id) : undefined;
+  const periodos = q.periodos
+    ? q.periodos.split(',').map(Number).filter(n => [7, 15, 30].includes(n))
+    : [7, 15, 30];
+  return previewPipeline({ periodos, gestorId });
+});
+
+app.post('/api/rodar-agora', { preHandler: [autenticar, apenasAdmin] }, async (request, reply) => {
+  if (pipelineRodando) return reply.code(409).send({ status: 'ja_rodando', mensagem: 'Pipeline já está em execução' });
+
+  const body     = (request.body as Record<string, unknown>) || {};
+  const periodos = Array.isArray(body.periodos) && body.periodos.length
+    ? (body.periodos as number[]).filter(n => [7, 15, 30].includes(n))
+    : [7, 15, 30];
+  const gestorId = body.gestor_id ? parseInt(String(body.gestor_id)) : undefined;
+
   pipelineRodando = true;
-  reply.send({ status: 'iniciado', mensagem: 'Pipeline iniciado em background' });
+  reply.send({ status: 'iniciado', mensagem: 'Pipeline iniciado em background', periodos, gestor_id: gestorId ?? null });
   setImmediate(async () => {
-    try { await pipeline(); }
+    try { await pipeline({ periodos, gestorId }); }
     catch (e) { logger.error({ err: e }, 'Erro no pipeline manual'); }
     finally { pipelineRodando = false; }
   });
