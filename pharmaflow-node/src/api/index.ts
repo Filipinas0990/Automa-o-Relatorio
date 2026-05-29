@@ -66,7 +66,8 @@ function criarToken(gestorId: number, nome: string, isAdmin: boolean): string {
 
 async function autenticar(request: FastifyRequest, reply: FastifyReply): Promise<void> {
   const auth  = request.headers.authorization || '';
-  const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
+  const q     = request.query as Record<string, string>;
+  const token = auth.startsWith('Bearer ') ? auth.slice(7) : (q.token || null);
   if (!token) { reply.code(401).send({ detail: 'Token não fornecido' }); return; }
   try {
     const payload = jwt.verify(token, JWT_SECRET) as { sub: string; nome: string; is_admin: boolean };
