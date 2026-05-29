@@ -727,40 +727,48 @@ app.get('/api/status', { logLevel: 'silent' }, async () => ({
  * Quando o pipeline termina, recebe `event: done\ndata: {}\n\n` e a conexão fecha.
  * Logs anteriores (buffer) são enviados imediatamente ao conectar (para reconexão).
  */
-app.get('/api/pipeline/logs/stream', { preHandler: autenticar, logLevel: 'silent' }, async (request, reply) => {
-  reply.raw.writeHead(200, {
-    'Content-Type':      'text/event-stream',
-    'Cache-Control':     'no-cache',
-    'Connection':        'keep-alive',
-    'X-Accel-Buffering': 'no',   // desativa buffer do Nginx para SSE funcionar
-  });
+app.get('/api/pipeline/logs/stream', { preHandler: autenticar, logLevel: 'silent' }, (request, reply) => {
+  // hijack: impede Fastify de tentar enviar resposta própria após o handler
+  reply.hijack();
 
-  // Heartbeat a cada 25s para manter a conexão viva através de proxies
-  const heartbeat = setInterval(() => {
-    if (!reply.raw.destroyed) reply.raw.write(': ping\n\n');
-  }, 25_000);
+  const res = reply.raw;
+  res.writeHead(200, {
+    'Content-Type':      'text/event-stream',
+    'Cache-Control':     'no-cache, no-transform',
+    'Connection':        'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  // flush imediato dos headers — essencial para SSE através de Nginx
+  res.flushHeaders?.();
+
+  function escrever(chunk: string) {
+    if (!res.destroyed && !res.writableEnded) res.write(chunk);
+  }
+
+  // Heartbeat a cada 20s para manter a conexão viva através de proxies
+  const heartbeat = setInterval(() => escrever(': ping\n\n'), 20_000);
 
   function enviar(entry: LogEntry) {
-    if (!reply.raw.destroyed) reply.raw.write(`data: ${JSON.stringify(entry)}\n\n`);
+    escrever(`data: ${JSON.stringify(entry)}\n\n`);
   }
 
   function encerrar() {
-    if (!reply.raw.destroyed) {
-      reply.raw.write('event: done\ndata: {}\n\n');
-      reply.raw.end();
-    }
     clearInterval(heartbeat);
     logStreamEmitter.off('log',  enviar);
     logStreamEmitter.off('done', encerrar);
+    if (!res.destroyed && !res.writableEnded) {
+      res.write('event: done\ndata: {}\n\n');
+      res.end();
+    }
   }
 
   // Envia buffer imediatamente (quem conecta tarde ainda vê o histórico)
   for (const entry of logStreamBuffer) enviar(entry);
 
-  // Se o pipeline já terminou, fecha imediatamente
-  if (!pipelineRodando) { encerrar(); return; }
+  // Se o pipeline já não está rodando E o buffer está vazio → fecha
+  if (!pipelineRodando && logStreamBuffer.length === 0) { encerrar(); return; }
 
-  logStreamEmitter.on('log',  enviar);
+  logStreamEmitter.on('log',   enviar);
   logStreamEmitter.once('done', encerrar);
 
   request.raw.once('close', () => {
@@ -768,9 +776,6 @@ app.get('/api/pipeline/logs/stream', { preHandler: autenticar, logLevel: 'silent
     logStreamEmitter.off('log',  enviar);
     logStreamEmitter.off('done', encerrar);
   });
-
-  // Mantém a promise ativa enquanto o cliente estiver conectado
-  await new Promise<void>(resolve => request.raw.once('close', resolve));
 });
 
 // ── Ranking de Gestores ───────────────────────────────────────────────────────
