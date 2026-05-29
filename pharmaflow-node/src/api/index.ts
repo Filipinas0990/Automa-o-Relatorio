@@ -12,6 +12,9 @@ import { gestoresTrafego, farmacias, reunioes, agendaBloqueios } from '../databa
 import type { Gestor } from '../database/schema';
 import { encrypt } from '../cripto';
 import { pipeline, previewPipeline } from '../pipeline-fn';
+import type { PipelineResultado } from '../pipeline-fn';
+import { startPipelineStream, stopPipelineStream, logStreamEmitter, logStreamBuffer } from '../log-stream';
+import type { LogEntry } from '../log-stream';
 import { logger } from '../logger';
 
 // ── Module augmentation — adiciona `user` ao FastifyRequest ───────────────────
@@ -672,7 +675,8 @@ app.get('/api/relatorios/:periodo/csv', { preHandler: autenticar }, async (reque
 
 // ── Pipeline manual ───────────────────────────────────────────────────────────
 
-let pipelineRodando = false;
+let pipelineRodando     = false;
+let ultimoResultado: (PipelineResultado & { executado_em: string }) | null = null;
 
 // Preview: mostra quantas farmácias e quais períodos seriam coletados
 app.get('/api/rodar-agora/preview', { preHandler: [autenticar, apenasAdmin] }, async (request) => {
@@ -694,18 +698,78 @@ app.post('/api/rodar-agora', { preHandler: [autenticar, apenasAdmin] }, async (r
   const gestorId = body.gestor_id ? parseInt(String(body.gestor_id)) : undefined;
 
   pipelineRodando = true;
+  startPipelineStream();
   reply.send({ status: 'iniciado', mensagem: 'Pipeline iniciado em background', periodos, gestor_id: gestorId ?? null });
   setImmediate(async () => {
-    try { await pipeline({ periodos, gestorId }); }
+    try {
+      const resultado = await pipeline({ periodos, gestorId });
+      ultimoResultado = { ...resultado, executado_em: new Date().toISOString() };
+    }
     catch (e) { logger.error({ err: e }, 'Erro no pipeline manual'); }
-    finally { pipelineRodando = false; }
+    finally {
+      pipelineRodando = false;
+      stopPipelineStream();
+    }
   });
 });
 
 app.get('/api/status', { logLevel: 'silent' }, async () => ({
   pipeline_rodando: pipelineRodando,
-  timestamp: new Date().toISOString(),
+  timestamp:        new Date().toISOString(),
+  ultimo_resultado: ultimoResultado,
 }));
+
+/**
+ * SSE — espelha os logs do pipeline em tempo real.
+ * O cliente conecta e recebe cada LogEntry como `data: <json>\n\n`.
+ * Quando o pipeline termina, recebe `event: done\ndata: {}\n\n` e a conexão fecha.
+ * Logs anteriores (buffer) são enviados imediatamente ao conectar (para reconexão).
+ */
+app.get('/api/pipeline/logs/stream', { preHandler: autenticar, logLevel: 'silent' }, async (request, reply) => {
+  reply.raw.writeHead(200, {
+    'Content-Type':      'text/event-stream',
+    'Cache-Control':     'no-cache',
+    'Connection':        'keep-alive',
+    'X-Accel-Buffering': 'no',   // desativa buffer do Nginx para SSE funcionar
+  });
+
+  // Heartbeat a cada 25s para manter a conexão viva através de proxies
+  const heartbeat = setInterval(() => {
+    if (!reply.raw.destroyed) reply.raw.write(': ping\n\n');
+  }, 25_000);
+
+  function enviar(entry: LogEntry) {
+    if (!reply.raw.destroyed) reply.raw.write(`data: ${JSON.stringify(entry)}\n\n`);
+  }
+
+  function encerrar() {
+    if (!reply.raw.destroyed) {
+      reply.raw.write('event: done\ndata: {}\n\n');
+      reply.raw.end();
+    }
+    clearInterval(heartbeat);
+    logStreamEmitter.off('log',  enviar);
+    logStreamEmitter.off('done', encerrar);
+  }
+
+  // Envia buffer imediatamente (quem conecta tarde ainda vê o histórico)
+  for (const entry of logStreamBuffer) enviar(entry);
+
+  // Se o pipeline já terminou, fecha imediatamente
+  if (!pipelineRodando) { encerrar(); return; }
+
+  logStreamEmitter.on('log',  enviar);
+  logStreamEmitter.once('done', encerrar);
+
+  request.raw.once('close', () => {
+    clearInterval(heartbeat);
+    logStreamEmitter.off('log',  enviar);
+    logStreamEmitter.off('done', encerrar);
+  });
+
+  // Mantém a promise ativa enquanto o cliente estiver conectado
+  await new Promise<void>(resolve => request.raw.once('close', resolve));
+});
 
 // ── Ranking de Gestores ───────────────────────────────────────────────────────
 
