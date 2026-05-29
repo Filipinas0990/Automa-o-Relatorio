@@ -4,7 +4,7 @@
   "description": "PharmaFlow - Sistema de monitoramento de farmácias",
   "main": "dist/api/index.js",
   "scripts": {
-    "build": "tsc",
+    "build": "node --max-old-space-size=2048 ./node_modules/.bin/tsc --skipLibCheck",
     "start": "node dist/api/index.js",
     "pipeline": "node dist/pipeline.js",
     "dev": "ts-node src/api/index.ts",
