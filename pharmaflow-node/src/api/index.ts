@@ -693,8 +693,9 @@ app.post('/api/rodar-agora', { preHandler: [autenticar, apenasAdmin] }, async (r
   if (pipelineRodando) return reply.code(409).send({ status: 'ja_rodando', mensagem: 'Pipeline já está em execução' });
 
   const body     = (request.body as Record<string, unknown>) || {};
+  // map(Number) converte strings ("7") para números (7) antes de filtrar
   const periodos = Array.isArray(body.periodos) && body.periodos.length
-    ? (body.periodos as number[]).filter(n => [7, 15, 30].includes(n))
+    ? (body.periodos as unknown[]).map(Number).filter(n => [7, 15, 30].includes(n))
     : [7, 15, 30];
   const gestorId = body.gestor_id ? parseInt(String(body.gestor_id)) : undefined;
 
