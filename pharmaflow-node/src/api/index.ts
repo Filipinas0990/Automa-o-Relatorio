@@ -199,34 +199,43 @@ app.delete('/api/gestores/:id', { preHandler: [autenticar, apenasAdmin] }, async
 
 app.post('/api/farmacias', { preHandler: [autenticar, apenasAdmin] }, async (request, reply) => {
   const body = request.body as Record<string, unknown>;
-  const { nome, url_base, email, senha, gestor_id, tem_chatbot } = body as {
+  const { nome, url_base, email, senha, gestor_id, tem_chatbot, fase,
+          telefone, responsavel, cidade, observacoes } = body as {
     nome: string; url_base?: string; email?: string; senha?: string;
-    gestor_id?: number; tem_chatbot?: boolean;
+    gestor_id?: number; tem_chatbot?: boolean; fase?: string;
+    telefone?: string; responsavel?: string; cidade?: string; observacoes?: string;
   };
 
   if (!nome) return reply.code(400).send({ detail: 'Campo "nome" é obrigatório.' });
 
-  const temChatbotBool = tem_chatbot !== false; // default true
+  const faseFinal     = fase === 'entrada' ? 'entrada' : 'ativo';
+  const temChatbotBool = tem_chatbot !== false;
 
-  // Campos de chatbot só são obrigatórios quando tem_chatbot = true
-  if (temChatbotBool && (!url_base || !email || !senha)) {
+  // Credenciais só obrigatórias para clientes ativos com chatbot
+  if (faseFinal === 'ativo' && temChatbotBool && (!url_base || !email || !senha)) {
     return reply.code(400).send({
-      detail: 'Para farmácias com chatbot, os campos url_base, email e senha são obrigatórios.',
+      detail: 'Para farmácias ativas com chatbot, os campos url_base, email e senha são obrigatórios.',
     });
   }
 
   const [f] = await db.insert(farmacias).values({
     nome,
-    urlBase:    temChatbotBool ? url_base! : null,
-    email:      temChatbotBool ? email!    : null,
-    senhaEnc:   temChatbotBool && senha ? encrypt(senha) : null,
+    fase:       faseFinal,
+    urlBase:    (faseFinal === 'ativo' && temChatbotBool) ? url_base! : (url_base ?? null),
+    email:      (faseFinal === 'ativo' && temChatbotBool) ? email!    : (email   ?? null),
+    senhaEnc:   senha ? encrypt(senha) : null,
     gestorId:   gestor_id || null,
     temChatbot: temChatbotBool,
+    telefone:   telefone    ?? null,
+    responsavel:responsavel ?? null,
+    cidade:     cidade      ?? null,
+    observacoes:observacoes ?? null,
   }).returning();
 
   return reply.code(201).send({
     id:          f.id,
     nome:        f.nome,
+    fase:        f.fase,
     gestor_id:   f.gestorId,
     tem_chatbot: f.temChatbot,
   });
@@ -246,6 +255,11 @@ app.put('/api/farmacias/:id', { preHandler: [autenticar, apenasAdmin] }, async (
   if (b.gestor_id         !== undefined) dados.gestorId        = b.gestor_id;
   if (b.ativa             !== undefined) dados.ativa           = b.ativa;
   if (b.tem_chatbot       !== undefined) dados.temChatbot      = b.tem_chatbot;
+  if (b.fase              !== undefined) dados.fase            = b.fase;
+  if (b.telefone          !== undefined) dados.telefone        = b.telefone;
+  if (b.responsavel       !== undefined) dados.responsavel     = b.responsavel;
+  if (b.cidade            !== undefined) dados.cidade          = b.cidade;
+  if (b.observacoes       !== undefined) dados.observacoes     = b.observacoes;
   if (b.meta_vendas       !== undefined) dados.metaVendas      = b.meta_vendas;
   if (b.meta_receita      !== undefined) dados.metaReceita     = b.meta_receita;
   if (b.meta_leads_google !== undefined) dados.metaLeadsGoogle = b.meta_leads_google;
@@ -292,6 +306,37 @@ app.delete('/api/farmacias/:id', { preHandler: [autenticar, apenasAdmin] }, asyn
 
   await db.update(farmacias).set({ ativa: false }).where(eq(farmacias.id, id));
   return { mensagem: 'Farmácia desativada' };
+});
+
+// Promove cliente de entrada para ativo, cadastrando credenciais da plataforma
+app.patch('/api/farmacias/:id/ativar', { preHandler: [autenticar, apenasAdmin] }, async (request, reply) => {
+  const id = parseInt((request.params as { id: string }).id, 10);
+  const [existe] = await db.select().from(farmacias).where(eq(farmacias.id, id));
+  if (!existe) return reply.code(404).send({ detail: 'Farmácia não encontrada' });
+  if (existe.fase !== 'entrada') return reply.code(400).send({ detail: 'Farmácia já está ativa.' });
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const b = request.body as any;
+  const { url_base, email, senha, gestor_id } = b as {
+    url_base?: string; email?: string; senha?: string; gestor_id?: number;
+  };
+
+  if (existe.temChatbot && (!url_base || !email || !senha)) {
+    return reply.code(400).send({
+      detail: 'Para ativar uma farmácia com chatbot, url_base, email e senha são obrigatórios.',
+    });
+  }
+
+  await db.update(farmacias).set({
+    fase:      'ativo',
+    urlBase:   url_base  ?? existe.urlBase,
+    email:     email     ?? existe.email,
+    senhaEnc:  senha ? encrypt(senha) : existe.senhaEnc,
+    gestorId:  gestor_id !== undefined ? gestor_id : existe.gestorId,
+  }).where(eq(farmacias.id, id));
+
+  const [f] = await db.select().from(farmacias).where(eq(farmacias.id, id));
+  return { id: f.id, nome: f.nome, fase: f.fase, gestor_id: f.gestorId, mensagem: 'Farmácia ativada com sucesso.' };
 });
 
 // ── Helper de canal ───────────────────────────────────────────────────────────
@@ -394,13 +439,15 @@ app.get('/api/painel', { preHandler: autenticar }, async (request) => {
 
 app.get('/api/farmacias', { preHandler: autenticar }, async (request) => {
   const q         = request.query as Record<string, string | undefined>;
-  const { status, busca, gestor_id } = q;
+  const { status, busca, gestor_id, fase: faseFiltro } = q;
   const filtro    = request.user.isAdmin ? (gestor_id || null) : String(request.user.id);
   const filtroSql = filtro ? sql`AND f.gestor_id = ${filtro}` : sql``;
+  const faseSql   = faseFiltro ? sql`AND f.fase = ${faseFiltro}` : sql``;
   const dias      = parseInt(q.dias || '7', 10);
 
   const { rows } = await db.execute(sql`
     SELECT f.id AS farmacia_id, f.nome AS farmacia, f.gestor_id, f.ativa, f.tem_chatbot,
+           f.fase, f.telefone, f.responsavel, f.cidade,
            f.meta_vendas, f.meta_receita, f.meta_leads_google, f.meta_leads_meta,
            COALESCE(r.nivel_alerta, 'verde')    AS nivel_alerta,
            COALESCE(r.receita_total, 0)         AS receita_total,
@@ -413,7 +460,7 @@ app.get('/api/farmacias', { preHandler: autenticar }, async (request) => {
            r.periodo_inicio, r.periodo_fim, r.data_coleta
     FROM farmacias f
     LEFT JOIN vw_ranking_atual r ON r.farmacia_id = f.id AND r.periodo_dias = ${dias}
-    WHERE f.ativa = TRUE ${filtroSql}
+    WHERE f.ativa = TRUE ${filtroSql} ${faseSql}
     ORDER BY posicao_ranking
   `);
 
@@ -466,6 +513,10 @@ app.get('/api/farmacias', { preHandler: autenticar }, async (request) => {
 
     resultado.push({
       id: fid, nome: r.farmacia, status: labelStatus, nivel_alerta: r.nivel_alerta,
+      fase: r.fase ?? 'ativo',
+      telefone:    r.telefone    ?? null,
+      responsavel: r.responsavel ?? null,
+      cidade:      r.cidade      ?? null,
       gestor_id: r.gestor_id, receita_total: receitaAtual,
       total_atendimentos: parseInt(r.total_atendimentos || 0),
       atendimentos_finalizados: 0,
@@ -802,6 +853,7 @@ app.get('/api/ranking/gestores', { preHandler: autenticar }, async (request, rep
     FROM gestores_trafego g
     JOIN farmacias f ON f.gestor_id = g.id AND f.ativa = TRUE
     JOIN coletas c   ON c.farmacia_id = f.id
+                    AND c.periodo_dias = 7
                     AND DATE_TRUNC('month', c.data_coleta) = DATE_TRUNC('month', CAST(${mesRef} AS date))
     WHERE g.ativo = TRUE
     GROUP BY g.id, g.nome

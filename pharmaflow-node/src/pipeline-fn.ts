@@ -106,12 +106,12 @@ async function salvarResultados(dadosColetados: DadosFarmacia[], periodoDias: nu
       scoreInfo.alertas.push('Meta semanal não atingida');
     }
 
-    // Metas de leads por canal (só Google e Meta)
-    const atingiuMetaGoogle = farmacia.metaLeadsGoogle !== null
-      ? dado.clientesGoogle >= (farmacia.metaLeadsGoogle ?? 0)
+    // Metas de leads por canal — só conta se meta > 0 (meta = 0 é considerada "sem meta")
+    const atingiuMetaGoogle = (farmacia.metaLeadsGoogle !== null && farmacia.metaLeadsGoogle > 0)
+      ? dado.clientesGoogle >= farmacia.metaLeadsGoogle
       : null;
-    const atingiuMetaMeta = farmacia.metaLeadsMeta !== null
-      ? dado.clientesFacebook >= (farmacia.metaLeadsMeta ?? 0)
+    const atingiuMetaMeta = (farmacia.metaLeadsMeta !== null && farmacia.metaLeadsMeta > 0)
+      ? dado.clientesFacebook >= farmacia.metaLeadsMeta
       : null;
 
     const [coleta] = await db.insert(coletas).values({

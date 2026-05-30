@@ -24,12 +24,18 @@ export const gestoresTrafego = pgTable('gestores_trafego', {
 export const farmacias = pgTable('farmacias', {
   id:          serial('id').primaryKey(),
   nome:        varchar('nome', { length: 120 }).notNull(),
-  urlBase:     varchar('url_base', { length: 255 }),   // opcional quando tem_chatbot = false
-  email:       varchar('email', { length: 120 }),       // opcional quando tem_chatbot = false
+  urlBase:     varchar('url_base', { length: 255 }),
+  email:       varchar('email', { length: 120 }),
   senhaEnc:    text('senha_enc'),
   gestorId:    integer('gestor_id').references(() => gestoresTrafego.id),
   ativa:       boolean('ativa').default(true),
-  temChatbot:  boolean('tem_chatbot').default(true).notNull(),  // false = só reuniões, sem scraping
+  temChatbot:  boolean('tem_chatbot').default(true).notNull(),
+  // 'entrada' = cliente novo sem credenciais; 'ativo' = cliente com acesso configurado
+  fase:        varchar('fase', { length: 10 }).default('ativo').notNull(),
+  telefone:    varchar('telefone',    { length: 20  }),
+  responsavel: varchar('responsavel', { length: 120 }),
+  cidade:      varchar('cidade',      { length: 100 }),
+  observacoes: text('observacoes'),
   criadoEm:    timestamp('criado_em', { withTimezone: true }).defaultNow(),
   metaVendas:       integer('meta_vendas'),
   metaReceita:      numeric('meta_receita',       { precision: 12, scale: 2 }),
