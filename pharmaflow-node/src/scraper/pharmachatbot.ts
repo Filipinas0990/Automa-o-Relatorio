@@ -11,7 +11,6 @@ const BROWSER_ARGS = [
   '--disable-setuid-sandbox',
   '--disable-dev-shm-usage',
   '--no-zygote',
-  '--single-process',           // tudo em 1 processo — reduz memória 60%
   '--disable-gpu',
   '--disable-blink-features=AutomationControlled',
   '--disable-infobars',
