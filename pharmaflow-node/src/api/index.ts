@@ -1479,6 +1479,207 @@ app.get('/api/reunioes/stats', { preHandler: autenticar }, async (request) => {
   };
 });
 
+/**
+ * GET /api/reunioes/gerenciador-mensal?mes=YYYY-MM
+ * Para o mês informado, retorna:
+ *  - KPIs: total de farmácias ativas, quantas tiveram reunião, quantas não tiveram
+ *  - Lista detalhada de farmácias COM reunião (com as reuniões do mês)
+ *  - Lista de farmácias SEM nenhuma reunião no mês
+ */
+app.get('/api/reunioes/gerenciador-mensal', { preHandler: autenticar }, async (request, reply) => {
+  const q = request.query as Record<string, string | undefined>;
+  let mesRef: string;
+  if (q.mes) {
+    if (!/^\d{4}-\d{2}$/.test(q.mes)) return reply.code(400).send({ detail: 'Formato inválido. Use YYYY-MM.' });
+    mesRef = q.mes;
+  } else {
+    const now = new Date();
+    mesRef = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  }
+
+  const gestorFiltro = request.user.isAdmin
+    ? sql``
+    : sql`AND (f.gestor_id = ${request.user.id})`;
+
+  // Todas as farmácias ativas (fase = 'ativo')
+  const { rows: farmaciasRows } = await db.execute(sql`
+    SELECT f.id, f.nome, f.cidade, f.responsavel, f.telefone, f.gestor_id,
+           g.nome AS gestor_nome,
+           COALESCE(rv.nivel_alerta, 'verde') AS nivel_alerta
+    FROM farmacias f
+    LEFT JOIN gestores_trafego g ON g.id = f.gestor_id
+    LEFT JOIN vw_ranking_atual rv ON rv.farmacia_id = f.id AND rv.periodo_dias = 7
+    WHERE f.ativa = TRUE AND f.fase = 'ativo'
+    ${gestorFiltro}
+    ORDER BY f.nome
+  `);
+
+  // Todas as reuniões do mês (não canceladas)
+  const { rows: reunioesMes } = await db.execute(sql`
+    SELECT r.id, r.farmacia_id, r.titulo, r.data_reuniao,
+           r.duracao_minutos, r.status, r.observacoes,
+           r.gestor_id, g.nome AS gestor_nome
+    FROM reunioes r
+    LEFT JOIN gestores_trafego g ON g.id = r.gestor_id
+    WHERE DATE_TRUNC('month', r.data_reuniao) = DATE_TRUNC('month', ${mesRef + '-01'}::date)
+      AND r.status != 'cancelada'
+    ORDER BY r.farmacia_id, r.data_reuniao ASC
+  `);
+
+  // Agrupa reuniões por farmácia
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const reunioesPorFarmacia: Record<number, any[]> = {};
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  for (const r of reunioesMes as any[]) {
+    const fid = parseInt(r.farmacia_id);
+    if (!reunioesPorFarmacia[fid]) reunioesPorFarmacia[fid] = [];
+    reunioesPorFarmacia[fid].push({
+      id:              parseInt(r.id),
+      titulo:          r.titulo,
+      data_reuniao:    r.data_reuniao,
+      duracao_minutos: parseInt(r.duracao_minutos || 60),
+      status:          r.status,
+      observacoes:     r.observacoes ?? null,
+      gestor_id:       r.gestor_id   ? parseInt(r.gestor_id)  : null,
+      gestor_nome:     r.gestor_nome ?? null,
+    });
+  }
+
+  const comReuniao   = [];
+  const semReuniao   = [];
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  for (const f of farmaciasRows as any[]) {
+    const fid      = parseInt(f.id);
+    const lista    = reunioesPorFarmacia[fid] ?? [];
+    const base = {
+      farmacia_id:  fid,
+      farmacia_nome: f.nome,
+      cidade:        f.cidade       ?? null,
+      responsavel:   f.responsavel  ?? null,
+      telefone:      f.telefone     ?? null,
+      gestor_id:     f.gestor_id    ? parseInt(f.gestor_id)  : null,
+      gestor_nome:   f.gestor_nome  ?? null,
+      nivel_alerta:  f.nivel_alerta,
+    };
+
+    if (lista.length > 0) {
+      comReuniao.push({
+        ...base,
+        total_reunioes: lista.length,
+        realizadas:     lista.filter((r: { status: string }) => r.status === 'realizada').length,
+        confirmadas:    lista.filter((r: { status: string }) => r.status === 'confirmada').length,
+        agendadas:      lista.filter((r: { status: string }) => r.status === 'agendada').length,
+        reunioes:       lista,
+      });
+    } else {
+      semReuniao.push(base);
+    }
+  }
+
+  const totalFarmacias = farmaciasRows.length;
+  const qtdCom         = comReuniao.length;
+  const qtdSem         = semReuniao.length;
+
+  return {
+    mes:                    mesRef,
+    total_farmacias_ativas: totalFarmacias,
+    farmacias_com_reuniao:  qtdCom,
+    farmacias_sem_reuniao:  qtdSem,
+    taxa_cobertura:         totalFarmacias > 0
+      ? Math.round(qtdCom / totalFarmacias * 1000) / 10
+      : 0,
+    com_reuniao: comReuniao,
+    sem_reuniao: semReuniao,
+  };
+});
+
+/**
+ * GET /api/reunioes/cobertura-mensal?meses=6
+ * Histórico de cobertura mês a mês (quantas farmácias tiveram reunião vs. não tiveram).
+ * Usado para gráficos de evolução no gerenciador de reuniões.
+ */
+app.get('/api/reunioes/cobertura-mensal', { preHandler: autenticar }, async (request) => {
+  const q      = request.query as Record<string, string | undefined>;
+  const nMeses = Math.min(Math.max(parseInt(q.meses || '6'), 1), 24);
+
+  const gestorFiltro = request.user.isAdmin
+    ? sql``
+    : sql`AND r_inner.gestor_id = ${request.user.id}`;
+
+  const gestorFiltroFarmacias = request.user.isAdmin
+    ? sql``
+    : sql`AND f.gestor_id = ${request.user.id}`;
+
+  // Total de farmácias ativas (referência fixa para taxa de cobertura)
+  const { rows: totalRows } = await db.execute(sql`
+    SELECT COUNT(*)::int AS total
+    FROM farmacias f
+    WHERE f.ativa = TRUE AND f.fase = 'ativo'
+    ${gestorFiltroFarmacias}
+  `);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const totalFarmacias = parseInt((totalRows[0] as any)?.total || 0);
+
+  // Cobertura por mês: quantas farmácias distintas tiveram reunião (não cancelada)
+  const { rows: coberturaRows } = await db.execute(sql`
+    SELECT
+      TO_CHAR(DATE_TRUNC('month', r_inner.data_reuniao), 'YYYY-MM') AS mes,
+      COUNT(DISTINCT r_inner.farmacia_id)::int                       AS farmacias_com_reuniao,
+      COUNT(*)::int                                                  AS total_reunioes,
+      COUNT(*) FILTER (WHERE r_inner.status = 'realizada')::int      AS realizadas,
+      COUNT(*) FILTER (WHERE r_inner.status = 'confirmada')::int     AS confirmadas,
+      COUNT(*) FILTER (WHERE r_inner.status = 'agendada')::int       AS agendadas
+    FROM reunioes r_inner
+    WHERE r_inner.status != 'cancelada'
+      AND r_inner.data_reuniao >= DATE_TRUNC('month', NOW() - (${nMeses - 1} || ' months')::interval)
+    ${gestorFiltro}
+    GROUP BY DATE_TRUNC('month', r_inner.data_reuniao)
+    ORDER BY mes ASC
+  `);
+
+  // Gera todos os meses do intervalo (incluindo meses sem reunião)
+  const mesesMap: Record<string, {
+    mes: string; total_farmacias: number;
+    farmacias_com_reuniao: number; farmacias_sem_reuniao: number;
+    taxa_cobertura: number; total_reunioes: number;
+    realizadas: number; confirmadas: number; agendadas: number;
+  }> = {};
+  const now = new Date();
+  for (let i = nMeses - 1; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const m = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    mesesMap[m] = {
+      mes: m, total_farmacias: totalFarmacias,
+      farmacias_com_reuniao: 0, farmacias_sem_reuniao: totalFarmacias,
+      taxa_cobertura: 0, total_reunioes: 0,
+      realizadas: 0, confirmadas: 0, agendadas: 0,
+    };
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  for (const row of coberturaRows as any[]) {
+    const m   = row.mes as string;
+    const com = parseInt(row.farmacias_com_reuniao || 0);
+    if (mesesMap[m]) {
+      mesesMap[m].farmacias_com_reuniao = com;
+      mesesMap[m].farmacias_sem_reuniao = Math.max(0, totalFarmacias - com);
+      mesesMap[m].taxa_cobertura        = totalFarmacias > 0
+        ? Math.round(com / totalFarmacias * 1000) / 10
+        : 0;
+      mesesMap[m].total_reunioes = parseInt(row.total_reunioes || 0);
+      mesesMap[m].realizadas     = parseInt(row.realizadas     || 0);
+      mesesMap[m].confirmadas    = parseInt(row.confirmadas    || 0);
+      mesesMap[m].agendadas      = parseInt(row.agendadas      || 0);
+    }
+  }
+
+  return {
+    total_farmacias_ativas: totalFarmacias,
+    historico: Object.values(mesesMap),
+  };
+});
+
 /** Lista reuniões com filtros */
 app.get('/api/reunioes', { preHandler: autenticar }, async (request) => {
   const q = request.query as Record<string, string | undefined>;
