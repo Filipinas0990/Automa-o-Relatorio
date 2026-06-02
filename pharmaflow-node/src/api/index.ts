@@ -8,7 +8,7 @@ import ExcelJS  from 'exceljs';
 import { eq, and, sql } from 'drizzle-orm';
 import { google } from 'googleapis';
 import { db } from '../database/db';
-import { gestoresTrafego, farmacias, reunioes, agendaBloqueios } from '../database/schema';
+import { gestoresTrafego, farmacias, reunioes, agendaBloqueios, acoes, farmaciaAcoes } from '../database/schema';
 import type { Gestor } from '../database/schema';
 import { encrypt } from '../cripto';
 import { pipeline, previewPipeline } from '../pipeline-fn';
@@ -479,6 +479,34 @@ app.get('/api/farmacias', { preHandler: autenticar }, async (request) => {
     ORDER BY latest.farmacia_id, total_atendimentos DESC
   `);
 
+  // Ações do mês atual para enriquecer cada farmácia
+  const mesAtual = (() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  })();
+  const { rows: acoesRows } = await db.execute(sql`
+    SELECT fa.farmacia_id,
+           a.id, a.nome, a.tipo, a.status, a.cor
+    FROM farmacia_acoes fa
+    JOIN acoes a ON a.id = fa.acao_id
+    WHERE a.mes_referencia = ${mesAtual}
+      AND a.status != 'cancelada'
+    ORDER BY fa.farmacia_id, a.nome
+  `);
+  const acoesPorFarmacia: Record<number, Array<{ id: number; nome: string; tipo: string; status: string; cor: string | null }>> = {};
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  for (const ar of acoesRows as any[]) {
+    const fid = parseInt(ar.farmacia_id);
+    if (!acoesPorFarmacia[fid]) acoesPorFarmacia[fid] = [];
+    acoesPorFarmacia[fid].push({
+      id:     parseInt(ar.id),
+      nome:   ar.nome,
+      tipo:   ar.tipo,
+      status: ar.status,
+      cor:    ar.cor ?? null,
+    });
+  }
+
   const canaisPorFarmacia: Record<number, Record<string, { atendimentos: number; vendas: number; receita_vendas: number }>> = {};
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   for (const cr of canaisRows as any[]) {
@@ -542,6 +570,7 @@ app.get('/api/farmacias', { preHandler: autenticar }, async (request) => {
           nome, atendimentos: d.atendimentos, vendas: d.vendas,
           receita_vendas: Math.round(d.receita_vendas * 100) / 100,
         })),
+      acoes_ativas: acoesPorFarmacia[fid] ?? [],
     });
   }
   return resultado;
@@ -1925,6 +1954,437 @@ app.get('/api/dashboard/reunioes-perda', { preHandler: autenticar }, async (requ
         : 0,
     })),
   };
+});
+
+// ── Ações de Marketing ────────────────────────────────────────────────────────
+
+/**
+ * GET /api/acoes
+ * Lista ações com filtros opcionais: mes (YYYY-MM), status, tipo
+ * Retorna cada ação com a contagem de farmácias participantes.
+ */
+app.get('/api/acoes', { preHandler: autenticar }, async (request) => {
+  const q = request.query as Record<string, string | undefined>;
+  const { mes, status: statusFiltro, tipo } = q;
+
+  const mesFiltro    = mes          ? sql`AND a.mes_referencia = ${mes}`        : sql``;
+  const statusFiltro2 = statusFiltro ? sql`AND a.status = ${statusFiltro}`       : sql``;
+  const tipoFiltro   = tipo         ? sql`AND a.tipo = ${tipo}`                 : sql``;
+
+  const { rows } = await db.execute(sql`
+    SELECT a.*,
+           g.nome                                   AS criado_por_nome,
+           COUNT(fa.id)::int                        AS total_farmacias
+    FROM acoes a
+    LEFT JOIN gestores_trafego g  ON g.id = a.criado_por_id
+    LEFT JOIN farmacia_acoes   fa ON fa.acao_id = a.id
+    WHERE 1=1
+    ${mesFiltro}
+    ${statusFiltro2}
+    ${tipoFiltro}
+    GROUP BY a.id, g.nome
+    ORDER BY a.mes_referencia DESC, a.criado_em DESC
+  `);
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return (rows as any[]).map(r => ({
+    id:               parseInt(r.id),
+    nome:             r.nome,
+    tipo:             r.tipo,
+    descricao:        r.descricao    ?? null,
+    mes_referencia:   r.mes_referencia,
+    status:           r.status,
+    cor:              r.cor          ?? null,
+    criado_por_id:    r.criado_por_id ? parseInt(r.criado_por_id) : null,
+    criado_por_nome:  r.criado_por_nome ?? null,
+    criado_em:        r.criado_em,
+    atualizado_em:    r.atualizado_em,
+    total_farmacias:  parseInt(r.total_farmacias || 0),
+  }));
+});
+
+/**
+ * GET /api/acoes/resumo
+ * Resumo das ações de um mês: totais por status, por tipo e farmácias únicas envolvidas.
+ * Query param: mes (YYYY-MM) — padrão: mês atual
+ */
+app.get('/api/acoes/resumo', { preHandler: autenticar }, async (request, reply) => {
+  const q = request.query as Record<string, string | undefined>;
+  let mesRef: string;
+  if (q.mes) {
+    if (!/^\d{4}-\d{2}$/.test(q.mes)) return reply.code(400).send({ detail: 'Formato inválido. Use YYYY-MM.' });
+    mesRef = q.mes;
+  } else {
+    const now = new Date();
+    mesRef = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  }
+
+  const { rows: acoesRows } = await db.execute(sql`
+    SELECT a.id, a.nome, a.tipo, a.status, a.cor,
+           COUNT(fa.id)::int AS total_farmacias
+    FROM acoes a
+    LEFT JOIN farmacia_acoes fa ON fa.acao_id = a.id
+    WHERE a.mes_referencia = ${mesRef}
+    GROUP BY a.id
+    ORDER BY a.tipo, a.nome
+  `);
+
+  const { rows: statsRows } = await db.execute(sql`
+    SELECT
+      COUNT(DISTINCT a.id)::int                                               AS total_acoes,
+      COUNT(DISTINCT fa.farmacia_id)::int                                     AS farmacias_com_acao,
+      COUNT(DISTINCT a.id) FILTER (WHERE a.status = 'planejada')::int        AS planejadas,
+      COUNT(DISTINCT a.id) FILTER (WHERE a.status = 'em_andamento')::int     AS em_andamento,
+      COUNT(DISTINCT a.id) FILTER (WHERE a.status = 'concluida')::int        AS concluidas,
+      COUNT(DISTINCT a.id) FILTER (WHERE a.status = 'cancelada')::int        AS canceladas
+    FROM acoes a
+    LEFT JOIN farmacia_acoes fa ON fa.acao_id = a.id
+    WHERE a.mes_referencia = ${mesRef}
+  `);
+
+  // Tipos únicos presentes no mês
+  const { rows: tiposRows } = await db.execute(sql`
+    SELECT tipo, COUNT(*)::int AS quantidade
+    FROM acoes
+    WHERE mes_referencia = ${mesRef}
+    GROUP BY tipo
+    ORDER BY quantidade DESC
+  `);
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const s = (statsRows as any[])[0] || {};
+
+  return {
+    mes: mesRef,
+    total_acoes:        parseInt(s.total_acoes        || 0),
+    farmacias_com_acao: parseInt(s.farmacias_com_acao || 0),
+    por_status: {
+      planejadas:   parseInt(s.planejadas   || 0),
+      em_andamento: parseInt(s.em_andamento || 0),
+      concluidas:   parseInt(s.concluidas   || 0),
+      canceladas:   parseInt(s.canceladas   || 0),
+    },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    por_tipo: (tiposRows as any[]).map(t => ({ tipo: t.tipo, quantidade: parseInt(t.quantidade || 0) })),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    acoes: (acoesRows as any[]).map(a => ({
+      id:              parseInt(a.id),
+      nome:            a.nome,
+      tipo:            a.tipo,
+      status:          a.status,
+      cor:             a.cor ?? null,
+      total_farmacias: parseInt(a.total_farmacias || 0),
+    })),
+  };
+});
+
+/**
+ * POST /api/acoes  (admin only)
+ * Cria uma nova ação de marketing.
+ * Body: { nome, tipo, descricao?, mes_referencia, status?, cor? }
+ */
+app.post('/api/acoes', { preHandler: [autenticar, apenasAdmin] }, async (request, reply) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const b = request.body as any;
+  const { nome, tipo, descricao, mes_referencia, status, cor } = b as {
+    nome: string; tipo: string; descricao?: string;
+    mes_referencia: string; status?: string; cor?: string;
+  };
+
+  if (!nome)           return reply.code(400).send({ detail: 'Campo "nome" é obrigatório.' });
+  if (!tipo)           return reply.code(400).send({ detail: 'Campo "tipo" é obrigatório.' });
+  if (!mes_referencia) return reply.code(400).send({ detail: 'Campo "mes_referencia" é obrigatório (YYYY-MM).' });
+  if (!/^\d{4}-\d{2}$/.test(mes_referencia)) {
+    return reply.code(400).send({ detail: 'Campo "mes_referencia" deve estar no formato YYYY-MM.' });
+  }
+
+  const statusValidos = ['planejada', 'em_andamento', 'concluida', 'cancelada'];
+  const statusFinal   = statusValidos.includes(status || '') ? status! : 'planejada';
+
+  const [nova] = await db.insert(acoes).values({
+    nome,
+    tipo,
+    descricao:      descricao     ?? null,
+    mesReferencia:  mes_referencia,
+    status:         statusFinal,
+    cor:            cor           ?? null,
+    criadoPorId:    request.user.id,
+  }).returning();
+
+  return reply.code(201).send({
+    id:             nova.id,
+    nome:           nova.nome,
+    tipo:           nova.tipo,
+    descricao:      nova.descricao     ?? null,
+    mes_referencia: nova.mesReferencia,
+    status:         nova.status,
+    cor:            nova.cor           ?? null,
+    criado_por_id:  nova.criadoPorId,
+    criado_em:      nova.criadoEm,
+    total_farmacias: 0,
+  });
+});
+
+/**
+ * GET /api/acoes/:id
+ * Detalha uma ação com a lista completa de farmácias participantes.
+ */
+app.get('/api/acoes/:id', { preHandler: autenticar }, async (request, reply) => {
+  const id = parseInt((request.params as { id: string }).id, 10);
+
+  const { rows: acaoRows } = await db.execute(sql`
+    SELECT a.*, g.nome AS criado_por_nome
+    FROM acoes a
+    LEFT JOIN gestores_trafego g ON g.id = a.criado_por_id
+    WHERE a.id = ${id}
+  `);
+  if (!acaoRows.length) return reply.code(404).send({ detail: 'Ação não encontrada.' });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const a = acaoRows[0] as any;
+
+  const { rows: participantesRows } = await db.execute(sql`
+    SELECT fa.id AS participacao_id, fa.observacoes, fa.adicionado_em,
+           f.id  AS farmacia_id,   f.nome AS farmacia_nome,
+           f.cidade, f.responsavel, f.telefone, f.gestor_id,
+           g.nome AS gestor_nome,
+           COALESCE(r.nivel_alerta, 'verde') AS nivel_alerta
+    FROM farmacia_acoes fa
+    JOIN farmacias f ON f.id = fa.farmacia_id
+    LEFT JOIN gestores_trafego g ON g.id = f.gestor_id
+    LEFT JOIN vw_ranking_atual r  ON r.farmacia_id = f.id AND r.periodo_dias = 7
+    WHERE fa.acao_id = ${id}
+    ORDER BY f.nome
+  `);
+
+  return {
+    id:             parseInt(a.id),
+    nome:           a.nome,
+    tipo:           a.tipo,
+    descricao:      a.descricao     ?? null,
+    mes_referencia: a.mes_referencia,
+    status:         a.status,
+    cor:            a.cor           ?? null,
+    criado_por_id:  a.criado_por_id ? parseInt(a.criado_por_id) : null,
+    criado_por_nome:a.criado_por_nome ?? null,
+    criado_em:      a.criado_em,
+    atualizado_em:  a.atualizado_em,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    farmacias: (participantesRows as any[]).map(p => ({
+      participacao_id: parseInt(p.participacao_id),
+      farmacia_id:     parseInt(p.farmacia_id),
+      farmacia_nome:   p.farmacia_nome,
+      cidade:          p.cidade       ?? null,
+      responsavel:     p.responsavel  ?? null,
+      telefone:        p.telefone     ?? null,
+      gestor_id:       p.gestor_id    ? parseInt(p.gestor_id) : null,
+      gestor_nome:     p.gestor_nome  ?? null,
+      nivel_alerta:    p.nivel_alerta,
+      observacoes:     p.observacoes  ?? null,
+      adicionado_em:   p.adicionado_em,
+    })),
+    total_farmacias: participantesRows.length,
+  };
+});
+
+/**
+ * PUT /api/acoes/:id  (admin only)
+ * Atualiza dados da ação (nome, tipo, descricao, status, cor, mes_referencia).
+ */
+app.put('/api/acoes/:id', { preHandler: [autenticar, apenasAdmin] }, async (request, reply) => {
+  const id = parseInt((request.params as { id: string }).id, 10);
+  const [existe] = await db.select().from(acoes).where(eq(acoes.id, id));
+  if (!existe) return reply.code(404).send({ detail: 'Ação não encontrada.' });
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const b = request.body as any;
+  const dados: Partial<typeof acoes.$inferInsert> = {};
+  if (b.nome           !== undefined) dados.nome          = b.nome;
+  if (b.tipo           !== undefined) dados.tipo          = b.tipo;
+  if (b.descricao      !== undefined) dados.descricao     = b.descricao;
+  if (b.mes_referencia !== undefined) {
+    if (!/^\d{4}-\d{2}$/.test(b.mes_referencia)) {
+      return reply.code(400).send({ detail: '"mes_referencia" deve estar no formato YYYY-MM.' });
+    }
+    dados.mesReferencia = b.mes_referencia;
+  }
+  if (b.status !== undefined) {
+    const validos = ['planejada', 'em_andamento', 'concluida', 'cancelada'];
+    if (!validos.includes(b.status)) return reply.code(400).send({ detail: `Status inválido. Use: ${validos.join(', ')}.` });
+    dados.status = b.status;
+  }
+  if (b.cor !== undefined) dados.cor = b.cor;
+
+  if (Object.keys(dados).length) {
+    await db.update(acoes).set(dados).where(eq(acoes.id, id));
+  }
+
+  const [atualizada] = await db.select().from(acoes).where(eq(acoes.id, id));
+  return {
+    id:             atualizada.id,
+    nome:           atualizada.nome,
+    tipo:           atualizada.tipo,
+    descricao:      atualizada.descricao     ?? null,
+    mes_referencia: atualizada.mesReferencia,
+    status:         atualizada.status,
+    cor:            atualizada.cor           ?? null,
+    atualizado_em:  atualizada.atualizadoEm,
+  };
+});
+
+/**
+ * DELETE /api/acoes/:id  (admin only)
+ * Cancela uma ação (soft delete — muda status para 'cancelada').
+ */
+app.delete('/api/acoes/:id', { preHandler: [autenticar, apenasAdmin] }, async (request, reply) => {
+  const id = parseInt((request.params as { id: string }).id, 10);
+  const [existe] = await db.select().from(acoes).where(eq(acoes.id, id));
+  if (!existe) return reply.code(404).send({ detail: 'Ação não encontrada.' });
+
+  await db.update(acoes).set({ status: 'cancelada' }).where(eq(acoes.id, id));
+  return { mensagem: 'Ação cancelada.', id };
+});
+
+/**
+ * POST /api/acoes/:id/farmacias  (admin only)
+ * Adiciona uma ou mais farmácias à ação.
+ * Body: { farmacia_ids: number[], observacoes?: string }
+ * Farmácias já adicionadas são ignoradas (upsert seguro via UNIQUE).
+ */
+app.post('/api/acoes/:id/farmacias', { preHandler: [autenticar, apenasAdmin] }, async (request, reply) => {
+  const acaoId = parseInt((request.params as { id: string }).id, 10);
+  const [acao] = await db.select().from(acoes).where(eq(acoes.id, acaoId));
+  if (!acao) return reply.code(404).send({ detail: 'Ação não encontrada.' });
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const b = request.body as any;
+  const farmaciaIds: number[] = Array.isArray(b.farmacia_ids)
+    ? b.farmacia_ids.map(Number).filter((n: number) => !isNaN(n))
+    : [];
+
+  if (!farmaciaIds.length) {
+    return reply.code(400).send({ detail: 'Campo "farmacia_ids" deve ser um array não vazio de IDs.' });
+  }
+
+  // Verifica quais existem
+  const { rows: farmaciasExistentes } = await db.execute(sql`
+    SELECT id FROM farmacias WHERE id = ANY(${sql.raw(`ARRAY[${farmaciaIds.join(',')}]::int[]`)}) AND ativa = TRUE
+  `);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const idsValidos: number[] = (farmaciasExistentes as any[]).map(f => parseInt(f.id));
+
+  if (!idsValidos.length) {
+    return reply.code(404).send({ detail: 'Nenhuma farmácia válida encontrada.' });
+  }
+
+  // Insere ignorando duplicatas
+  let adicionadas = 0;
+  for (const fid of idsValidos) {
+    const { rowCount } = await db.execute(sql`
+      INSERT INTO farmacia_acoes (acao_id, farmacia_id, observacoes, adicionado_por_id)
+      VALUES (${acaoId}, ${fid}, ${b.observacoes ?? null}, ${request.user.id})
+      ON CONFLICT (acao_id, farmacia_id) DO NOTHING
+    `);
+    if ((rowCount ?? 0) > 0) adicionadas++;
+  }
+
+  const { rows: countRow } = await db.execute(sql`
+    SELECT COUNT(*)::int AS total FROM farmacia_acoes WHERE acao_id = ${acaoId}
+  `);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const total = parseInt((countRow[0] as any)?.total || 0);
+
+  return reply.code(201).send({
+    mensagem:    `${adicionadas} farmácia(s) adicionada(s) à ação.`,
+    adicionadas,
+    total_farmacias: total,
+  });
+});
+
+/**
+ * DELETE /api/acoes/:id/farmacias/:farmaciaId  (admin only)
+ * Remove uma farmácia específica de uma ação.
+ */
+app.delete('/api/acoes/:id/farmacias/:farmaciaId', { preHandler: [autenticar, apenasAdmin] }, async (request, reply) => {
+  const acaoId     = parseInt((request.params as { id: string; farmaciaId: string }).id, 10);
+  const farmaciaId = parseInt((request.params as { id: string; farmaciaId: string }).farmaciaId, 10);
+
+  const { rowCount } = await db.execute(sql`
+    DELETE FROM farmacia_acoes
+    WHERE acao_id = ${acaoId} AND farmacia_id = ${farmaciaId}
+  `);
+
+  if ((rowCount ?? 0) === 0) {
+    return reply.code(404).send({ detail: 'Participação não encontrada.' });
+  }
+  return { mensagem: 'Farmácia removida da ação.' };
+});
+
+/**
+ * PATCH /api/acoes/:id/farmacias/:farmaciaId  (admin only)
+ * Atualiza observações de uma farmácia em uma ação.
+ * Body: { observacoes: string }
+ */
+app.patch('/api/acoes/:id/farmacias/:farmaciaId', { preHandler: [autenticar, apenasAdmin] }, async (request, reply) => {
+  const acaoId     = parseInt((request.params as { id: string; farmaciaId: string }).id, 10);
+  const farmaciaId = parseInt((request.params as { id: string; farmaciaId: string }).farmaciaId, 10);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const b = request.body as any;
+
+  const { rowCount } = await db.execute(sql`
+    UPDATE farmacia_acoes
+    SET observacoes = ${b.observacoes ?? null}
+    WHERE acao_id = ${acaoId} AND farmacia_id = ${farmaciaId}
+  `);
+
+  if ((rowCount ?? 0) === 0) {
+    return reply.code(404).send({ detail: 'Participação não encontrada.' });
+  }
+  return { mensagem: 'Observações atualizadas.' };
+});
+
+/**
+ * GET /api/farmacias/:id/acoes
+ * Lista todas as ações em que uma farmácia participa.
+ * Query param: mes (YYYY-MM) para filtrar por mês específico.
+ */
+app.get('/api/farmacias/:id/acoes', { preHandler: autenticar }, async (request, reply) => {
+  const farmaciaId = parseInt((request.params as { id: string }).id, 10);
+
+  // Gestor não-admin só acessa farmácias que ele gerencia
+  if (!request.user.isAdmin) {
+    const [f] = await db.select().from(farmacias).where(
+      and(eq(farmacias.id, farmaciaId), eq(farmacias.gestorId, request.user.id))
+    );
+    if (!f) return reply.code(403).send({ detail: 'Acesso negado a esta farmácia.' });
+  }
+
+  const q = request.query as Record<string, string | undefined>;
+  const mesFiltro = q.mes ? sql`AND a.mes_referencia = ${q.mes}` : sql``;
+
+  const { rows } = await db.execute(sql`
+    SELECT a.id, a.nome, a.tipo, a.descricao, a.mes_referencia,
+           a.status, a.cor, a.criado_em,
+           fa.observacoes, fa.adicionado_em
+    FROM farmacia_acoes fa
+    JOIN acoes a ON a.id = fa.acao_id
+    WHERE fa.farmacia_id = ${farmaciaId}
+    ${mesFiltro}
+    ORDER BY a.mes_referencia DESC, a.nome
+  `);
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return (rows as any[]).map(r => ({
+    id:             parseInt(r.id),
+    nome:           r.nome,
+    tipo:           r.tipo,
+    descricao:      r.descricao     ?? null,
+    mes_referencia: r.mes_referencia,
+    status:         r.status,
+    cor:            r.cor           ?? null,
+    criado_em:      r.criado_em,
+    observacoes:    r.observacoes   ?? null,
+    adicionado_em:  r.adicionado_em,
+  }));
 });
 
 // ── Tratamento global de erros ────────────────────────────────────────────────

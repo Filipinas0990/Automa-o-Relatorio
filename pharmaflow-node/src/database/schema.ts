@@ -147,6 +147,31 @@ export const agendaBloqueios = pgTable('agenda_bloqueios', {
   criadoEm:     timestamp('criado_em', { withTimezone: true }).defaultNow(),
 });
 
+// ── Ações de Marketing (adicionado pela migration 0008) ──────────────────────
+
+export const acoes = pgTable('acoes', {
+  id:            serial('id').primaryKey(),
+  nome:          varchar('nome',           { length: 200 }).notNull(),
+  tipo:          varchar('tipo',           { length: 80  }).notNull(),
+  descricao:     text('descricao'),
+  mesReferencia: varchar('mes_referencia', { length: 7   }).notNull(),
+  // 'planejada' | 'em_andamento' | 'concluida' | 'cancelada'
+  status:        varchar('status',         { length: 20  }).default('planejada').notNull(),
+  cor:           varchar('cor',            { length: 7   }),
+  criadoPorId:   integer('criado_por_id').references(() => gestoresTrafego.id),
+  criadoEm:      timestamp('criado_em',    { withTimezone: true }).defaultNow(),
+  atualizadoEm:  timestamp('atualizado_em',{ withTimezone: true }).defaultNow(),
+});
+
+export const farmaciaAcoes = pgTable('farmacia_acoes', {
+  id:               serial('id').primaryKey(),
+  acaoId:           integer('acao_id').notNull().references(() => acoes.id),
+  farmaciaId:       integer('farmacia_id').notNull().references(() => farmacias.id),
+  observacoes:      text('observacoes'),
+  adicionadoEm:     timestamp('adicionado_em',    { withTimezone: true }).defaultNow(),
+  adicionadoPorId:  integer('adicionado_por_id').references(() => gestoresTrafego.id),
+});
+
 // ── Tipos inferidos do schema (usados pela API e pipeline) ────────────────────
 
 export type Gestor         = typeof gestoresTrafego.$inferSelect;
@@ -154,3 +179,5 @@ export type Farmacia       = typeof farmacias.$inferSelect;
 export type Coleta         = typeof coletas.$inferSelect;
 export type Reuniao        = typeof reunioes.$inferSelect;
 export type AgendaBloqueio = typeof agendaBloqueios.$inferSelect;
+export type Acao           = typeof acoes.$inferSelect;
+export type FarmaciaAcao   = typeof farmaciaAcoes.$inferSelect;
