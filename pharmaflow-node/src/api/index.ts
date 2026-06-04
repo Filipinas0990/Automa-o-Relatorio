@@ -1686,10 +1686,6 @@ app.get('/api/reunioes', { preHandler: autenticar }, async (request) => {
   const { farmacia_id, status, mes } = q;
 
   // Filtros como sql fragments com parâmetros seguros (evita o bug do params[])
-  const userFilter = !request.user.isAdmin
-    ? sql`AND (r.gestor_id = ${request.user.id} OR r.criado_por_id = ${request.user.id})`
-    : sql``;
-
   const farmaciaFilter = farmacia_id
     ? sql`AND r.farmacia_id = ${parseInt(farmacia_id)}`
     : sql``;
@@ -1712,7 +1708,6 @@ app.get('/api/reunioes', { preHandler: autenticar }, async (request) => {
     LEFT JOIN gestores_trafego g  ON g.id  = r.gestor_id
     LEFT JOIN gestores_trafego cp ON cp.id = r.criado_por_id
     WHERE 1=1
-    ${userFilter}
     ${farmaciaFilter}
     ${statusFilter}
     ${mesFilter}
