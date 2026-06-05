@@ -127,8 +127,11 @@ export const reunioes = pgTable('reunioes', {
   // agendada | confirmada | realizada | cancelada
   status:         varchar('status', { length: 20 }).default('agendada').notNull(),
 
-  googleEventId:  varchar('google_event_id', { length: 255 }),
-  observacoes:    text('observacoes'),
+  googleEventId:        varchar('google_event_id', { length: 255 }),
+  observacoes:          text('observacoes'),
+
+  // Rastreia envio da notificação WhatsApp (5h antes) — null = ainda não enviada
+  whatsappNotificadoEm: timestamp('whatsapp_notificado_em', { withTimezone: true }),
 
   criadoEm:       timestamp('criado_em',    { withTimezone: true }).defaultNow(),
   atualizadoEm:   timestamp('atualizado_em',{ withTimezone: true }).defaultNow(),
@@ -145,6 +148,18 @@ export const agendaBloqueios = pgTable('agenda_bloqueios', {
   motivo:       varchar('motivo', { length: 200 }),
   criadoPorId:  integer('criado_por_id').references(() => gestoresTrafego.id),
   criadoEm:     timestamp('criado_em', { withTimezone: true }).defaultNow(),
+});
+
+// ── WhatsApp Config (adicionado pela migration 0010) ─────────────────────────
+
+export const whatsappConfig = pgTable('whatsapp_config', {
+  id:              serial('id').primaryKey(),
+  instanceName:    varchar('instance_name', { length: 100 }).notNull(),
+  // open | close | connecting
+  status:          varchar('status', { length: 20 }).default('close').notNull(),
+  qrCode:          text('qr_code'),
+  numeroConectado: varchar('numero_conectado', { length: 30 }),
+  atualizadoEm:    timestamp('atualizado_em', { withTimezone: true }).defaultNow(),
 });
 
 // ── Ações de Marketing (adicionado pela migration 0008) ──────────────────────
@@ -174,10 +189,11 @@ export const farmaciaAcoes = pgTable('farmacia_acoes', {
 
 // ── Tipos inferidos do schema (usados pela API e pipeline) ────────────────────
 
-export type Gestor         = typeof gestoresTrafego.$inferSelect;
-export type Farmacia       = typeof farmacias.$inferSelect;
-export type Coleta         = typeof coletas.$inferSelect;
-export type Reuniao        = typeof reunioes.$inferSelect;
-export type AgendaBloqueio = typeof agendaBloqueios.$inferSelect;
-export type Acao           = typeof acoes.$inferSelect;
-export type FarmaciaAcao   = typeof farmaciaAcoes.$inferSelect;
+export type Gestor          = typeof gestoresTrafego.$inferSelect;
+export type Farmacia        = typeof farmacias.$inferSelect;
+export type Coleta          = typeof coletas.$inferSelect;
+export type Reuniao         = typeof reunioes.$inferSelect;
+export type AgendaBloqueio  = typeof agendaBloqueios.$inferSelect;
+export type Acao            = typeof acoes.$inferSelect;
+export type FarmaciaAcao    = typeof farmaciaAcoes.$inferSelect;
+export type WhatsAppConfig  = typeof whatsappConfig.$inferSelect;

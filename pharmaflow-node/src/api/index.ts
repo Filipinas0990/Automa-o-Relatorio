@@ -16,6 +16,8 @@ import type { PipelineResultado } from '../pipeline-fn';
 import { startPipelineStream, stopPipelineStream, logStreamEmitter, logStreamBuffer } from '../log-stream';
 import type { LogEntry } from '../log-stream';
 import { logger } from '../logger';
+import { iniciarSchedulerWhatsApp } from '../scheduler';
+import { whatsappRoutes } from '../whatsapp/routes';
 
 // ── Module augmentation — adiciona `user` ao FastifyRequest ───────────────────
 
@@ -86,6 +88,9 @@ async function apenasAdmin(request: FastifyRequest, reply: FastifyReply): Promis
     reply.code(403).send({ detail: 'Acesso restrito ao administrador' });
   }
 }
+
+// ── WhatsApp Routes (plugin registrado após definição dos middlewares) ────────
+app.register(whatsappRoutes, { autenticar, apenasAdmin });
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
 
@@ -2596,6 +2601,7 @@ const PORT = parseInt(process.env.PORT || '8000', 10);
 app.listen({ port: PORT, host: '0.0.0.0' }, (err) => {
   if (err) { console.error(err); process.exit(1); }
   console.log(`PharmaFlow API rodando em http://0.0.0.0:${PORT}`);
+  iniciarSchedulerWhatsApp();
 });
 
 export default app;
