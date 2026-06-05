@@ -53,12 +53,12 @@ async function verificarENotificar(): Promise<void> {
   logger.info({ total: reunioes.length }, 'Scheduler: reuniões para notificar via WhatsApp');
 
   for (const row of reunioes) {
-    const id         = Number(row.id);
-    const telefone   = String(row.farmacia_telefone);
+    const id          = Number(row.id);
+    const telefone    = String(row.telefone);
     const dataReuniao = new Date(String(row.data_reuniao));
 
     const mensagem = montarMensagem({
-      responsavel: row.farmacia_responsavel ? String(row.farmacia_responsavel) : null,
+      responsavel: null,
       farmacia:    String(row.farmacia_nome),
       titulo:      String(row.titulo),
       dataReuniao,

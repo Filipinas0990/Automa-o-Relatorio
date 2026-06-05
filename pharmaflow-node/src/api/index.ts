@@ -1738,7 +1738,7 @@ app.post('/api/reunioes', { preHandler: autenticar }, async (request, reply) => 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const b = request.body as any;
   const { farmacia_id, gestor_id, titulo, descricao, data_reuniao,
-          duracao_minutos, local, link_meet } = b;
+          duracao_minutos, local, link_meet, telefone } = b;
 
   if (!farmacia_id || !titulo || !data_reuniao) {
     return reply.code(400).send({ detail: 'farmacia_id, titulo e data_reuniao são obrigatórios.' });
@@ -1775,6 +1775,7 @@ app.post('/api/reunioes', { preHandler: autenticar }, async (request, reply) => 
     duracaoMinutos: duracaoMin,
     local:          local ?? null,
     linkMeet:       link_meet ?? null,
+    telefone:       telefone ?? null,
     status:         'agendada',
   }).returning();
 
@@ -1852,6 +1853,7 @@ app.put('/api/reunioes/:id', { preHandler: autenticar }, async (request, reply) 
   if (b.duracao_minutos !== undefined) dados.duracaoMinutos = parseInt(b.duracao_minutos);
   if (b.local           !== undefined) dados.local          = b.local;
   if (b.link_meet       !== undefined) dados.linkMeet       = b.link_meet;
+  if (b.telefone        !== undefined) dados.telefone       = b.telefone;
   if (b.observacoes     !== undefined) dados.observacoes    = b.observacoes;
   if (b.gestor_id       !== undefined) dados.gestorId       = parseInt(b.gestor_id);
 

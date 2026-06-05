@@ -64,9 +64,9 @@ export const whatsappRepository = {
   // ── Reuniões — usado pelo scheduler ────────────────────────────────────────
 
   async buscarReunioesPara5h() {
-    const agora      = new Date();
-    const limiteIni  = new Date(agora.getTime() + (5 * 60 - 5) * 60_000);  // +4h55m
-    const limiteFim  = new Date(agora.getTime() + (5 * 60 + 5) * 60_000);  // +5h05m
+    const agora     = new Date();
+    const limiteIni = new Date(agora.getTime() + (5 * 60 - 5) * 60_000);  // +4h55m
+    const limiteFim = new Date(agora.getTime() + (5 * 60 + 5) * 60_000);  // +5h05m
 
     const { rows } = await db.execute(sql`
       SELECT
@@ -76,28 +76,26 @@ export const whatsappRepository = {
         r.duracao_minutos,
         r.local,
         r.link_meet,
-        f.telefone    AS farmacia_telefone,
-        f.nome        AS farmacia_nome,
-        f.responsavel AS farmacia_responsavel
+        r.telefone,
+        f.nome AS farmacia_nome
       FROM reunioes r
       JOIN farmacias f ON f.id = r.farmacia_id
       WHERE r.status IN ('agendada', 'confirmada')
         AND r.whatsapp_notificado_em IS NULL
         AND r.data_reuniao >= ${limiteIni.toISOString()}::timestamptz
         AND r.data_reuniao <  ${limiteFim.toISOString()}::timestamptz
-        AND f.telefone IS NOT NULL
-        AND f.telefone <> ''
+        AND r.telefone IS NOT NULL
+        AND r.telefone <> ''
     `);
     return rows as {
-      id:                   unknown;
-      titulo:               unknown;
-      data_reuniao:         unknown;
-      duracao_minutos:      unknown;
-      local:                unknown;
-      link_meet:            unknown;
-      farmacia_telefone:    unknown;
-      farmacia_nome:        unknown;
-      farmacia_responsavel: unknown;
+      id:              unknown;
+      titulo:          unknown;
+      data_reuniao:    unknown;
+      duracao_minutos: unknown;
+      local:           unknown;
+      link_meet:       unknown;
+      telefone:        unknown;
+      farmacia_nome:   unknown;
     }[];
   },
 

@@ -127,6 +127,9 @@ export const reunioes = pgTable('reunioes', {
   // agendada | confirmada | realizada | cancelada
   status:         varchar('status', { length: 20 }).default('agendada').notNull(),
 
+  // Telefone do contato que receberá a notificação WhatsApp 5h antes
+  telefone:             varchar('telefone', { length: 20 }),
+
   googleEventId:        varchar('google_event_id', { length: 255 }),
   observacoes:          text('observacoes'),
 
