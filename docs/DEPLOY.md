@@ -1,17 +1,5 @@
 # Deploy — PharmaFlow API
 
-**Servidor:** `ubuntu@ip-172-31-9-183` — `/opt/pharmaflow`  
-**Stack:** Node.js 20 + TypeScript + Fastify + PostgreSQL 16 + Docker Compose
-
----
-
-## Como funciona a arquitetura de build
-
-O projeto usa **Docker Compose** com dois serviços principais: `postgres` (banco de dados) e `api` (a aplicação Node.js).
-
-O ponto mais importante é que o **TypeScript NÃO é compilado dentro do Docker**. Ele é compilado direto na VPS antes de rodar o `docker build`. Isso evita que o container fique sem memória (OOM) durante a compilação — algo comum em VPS com pouca RAM.
-
-O fluxo completo é:
 
 ```
 Código TypeScript (src/)

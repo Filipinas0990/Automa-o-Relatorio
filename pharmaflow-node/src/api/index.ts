@@ -1509,7 +1509,7 @@ app.get('/api/reunioes/gerenciador-mensal', { preHandler: autenticar }, async (r
     FROM farmacias f
     LEFT JOIN gestores_trafego g ON g.id = f.gestor_id
     LEFT JOIN vw_ranking_atual rv ON rv.farmacia_id = f.id AND rv.periodo_dias = 7
-    WHERE f.ativa = TRUE AND f.fase = 'ativo'
+    WHERE f.ativa = TRUE AND f.fase IN ('ativo', 'entrada')
     ${gestorFiltro}
     ORDER BY f.nome
   `);
@@ -1615,7 +1615,7 @@ app.get('/api/reunioes/cobertura-mensal', { preHandler: autenticar }, async (req
   const { rows: totalRows } = await db.execute(sql`
     SELECT COUNT(*)::int AS total
     FROM farmacias f
-    WHERE f.ativa = TRUE AND f.fase = 'ativo'
+    WHERE f.ativa = TRUE AND f.fase IN ('ativo', 'entrada')
     ${gestorFiltroFarmacias}
   `);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
