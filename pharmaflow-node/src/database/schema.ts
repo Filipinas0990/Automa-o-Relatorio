@@ -17,8 +17,10 @@ export const gestoresTrafego = pgTable('gestores_trafego', {
   ativo:                boolean('ativo').default(true),
   criadoEm:             timestamp('criado_em', { withTimezone: true }).defaultNow(),
   // Google Calendar OAuth (adicionado pela migration 0003)
-  googleRefreshToken:   text('google_refresh_token'),
-  googleCalendarId:     varchar('google_calendar_id', { length: 255 }).default('primary'),
+  googleRefreshToken:    text('google_refresh_token'),
+  googleCalendarId:      varchar('google_calendar_id',    { length: 255 }).default('primary'),
+  // Número WhatsApp do gestor (formato: 5511999999999) — identifica quem manda msg
+  telefoneWhatsapp:      varchar('telefone_whatsapp',     { length: 20  }).unique(),
 });
 
 export const farmacias = pgTable('farmacias', {
@@ -190,6 +192,36 @@ export const farmaciaAcoes = pgTable('farmacia_acoes', {
   adicionadoPorId:  integer('adicionado_por_id').references(() => gestoresTrafego.id),
 });
 
+// ── Meta Ads Tokens por cliente (adicionado pela migration 0012) ─────────────
+
+// Configuração Meta por cliente — o access_token vem do env META_ACCESS_TOKEN (System User do BM)
+export const metaTokens = pgTable('meta_tokens', {
+  id:           serial('id').primaryKey(),
+  farmaciaId:   integer('farmacia_id').notNull().unique().references(() => farmacias.id),
+  adAccountId:  varchar('ad_account_id', { length: 60 }).notNull(),  // "act_XXXXX"
+  pageId:       varchar('page_id',        { length: 60 }).notNull(),
+  criadoEm:     timestamp('criado_em',    { withTimezone: true }).defaultNow(),
+  atualizadoEm: timestamp('atualizado_em',{ withTimezone: true }).defaultNow(),
+});
+
+// ── Campanhas criadas via automação WhatsApp (adicionado pela migration 0012) ─
+
+export const campanhasMeta = pgTable('campanhas_meta', {
+  id:              serial('id').primaryKey(),
+  farmaciaId:      integer('farmacia_id').notNull().references(() => farmacias.id),
+  gestorTelefone:  varchar('gestor_telefone', { length: 20 }).notNull(),
+  // 'aguardando_confirmacao' | 'publicada' | 'cancelada' | 'erro'
+  status:          varchar('status', { length: 30 }).default('aguardando_confirmacao').notNull(),
+  payloadJson:     text('payload_json').notNull(),   // CampanhaExtraida serializada
+  imagemBase64:    text('imagem_base64'),
+  // IDs retornados pela Meta após criação
+  metaCampanhaId:  varchar('meta_campanha_id', { length: 30 }),
+  metaConjuntoId:  varchar('meta_conjunto_id', { length: 30 }),
+  metaAnuncioId:   varchar('meta_anuncio_id',  { length: 30 }),
+  criadoEm:        timestamp('criado_em',     { withTimezone: true }).defaultNow(),
+  atualizadoEm:    timestamp('atualizado_em', { withTimezone: true }).defaultNow(),
+});
+
 // ── Tipos inferidos do schema (usados pela API e pipeline) ────────────────────
 
 export type Gestor          = typeof gestoresTrafego.$inferSelect;
@@ -200,3 +232,5 @@ export type AgendaBloqueio  = typeof agendaBloqueios.$inferSelect;
 export type Acao            = typeof acoes.$inferSelect;
 export type FarmaciaAcao    = typeof farmaciaAcoes.$inferSelect;
 export type WhatsAppConfig  = typeof whatsappConfig.$inferSelect;
+export type MetaToken       = typeof metaTokens.$inferSelect;
+export type CampanhaMeta    = typeof campanhasMeta.$inferSelect;

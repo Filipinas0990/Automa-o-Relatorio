@@ -8,7 +8,8 @@
     "start": "node dist/api/index.js",
     "pipeline": "node dist/pipeline.js",
     "dev": "ts-node src/api/index.ts",
-    "dev:pipeline": "ts-node src/pipeline.ts"
+    "dev:pipeline": "ts-node src/pipeline.ts",
+    "seed": "ts-node src/seed.ts"
   },
   "dependencies": {
     "@fastify/cors": "^9.0.1",
@@ -20,6 +21,7 @@
     "fastify": "^4.28.1",
     "googleapis": "^172.0.0",
     "jsonwebtoken": "^9.0.2",
+    "openai": "^6.44.0",
     "pg": "^8.11.5",
     "pino": "^8.21.0",
     "pino-pretty": "^11.2.1",

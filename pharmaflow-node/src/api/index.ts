@@ -18,6 +18,7 @@ import type { LogEntry } from '../log-stream';
 import { logger } from '../logger';
 import { iniciarSchedulerWhatsApp } from '../scheduler';
 import { whatsappRoutes } from '../whatsapp/routes';
+import { adsRoutes } from '../ads/routes';
 
 // ── Module augmentation — adiciona `user` ao FastifyRequest ───────────────────
 
@@ -40,7 +41,7 @@ const app = Fastify({
         {
           target: 'pino/file',
           level: 'info',
-          options: { destination: '/app/logs/pharmaflow.log', mkdir: true },
+          options: { destination: process.env.LOG_FILE || './logs/pharmaflow.log', mkdir: true },
         },
       ],
     },
@@ -91,6 +92,7 @@ async function apenasAdmin(request: FastifyRequest, reply: FastifyReply): Promis
 
 // ── WhatsApp Routes (plugin registrado após definição dos middlewares) ────────
 app.register(whatsappRoutes, { autenticar, apenasAdmin });
+app.register(adsRoutes,      { autenticar, apenasAdmin });
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
 
@@ -602,21 +604,23 @@ app.get('/api/farmacias/:id/evolucao', { preHandler: autenticar }, async (reques
 
 app.get('/api/relatorios', { preHandler: autenticar }, async () => {
   const { rows } = await db.execute(sql`
-    SELECT DATE_TRUNC('week', data_coleta)::DATE AS periodo_inicio,
-           MAX(periodo_fim)                      AS periodo_fim,
-           MAX(data_coleta)                      AS data_geracao,
-           COUNT(DISTINCT farmacia_id)           AS farmacias,
+    SELECT (data_coleta AT TIME ZONE 'UTC')::DATE::TEXT AS data_run,
+           MIN(periodo_inicio)                           AS min_periodo_inicio,
+           MAX(periodo_fim)                              AS max_periodo_fim,
+           MAX(data_coleta)                              AS data_geracao,
+           COUNT(DISTINCT farmacia_id)                   AS farmacias,
            SUM(CASE WHEN nivel_alerta != 'sem_dados' THEN 1 ELSE 0 END) AS concluidas
     FROM coletas
-    GROUP BY DATE_TRUNC('week', data_coleta)::DATE
-    ORDER BY periodo_inicio DESC
+    GROUP BY (data_coleta AT TIME ZONE 'UTC')::DATE
+    ORDER BY data_run DESC
     LIMIT 20
   `);
   const meses = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
-  const fmt   = (d: unknown) => {
-    if (!d) return '';
-    const dt = new Date(String(d));
-    return `${String(dt.getDate()).padStart(2,'0')} ${meses[dt.getMonth()]}`;
+  const fmtDate = (s: unknown) => {
+    if (!s) return '';
+    const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (!m) return '';
+    return `${m[3]} ${meses[parseInt(m[2]) - 1]}`;
   };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return rows.map((r: any, i: number) => {
@@ -624,9 +628,9 @@ app.get('/api/relatorios', { preHandler: autenticar }, async () => {
     const concluidas = parseInt(r.concluidas || total);
     return {
       id: i + 1,
-      label: `Semana ${rows.length - i} — ${fmt(r.periodo_inicio)} a ${fmt(r.periodo_fim)}`,
-      periodo_inicio: String(r.periodo_inicio),
-      periodo_fim:    String(r.periodo_fim),
+      label: `Semana ${rows.length - i} — ${fmtDate(r.min_periodo_inicio)} a ${fmtDate(r.max_periodo_fim)}`,
+      periodo_inicio: String(r.data_run),
+      periodo_fim:    String(r.max_periodo_fim),
       data_geracao:   r.data_geracao,
       farmacias:      `${concluidas}/${total}`,
       status: concluidas === total ? 'Concluido' : concluidas > 0 ? 'Parcial' : 'Erro',
@@ -652,7 +656,7 @@ async function queryRelatorio(periodo: string) {
     FROM coletas c
     JOIN farmacias f ON f.id = c.farmacia_id
     LEFT JOIN gestores_trafego g ON g.id = f.gestor_id
-    WHERE c.periodo_inicio::TEXT = ${periodo}
+    WHERE (c.data_coleta AT TIME ZONE 'UTC')::DATE::TEXT = ${periodo}
     ORDER BY c.score_criticidade DESC
   `);
   return rows;
@@ -664,7 +668,7 @@ async function queryCanaisRelatorio(periodo: string) {
     FROM coleta_canais cc
     JOIN coletas c   ON c.id  = cc.coleta_id
     JOIN farmacias f ON f.id  = c.farmacia_id
-    WHERE c.periodo_inicio::TEXT = ${periodo}
+    WHERE (c.data_coleta AT TIME ZONE 'UTC')::DATE::TEXT = ${periodo}
     ORDER BY f.nome, cc.atendimentos DESC
   `);
   return rows;

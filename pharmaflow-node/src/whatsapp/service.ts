@@ -231,5 +231,29 @@ export const whatsappService = {
         logger.info({ instancia: config.instanceName }, 'WhatsApp: QR code atualizado via webhook');
       }
     }
+
+    // Mensagem recebida de um gestor — roteia para o módulo de ads
+    if (evento === 'messages.upsert') {
+      const message = payload?.messages?.[0];
+      // Ignora mensagens enviadas pelo próprio bot e status
+      if (!message || message.key?.fromMe || message.messageType === 'protocolMessage') return;
+
+      const from: string        = message.key?.remoteJid?.replace('@s.whatsapp.net', '') ?? '';
+      const texto: string       = message.message?.conversation
+        ?? message.message?.extendedTextMessage?.text
+        ?? '';
+
+      // Imagem: Evolution API entrega em base64 dentro do payload
+      const imagemBase64: string | undefined =
+        message.message?.imageMessage?.jpegThumbnail
+        ?? message.message?.base64
+        ?? undefined;
+
+      if (!from) return;
+
+      // Import lazy para evitar dependência circular
+      const { adsService } = await import('../ads/service');
+      await adsService.processarMensagem(from, texto, imagemBase64);
+    }
   },
 };

@@ -1,7 +1,7 @@
 import pino from 'pino';
 import { mkdirSync } from 'fs';
 
-const LOG_DIR = '/app/logs';
+const LOG_DIR = process.env.LOG_DIR || './logs';
 
 try { mkdirSync(LOG_DIR, { recursive: true }); } catch { /* ok */ }
 
