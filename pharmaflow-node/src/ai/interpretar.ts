@@ -1,7 +1,13 @@
 import OpenAI from 'openai';
 import type { MensagemInterpretada } from './types';
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+// Cliente OpenAI criado sob demanda (lazy) — assim a app NÃO quebra ao subir
+// quando não há OPENAI_API_KEY. Só é instanciado se o bot for realmente usado.
+let _openai: OpenAI | null = null;
+function getOpenAI(): OpenAI {
+  if (!_openai) _openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  return _openai;
+}
 
 const SYSTEM_PROMPT = `Você é um assistente especializado em criar campanhas no Meta Ads para gestores de tráfego de farmácias.
 
@@ -87,7 +93,7 @@ export async function interpretarMensagem(
 
   messages.push({ role: 'user', content: userContent });
 
-  const response = await openai.chat.completions.create({
+  const response = await getOpenAI().chat.completions.create({
     model:       'gpt-4o',
     messages,
     max_tokens:  1024,

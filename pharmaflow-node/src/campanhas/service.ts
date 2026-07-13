@@ -1,7 +1,7 @@
 import { metaReq } from '../meta/client';
 import { uploadImagem, criarAdCreative } from '../meta/criativo';
 import { criarCampanhaCompleta } from '../meta/campanha';
-import { gerarCopyIA } from './copy-ia';
+import { gerarCopyPadrao } from './copy-ia';
 import { logger } from '../logger';
 import type { MetaToken } from '../meta/types';
 
@@ -99,7 +99,7 @@ export async function publicarCampanha(input: PublicarCampanhaInput): Promise<{
 
   const token: MetaToken = { farmaciaId: 0, adAccountId, pageId: pageId ?? '', accessToken };
 
-  // ── 1) Copy: usa a do gestor; se faltar, IA gera (1x) ───────────────────────
+  // ── 1) Copy: usa a do gestor; se faltar, usa uma copy padrão (SEM IA) ───────
   const copyManual = input.criativos.copy ?? {};
   let copy = {
     textoPrincipal: (copyManual.textoPrincipal ?? '').trim(),
@@ -108,16 +108,14 @@ export async function publicarCampanha(input: PublicarCampanhaInput): Promise<{
   };
 
   if (!copy.textoPrincipal) {
-    logger.info('Copy vazia — gerando via IA');
-    const gerada = await gerarCopyIA({
+    const padrao = gerarCopyPadrao({
       produtos: input.criativos.itens.map((i) => i.nome).filter(Boolean),
-      objetivo: input.objetivo.nome ?? input.objetivo.codigo,
       farmacia: input.conta.cliente ?? input.conta.nome,
     });
     copy = {
-      textoPrincipal: gerada.textoPrincipal || 'Ofertas especiais na sua farmácia!',
-      titulo:         copy.titulo    || gerada.titulo,
-      descricao:      copy.descricao || gerada.descricao,
+      textoPrincipal: padrao.textoPrincipal,
+      titulo:         copy.titulo    || padrao.titulo,
+      descricao:      copy.descricao || padrao.descricao,
     };
   }
 
