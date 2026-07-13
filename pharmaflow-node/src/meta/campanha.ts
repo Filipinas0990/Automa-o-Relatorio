@@ -16,6 +16,7 @@ const OPTIMIZATION_GOAL: Record<string, string> = {
   OUTCOME_AWARENESS:  'REACH',
   OUTCOME_SALES:      'OFFSITE_CONVERSIONS',
   OUTCOME_LEADS:      'LEAD_GENERATION',
+  OUTCOME_ENGAGEMENT: 'POST_ENGAGEMENT',
 };
 
 // billing_event: IMPRESSIONS para todos — evita exigência de bid manual
@@ -24,6 +25,7 @@ const BILLING_EVENT: Record<string, string> = {
   REACH:                'IMPRESSIONS',
   OFFSITE_CONVERSIONS:  'IMPRESSIONS',
   LEAD_GENERATION:      'IMPRESSIONS',
+  POST_ENGAGEMENT:      'IMPRESSIONS',
 };
 
 const GENERO_META: Record<string, number[]> = {
@@ -35,9 +37,13 @@ const GENERO_META: Record<string, number[]> = {
 export async function criarCampanhaCompleta(
   input: CriarCampanhaInput,
 ): Promise<CampanhaCriada> {
-  const { token, nome, objetivo, orcamentoDiario, dataInicio, dataFim, publico, copy, imagemHash } = input;
+  const { token, nome, objetivo, orcamentoDiario, dataInicio, dataFim, publico, imagemHash } = input;
+  const status = input.status ?? 'PAUSED';
 
-  const metaObjetivo   = OBJETIVO_META[objetivo] ?? 'OUTCOME_TRAFFIC';
+  // Aceita OUTCOME_* direto (novo wizard) ou os códigos legados (fluxo WhatsApp)
+  const metaObjetivo   = objetivo.startsWith('OUTCOME_')
+    ? objetivo
+    : (OBJETIVO_META[objetivo] ?? 'OUTCOME_TRAFFIC');
   const optGoal        = OPTIMIZATION_GOAL[metaObjetivo] ?? 'LINK_CLICKS';
   const billingEvent   = BILLING_EVENT[optGoal] ?? 'IMPRESSIONS';
 
@@ -49,7 +55,7 @@ export async function criarCampanhaCompleta(
     {
       name:                            nome,
       objective:                       metaObjetivo,
-      status:                          'PAUSED',
+      status,
       special_ad_categories:           [],
       is_adset_budget_sharing_enabled: false,  // orçamento gerenciado por ad set
     },
@@ -79,7 +85,7 @@ export async function criarCampanhaCompleta(
     optimization_goal: optGoal,
     bid_strategy:      'LOWEST_COST_WITHOUT_CAP',
     targeting,
-    status:            'PAUSED',
+    status,
   };
 
   // end_time só vai se tiver data de fim definida
@@ -105,7 +111,7 @@ export async function criarCampanhaCompleta(
         name:     `${nome} — Anúncio`,
         adset_id: conjunto.id,
         creative: { creative_id: imagemHash },
-        status:   'PAUSED',
+        status,
       },
     );
     anuncioId = anuncio.id;

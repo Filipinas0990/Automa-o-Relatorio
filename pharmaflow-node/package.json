@@ -9,7 +9,8 @@
     "pipeline": "node dist/pipeline.js",
     "dev": "ts-node src/api/index.ts",
     "dev:pipeline": "ts-node src/pipeline.ts",
-    "seed": "ts-node src/seed.ts"
+    "seed": "ts-node src/seed.ts",
+    "importar-catalogo": "ts-node src/importar-catalogo.ts"
   },
   "dependencies": {
     "@fastify/cors": "^9.0.1",

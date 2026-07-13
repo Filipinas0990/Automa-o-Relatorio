@@ -222,6 +222,20 @@ export const campanhasMeta = pgTable('campanhas_meta', {
   atualizadoEm:    timestamp('atualizado_em', { withTimezone: true }).defaultNow(),
 });
 
+// ── Catálogo de produtos com imagem PNG (fluxo Criativos e Campanhas) ─────────
+
+export const catalogoProdutos = pgTable('catalogo_produtos', {
+  id:           serial('id').primaryKey(),
+  nome:         varchar('nome',      { length: 200 }).notNull(),
+  // nome normalizado (sem acento, minúsculo) usado para o match com a planilha
+  nomeNorm:     varchar('nome_norm', { length: 200 }).notNull(),
+  // imagem PNG em base64 (sem o prefixo data:)
+  imagemB64:    text('imagem_b64'),
+  mime:         varchar('mime', { length: 40 }).default('image/png'),
+  criadoEm:     timestamp('criado_em',     { withTimezone: true }).defaultNow(),
+  atualizadoEm: timestamp('atualizado_em', { withTimezone: true }).defaultNow(),
+});
+
 // ── Tipos inferidos do schema (usados pela API e pipeline) ────────────────────
 
 export type Gestor          = typeof gestoresTrafego.$inferSelect;
@@ -234,3 +248,4 @@ export type FarmaciaAcao    = typeof farmaciaAcoes.$inferSelect;
 export type WhatsAppConfig  = typeof whatsappConfig.$inferSelect;
 export type MetaToken       = typeof metaTokens.$inferSelect;
 export type CampanhaMeta    = typeof campanhasMeta.$inferSelect;
+export type CatalogoProduto = typeof catalogoProdutos.$inferSelect;

@@ -48,6 +48,75 @@ export async function metaReq<T = unknown>(
   return json;
 }
 
+// Mapa de account_status da Meta → rótulo legível
+const STATUS_CONTA: Record<number, string> = {
+  1: 'Ativa',
+  2: 'Desativada',
+  3: 'Não confirmada',
+  7: 'Em análise',
+  9: 'Em período de graça',
+  101: 'Fechada',
+};
+
+export interface ContaAnuncio {
+  id:            string;   // "act_123456789"
+  accountId:     string;   // "123456789"
+  nome:          string;   // nome da conta de anúncio
+  cliente:       string;   // nome do Business Manager dono (quando disponível)
+  moeda:         string;   // "BRL"
+  status:        string;   // rótulo legível
+  ativa:         boolean;
+  temPagamento:  boolean;  // tem forma de pagamento configurada
+  formaPagamento: string;  // ex: "Saldo disponível (R$816,04 BRL)" ou "" (nenhuma)
+}
+
+/**
+ * Lista TODAS as contas de anúncios que o token tem acesso (System User do BM).
+ * Segue a paginação da Graph API até acabar.
+ */
+export async function listarContasDeAnuncio(accessToken: string): Promise<ContaAnuncio[]> {
+  const contas: ContaAnuncio[] = [];
+  const FIELDS = 'name,account_id,account_status,currency,business{name},funding_source_details{display_string}';
+  let path: string | null = `/me/adaccounts?fields=${FIELDS}&limit=100`;
+
+  // Segue as páginas (paging.next) até não haver mais
+  while (path) {
+    const res: {
+      data?: Array<{
+        id: string;
+        account_id: string;
+        name?: string;
+        account_status?: number;
+        currency?: string;
+        business?: { name?: string };
+        funding_source_details?: { display_string?: string };
+      }>;
+      paging?: { next?: string; cursors?: { after?: string } };
+    } = await metaReq('GET', path, accessToken);
+
+    for (const c of res.data ?? []) {
+      const forma = c.funding_source_details?.display_string ?? '';
+      contas.push({
+        id:            c.id,
+        accountId:     c.account_id,
+        nome:          c.name ?? `Conta ${c.account_id}`,
+        cliente:       c.business?.name ?? '',
+        moeda:         c.currency ?? '',
+        status:        STATUS_CONTA[c.account_status ?? -1] ?? 'Desconhecido',
+        ativa:         c.account_status === 1,
+        temPagamento:  !!c.funding_source_details,
+        formaPagamento: forma,
+      });
+    }
+
+    // Próxima página via cursor (mantém o mesmo path base)
+    const after = res.paging?.next ? res.paging?.cursors?.after : undefined;
+    path = after ? `/me/adaccounts?fields=${FIELDS}&limit=100&after=${after}` : null;
+  }
+
+  return contas;
+}
+
 /**
  * Verifica se o token está válido e retorna quantos dias restam.
  * Chame em /api/ads/token-status para exibir no painel de configurações.

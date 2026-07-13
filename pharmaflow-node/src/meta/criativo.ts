@@ -36,7 +36,16 @@ export async function criarAdCreative(
   imagemHash:  string,
   copy:        string,
   linkDestino: string,
+  extras?:     { titulo?: string; descricao?: string },
 ): Promise<{ id: string }> {
+  const link_data: Record<string, unknown> = {
+    image_hash: imagemHash,
+    link:       linkDestino,
+    message:    copy,
+  };
+  if (extras?.titulo)    link_data.name        = extras.titulo;     // headline
+  if (extras?.descricao) link_data.description = extras.descricao;
+
   return metaReq<{ id: string }>(
     'POST',
     `/${token.adAccountId}/adcreatives`,
@@ -44,12 +53,8 @@ export async function criarAdCreative(
     {
       name: 'Criativo via Automação',
       object_story_spec: {
-        page_id:   token.pageId,
-        link_data: {
-          image_hash: imagemHash,
-          link:       linkDestino,
-          message:    copy,
-        },
+        page_id: token.pageId,
+        link_data,
       },
     },
   );

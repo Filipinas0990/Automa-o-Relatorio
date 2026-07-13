@@ -11,10 +11,11 @@ export interface MetaToken {
 export interface CriarCampanhaInput {
   token:          MetaToken;
   nome:           string;
-  objetivo:       string;        // CONVERSIONS | LINK_CLICKS | REACH | ...
+  objetivo:       string;        // OUTCOME_* (novo) ou CONVERSIONS/LINK_CLICKS/... (legado)
   orcamentoDiario: number;       // em centavos
   dataInicio:     string;        // YYYY-MM-DD
   dataFim:        string | null;  // YYYY-MM-DD ou null (sem data de término)
+  status?:        'ACTIVE' | 'PAUSED';  // padrão PAUSED (não quebra fluxos existentes)
   publico: {
     genero:       'ALL' | 'MALE' | 'FEMALE';
     idadeMin:     number;

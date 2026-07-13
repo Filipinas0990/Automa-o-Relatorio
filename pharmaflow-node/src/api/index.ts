@@ -19,6 +19,8 @@ import { logger } from '../logger';
 import { iniciarSchedulerWhatsApp } from '../scheduler';
 import { whatsappRoutes } from '../whatsapp/routes';
 import { adsRoutes } from '../ads/routes';
+import { catalogoRoutes } from '../catalogo/routes';
+import { campanhasRoutes } from '../campanhas/routes';
 
 // ── Module augmentation — adiciona `user` ao FastifyRequest ───────────────────
 
@@ -93,6 +95,8 @@ async function apenasAdmin(request: FastifyRequest, reply: FastifyReply): Promis
 // ── WhatsApp Routes (plugin registrado após definição dos middlewares) ────────
 app.register(whatsappRoutes, { autenticar, apenasAdmin });
 app.register(adsRoutes,      { autenticar, apenasAdmin });
+app.register(catalogoRoutes, { autenticar, apenasAdmin });
+app.register(campanhasRoutes,{ autenticar, apenasAdmin });
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
 
