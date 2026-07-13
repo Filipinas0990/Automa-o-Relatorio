@@ -36,7 +36,7 @@ export async function criarAdCreative(
   imagemHash:  string,
   copy:        string,
   linkDestino: string,
-  extras?:     { titulo?: string; descricao?: string },
+  extras?:     { titulo?: string; descricao?: string; whatsapp?: boolean },
 ): Promise<{ id: string }> {
   const link_data: Record<string, unknown> = {
     image_hash: imagemHash,
@@ -45,6 +45,15 @@ export async function criarAdCreative(
   };
   if (extras?.titulo)    link_data.name        = extras.titulo;     // headline
   if (extras?.descricao) link_data.description = extras.descricao;
+
+  // Click-to-WhatsApp: link fixo + botão "Enviar mensagem" que abre o WhatsApp
+  if (extras?.whatsapp) {
+    link_data.link = 'https://api.whatsapp.com/send';
+    link_data.call_to_action = {
+      type:  'WHATSAPP_MESSAGE',
+      value: { app_destination: 'WHATSAPP' },
+    };
+  }
 
   return metaReq<{ id: string }>(
     'POST',

@@ -39,12 +39,17 @@ export async function criarCampanhaCompleta(
 ): Promise<CampanhaCriada> {
   const { token, nome, objetivo, orcamentoDiario, dataInicio, dataFim, publico, imagemHash } = input;
   const status = input.status ?? 'PAUSED';
+  const whatsapp = input.whatsapp === true;
 
   // Aceita OUTCOME_* direto (novo wizard) ou os códigos legados (fluxo WhatsApp)
   const metaObjetivo   = objetivo.startsWith('OUTCOME_')
     ? objetivo
     : (OBJETIVO_META[objetivo] ?? 'OUTCOME_TRAFFIC');
-  const optGoal        = OPTIMIZATION_GOAL[metaObjetivo] ?? 'LINK_CLICKS';
+
+  // Click-to-WhatsApp: destino = conversa. Tráfego otimiza por cliques; demais por conversas.
+  const optGoal = whatsapp
+    ? (metaObjetivo === 'OUTCOME_TRAFFIC' ? 'LINK_CLICKS' : 'CONVERSATIONS')
+    : (OPTIMIZATION_GOAL[metaObjetivo] ?? 'LINK_CLICKS');
   const billingEvent   = BILLING_EVENT[optGoal] ?? 'IMPRESSIONS';
 
   // 1. Campanha
@@ -87,6 +92,12 @@ export async function criarCampanhaCompleta(
     targeting,
     status,
   };
+
+  // Click-to-WhatsApp: destino da conversa = a página (com WhatsApp conectado)
+  if (whatsapp) {
+    adSetBody.destination_type = 'WHATSAPP';
+    adSetBody.promoted_object   = { page_id: token.pageId };
+  }
 
   // end_time só vai se tiver data de fim definida
   if (dataFim) {

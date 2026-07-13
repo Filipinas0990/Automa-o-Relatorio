@@ -16,6 +16,7 @@ export interface CriarCampanhaInput {
   dataInicio:     string;        // YYYY-MM-DD
   dataFim:        string | null;  // YYYY-MM-DD ou null (sem data de término)
   status?:        'ACTIVE' | 'PAUSED';  // padrão PAUSED (não quebra fluxos existentes)
+  whatsapp?:      boolean;              // true = anúncio Click-to-WhatsApp (destino = conversa)
   publico: {
     genero:       'ALL' | 'MALE' | 'FEMALE';
     idadeMin:     number;

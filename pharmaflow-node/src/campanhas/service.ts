@@ -126,6 +126,11 @@ export async function publicarCampanha(input: PublicarCampanhaInput): Promise<{
     || `${input.conta.cliente ?? input.conta.nome ?? 'Campanha'} — ${input.objetivo.nome ?? input.objetivo.codigo}`
   ).slice(0, 100);
 
+  // Destino WhatsApp (conversa) para Tráfego, Engajamento e Vendas — precisa de página.
+  // Reconhecimento (alcance) e Cadastros não usam WhatsApp.
+  const OBJ_WHATSAPP = ['OUTCOME_TRAFFIC', 'OUTCOME_ENGAGEMENT', 'OUTCOME_SALES'];
+  const usarWhatsapp = !!pageId && OBJ_WHATSAPP.includes(input.objetivo.codigo);
+
   // ── 2) Criativo: sobe o 1º PNG e cria o AdCreative ──────────────────────────
   let creativeId: string | undefined;
   const primeiro = input.criativos.itens.find((i) => i.pngBase64);
@@ -136,9 +141,9 @@ export async function publicarCampanha(input: PublicarCampanhaInput): Promise<{
     avisos.push('Nenhum criativo com imagem foi enviado — campanha criada sem anúncio.');
   } else {
     const img = await uploadImagem(token, primeiro.pngBase64, primeiro.nome);
-    const linkDestino = `https://www.facebook.com/${pageId}`;   // v1: leva à página
+    const linkDestino = `https://www.facebook.com/${pageId}`;   // usado quando não é WhatsApp
     const creative = await criarAdCreative(token, img.hash, copy.textoPrincipal, linkDestino, {
-      titulo: copy.titulo, descricao: copy.descricao,
+      titulo: copy.titulo, descricao: copy.descricao, whatsapp: usarWhatsapp,
     });
     creativeId = creative.id;
     if (input.criativos.itens.filter((i) => i.pngBase64).length > 1) {
@@ -155,6 +160,7 @@ export async function publicarCampanha(input: PublicarCampanhaInput): Promise<{
     dataInicio:      input.orcamento.dataInicio,
     dataFim:         input.orcamento.dataFim,
     status:          'ACTIVE',
+    whatsapp:        usarWhatsapp,
     publico: {
       genero:      GENERO_MAP[input.publico.genero] ?? 'ALL',
       idadeMin:    input.publico.idadeMin,
