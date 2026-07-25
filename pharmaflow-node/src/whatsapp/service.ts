@@ -12,7 +12,8 @@ function normalizarTelefone(tel: string): string {
   return d.startsWith('55') && d.length >= 12 ? d : `55${d}`;
 }
 
-async function evolutionReq<T = unknown>(
+/** Chamada crua à Evolution API. Exportada para o módulo de disparos reusar. */
+export async function evolutionReq<T = unknown>(
   method: string,
   path:   string,
   body?:  unknown,

@@ -67,8 +67,10 @@ export async function adsRoutes(
         return reply.send({ contas });
       } catch (err) {
         const msg = (err as Error).message;
+        // 502 (não 401): problema é o token do META, não a sessão do usuário.
+        // 401 faria o frontend deslogar o gestor indevidamente.
         if (msg === 'META_TOKEN_EXPIRADO') {
-          return reply.code(401).send({ detail: 'Token Meta expirado. Gere um novo e atualize o servidor.' });
+          return reply.code(502).send({ detail: 'Token do Meta expirado ou inválido. Gere um novo e atualize o servidor.' });
         }
         return reply.code(502).send({ detail: `Erro ao consultar a Meta: ${msg}` });
       }

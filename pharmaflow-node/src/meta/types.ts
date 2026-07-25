@@ -25,12 +25,16 @@ export interface CriarCampanhaInput {
   };
   copy:           string;
   imagemUrl?:     string;        // URL da imagem já uploadada no Meta
-  imagemHash?:    string;        // hash retornado após upload
+  imagemHash?:    string;        // legado: 1 criativo só → 1 anúncio
+  // Novo: N criativos → N anúncios no MESMO conjunto (o Meta rotaciona e
+  // entrega mais o que performa melhor). Tem prioridade sobre imagemHash.
+  criativos?:     Array<{ creativeId: string; rotulo: string }>;
 }
 
 export interface CampanhaCriada {
   campanhaId:    string;
   conjuntoId:    string;
-  anuncioId:     string;
+  anuncioId:     string;    // 1º anúncio — mantido para os fluxos legados
+  anuncioIds:    string[];  // todos os anúncios criados
   linkGerenciador: string;
 }

@@ -1,4 +1,4 @@
-import 'dotenv/config';
+import '../env';
 import { chromium } from 'playwright';
 import type { Browser, Page, Locator } from 'playwright';
 import type { DadosFarmacia, FarmaciaParaColeta } from '../types';

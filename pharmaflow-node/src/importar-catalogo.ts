@@ -1,4 +1,4 @@
-import 'dotenv/config';
+import './env';
 import { readdirSync, readFileSync } from 'fs';
 import { join, extname, basename } from 'path';
 import { upsertProduto, contarProdutos } from './catalogo/repository';

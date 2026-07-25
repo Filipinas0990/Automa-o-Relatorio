@@ -1,4 +1,4 @@
-import 'dotenv/config';
+import './env';
 import { logger } from './logger';
 import { emitPipelineLog } from './log-stream';
 import { eq, and, isNotNull, desc } from 'drizzle-orm';

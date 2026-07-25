@@ -10,6 +10,8 @@
     "dev": "ts-node src/api/index.ts",
     "dev:pipeline": "ts-node src/pipeline.ts",
     "seed": "ts-node src/seed.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "importar-catalogo": "ts-node src/importar-catalogo.ts"
   },
   "dependencies": {
@@ -35,6 +37,7 @@
     "@types/pg": "^8.11.6",
     "drizzle-kit": "^0.22.4",
     "ts-node": "^10.9.2",
-    "typescript": "^5.5.2"
+    "typescript": "^5.5.2",
+    "vitest": "^4.1.10"
   }
 }

@@ -232,8 +232,93 @@ export const catalogoProdutos = pgTable('catalogo_produtos', {
   // imagem PNG em base64 (sem o prefixo data:)
   imagemB64:    text('imagem_b64'),
   mime:         varchar('mime', { length: 40 }).default('image/png'),
+  // produto desligado não entra no match de criativos nem é oferecido (migration 0018)
+  ativo:        boolean('ativo').notNull().default(true),
   criadoEm:     timestamp('criado_em',     { withTimezone: true }).defaultNow(),
   atualizadoEm: timestamp('atualizado_em', { withTimezone: true }).defaultNow(),
+});
+
+// ── Disparo em grupos de WhatsApp (migrations 0015 e 0016) ───────────────────
+
+// Instância Evolution por GESTOR — a ponte multi-tenant. Cada gestor de tráfego
+// tem UMA conexão de WhatsApp, e é nela que ficam os grupos dos clientes dele.
+// Não confundir com whatsappConfig, que é a instância única global usada nas
+// notificações de reunião.
+export const gestorWhatsapp = pgTable('gestor_whatsapp', {
+  id:              serial('id').primaryKey(),
+  gestorId:        integer('gestor_id').notNull().unique().references(() => gestoresTrafego.id),
+  instanceName:    varchar('instance_name', { length: 100 }).notNull().unique(),
+  // close | connecting | open
+  status:          varchar('status', { length: 20 }).default('close').notNull(),
+  numeroConectado: varchar('numero_conectado', { length: 30 }),
+  qrCode:          text('qr_code'),
+  criadoEm:        timestamp('criado_em',     { withTimezone: true }).defaultNow(),
+  atualizadoEm:    timestamp('atualizado_em', { withTimezone: true }).defaultNow(),
+});
+
+export const disparosGrupo = pgTable('disparos_grupo', {
+  id:           serial('id').primaryKey(),
+  gestorId:     integer('gestor_id').notNull().references(() => gestoresTrafego.id),
+  titulo:       varchar('titulo', { length: 200 }).notNull(),
+  mensagem:     text('mensagem').notNull(),
+  // JSON: [{ b64, mime, rotulo }] — um disparo leva vários criativos
+  midiasJson:   text('midias_json'),
+  // de qual cliente/pedido veio (null = envio avulso, sem solicitação)
+  farmaciaId:   integer('farmacia_id').references(() => farmacias.id),
+  solicitacaoId: integer('solicitacao_id'),
+  // JSON: [{ jid: "...@g.us", nome: "..." }]
+  gruposJson:   text('grupos_json').notNull(),
+  // agora | agendado
+  quando:       varchar('quando', { length: 10 }).default('agora').notNull(),
+  agendadoPara: timestamp('agendado_para', { withTimezone: true }),
+  // nunca | diario | semanal | mensal
+  repetir:      varchar('repetir', { length: 10 }).default('nunca').notNull(),
+  timezone:     varchar('timezone', { length: 50 }).default('America/Sao_Paulo').notNull(),
+  // agendado | enviando | enviado | erro | cancelado
+  status:       varchar('status', { length: 20 }).default('agendado').notNull(),
+  proximoEnvio: timestamp('proximo_envio', { withTimezone: true }),
+  ultimoEnvio:  timestamp('ultimo_envio',  { withTimezone: true }),
+  criadoEm:     timestamp('criado_em',     { withTimezone: true }).defaultNow(),
+  atualizadoEm: timestamp('atualizado_em', { withTimezone: true }).defaultNow(),
+});
+
+export const disparosGrupoLog = pgTable('disparos_grupo_log', {
+  id:         serial('id').primaryKey(),
+  disparoId:  integer('disparo_id').notNull().references(() => disparosGrupo.id),
+  grupoJid:   varchar('grupo_jid',  { length: 120 }).notNull(),
+  grupoNome:  varchar('grupo_nome', { length: 200 }),
+  // ok | erro
+  status:     varchar('status', { length: 10 }).notNull(),
+  erro:       text('erro'),
+  enviadoEm:  timestamp('enviado_em', { withTimezone: true }).defaultNow(),
+});
+
+// ── Ofertas enviadas pelo dono da farmácia (migration 0017) ──────────────────
+
+// Link público do gestor — o dono abre sem login, o token é a credencial.
+export const linksOferta = pgTable('links_oferta', {
+  id:           serial('id').primaryKey(),
+  gestorId:     integer('gestor_id').notNull().unique().references(() => gestoresTrafego.id),
+  token:        varchar('token', { length: 64 }).notNull().unique(),
+  ativo:        boolean('ativo').default(true).notNull(),
+  criadoEm:     timestamp('criado_em',     { withTimezone: true }).defaultNow(),
+  atualizadoEm: timestamp('atualizado_em', { withTimezone: true }).defaultNow(),
+});
+
+export const solicitacoesOferta = pgTable('solicitacoes_oferta', {
+  id:             serial('id').primaryKey(),
+  gestorId:       integer('gestor_id').notNull().references(() => gestoresTrafego.id),
+  farmaciaId:     integer('farmacia_id').notNull().references(() => farmacias.id),
+  // JSON: [{ id, nome }] — produtos do catálogo
+  produtosJson:   text('produtos_json').notNull(),
+  // itens fora do catálogo, um por linha (sem imagem pronta)
+  produtosLivres: text('produtos_livres'),
+  observacao:     text('observacao'),
+  enviadoPor:     varchar('enviado_por', { length: 120 }),
+  // pendente | atendida | descartada
+  status:         varchar('status', { length: 20 }).default('pendente').notNull(),
+  criadoEm:       timestamp('criado_em',   { withTimezone: true }).defaultNow(),
+  atendidaEm:     timestamp('atendida_em', { withTimezone: true }),
 });
 
 // ── Tipos inferidos do schema (usados pela API e pipeline) ────────────────────
@@ -249,3 +334,8 @@ export type WhatsAppConfig  = typeof whatsappConfig.$inferSelect;
 export type MetaToken       = typeof metaTokens.$inferSelect;
 export type CampanhaMeta    = typeof campanhasMeta.$inferSelect;
 export type CatalogoProduto = typeof catalogoProdutos.$inferSelect;
+export type GestorWhatsapp  = typeof gestorWhatsapp.$inferSelect;
+export type LinkOferta        = typeof linksOferta.$inferSelect;
+export type SolicitacaoOferta = typeof solicitacoesOferta.$inferSelect;
+export type DisparoGrupo    = typeof disparosGrupo.$inferSelect;
+export type DisparoGrupoLog = typeof disparosGrupoLog.$inferSelect;

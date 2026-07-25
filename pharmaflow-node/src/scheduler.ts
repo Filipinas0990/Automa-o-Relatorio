@@ -1,5 +1,7 @@
 import { whatsappService }    from './whatsapp/service';
 import { whatsappRepository } from './whatsapp/repository';
+import { disparosService }    from './disparos/service';
+import { disparosRepository } from './disparos/repository';
 import { logger }             from './logger';
 
 const INTERVALO_MS = 60_000; // verifica a cada 1 minuto
@@ -76,6 +78,32 @@ async function verificarENotificar(): Promise<void> {
   }
 }
 
+// ── Disparos agendados em grupos ──────────────────────────────────────────────
+
+/**
+ * Executa os disparos de grupo cuja hora chegou. O próprio executarDisparo
+ * recalcula o proximo_envio conforme a repetição (ou finaliza o disparo).
+ */
+async function verificarDisparosAgendados(): Promise<void> {
+  const pendentes = await disparosRepository.buscarDisparosPendentes(new Date());
+  if (!pendentes.length) return;
+
+  logger.info({ total: pendentes.length }, 'Scheduler: disparos de grupo pendentes');
+
+  for (const disparo of pendentes) {
+    try {
+      const { enviados, falhas } = await disparosService.executarDisparo(disparo.id);
+      logger.info(
+        { disparoId: disparo.id, enviados, falhas },
+        'Scheduler: disparo em grupos concluído',
+      );
+    } catch (err) {
+      logger.error({ err, disparoId: disparo.id }, 'Erro ao executar disparo agendado');
+      await disparosRepository.atualizarDisparo(disparo.id, { status: 'erro' });
+    }
+  }
+}
+
 // ── Start ─────────────────────────────────────────────────────────────────────
 
 export function iniciarSchedulerWhatsApp(): void {
@@ -84,6 +112,10 @@ export function iniciarSchedulerWhatsApp(): void {
   setInterval(() => {
     verificarENotificar().catch(err =>
       logger.error({ err }, 'Erro no scheduler de notificações WhatsApp'),
+    );
+
+    verificarDisparosAgendados().catch(err =>
+      logger.error({ err }, 'Erro no scheduler de disparos em grupos'),
     );
   }, INTERVALO_MS);
 }

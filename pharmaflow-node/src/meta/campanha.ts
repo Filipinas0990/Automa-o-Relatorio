@@ -1,7 +1,7 @@
 // Criação de Campanha → Conjunto de Anúncios → Anúncio na Meta Marketing API
 
 import { metaReq } from './client';
-import type { CriarCampanhaInput, CampanhaCriada } from './types';
+import type { CriarCampanhaInput, CampanhaCriada, MetaToken } from './types';
 
 const OBJETIVO_META: Record<string, string> = {
   CONVERSIONS:     'OUTCOME_SALES',
@@ -33,6 +33,36 @@ const GENERO_META: Record<string, number[]> = {
   MALE:   [1],
   FEMALE: [2],
 };
+
+/**
+ * Cria os anúncios de um conjunto — um por criativo. Com mais de um, o rótulo
+ * vai numerado, porque no Ads Manager o gestor precisa distinguir os anúncios
+ * entre si para comparar performance.
+ */
+export async function criarAnuncios(
+  token:      MetaToken,
+  conjuntoId: string,
+  nomeBase:   string,
+  criativos:  Array<{ creativeId: string; rotulo: string }>,
+  status:     'ACTIVE' | 'PAUSED',
+): Promise<string[]> {
+  const ids: string[] = [];
+  for (const [i, c] of criativos.entries()) {
+    const nome = (criativos.length > 1
+      ? `${nomeBase} — ${i + 1}. ${c.rotulo}`
+      : `${nomeBase} — ${c.rotulo}`
+    ).slice(0, 100);
+
+    const anuncio = await metaReq<{ id: string }>(
+      'POST',
+      `/${token.adAccountId}/ads`,
+      token.accessToken,
+      { name: nome, adset_id: conjuntoId, creative: { creative_id: c.creativeId }, status },
+    );
+    ids.push(anuncio.id);
+  }
+  return ids;
+}
 
 export async function criarCampanhaCompleta(
   input: CriarCampanhaInput,
@@ -111,29 +141,22 @@ export async function criarCampanhaCompleta(
     adSetBody,
   );
 
-  // 3. Anúncio (Ad) — só cria se tiver creative
-  let anuncioId = '';
-  if (imagemHash) {
-    const anuncio = await metaReq<{ id: string }>(
-      'POST',
-      `/${token.adAccountId}/ads`,
-      token.accessToken,
-      {
-        name:     `${nome} — Anúncio`,
-        adset_id: conjunto.id,
-        creative: { creative_id: imagemHash },
-        status,
-      },
-    );
-    anuncioId = anuncio.id;
-  }
-  // Sem criativo: campanha e ad set são criados pausados;
-  // o gestor adiciona o criativo manualmente no Ads Manager.
+  // 3. Anúncios (Ads) — um por criativo, todos no mesmo conjunto.
+  // Sem criativo nenhum: campanha e ad set ficam sem anúncio e o gestor
+  // adiciona manualmente no Ads Manager.
+  const criativos = input.criativos?.length
+    ? input.criativos
+    : imagemHash
+      ? [{ creativeId: imagemHash, rotulo: 'Anúncio' }]
+      : [];
+
+  const anuncioIds = await criarAnuncios(token, conjunto.id, nome, criativos, status);
 
   return {
     campanhaId:      campanha.id,
     conjuntoId:      conjunto.id,
-    anuncioId,
+    anuncioId:       anuncioIds[0] ?? '',
+    anuncioIds,
     linkGerenciador: `https://www.facebook.com/adsmanager/manage/ads?act=${token.adAccountId.replace('act_', '')}&selected_campaign_ids=${campanha.id}`,
   };
 }

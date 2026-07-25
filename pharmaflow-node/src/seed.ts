@@ -1,4 +1,4 @@
-import 'dotenv/config';
+import './env';
 import bcrypt from 'bcrypt';
 import { db } from './database/db';
 import { gestoresTrafego, farmacias, coletas, coletaCanais } from './database/schema';

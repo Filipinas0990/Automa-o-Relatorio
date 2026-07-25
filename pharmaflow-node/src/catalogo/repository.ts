@@ -21,7 +21,10 @@ export interface CatalogoRow {
   mime: string | null;
 }
 
-/** Carrega todo o catálogo (id, nome, imagem) para o match em memória. */
+/**
+ * Carrega o catálogo ATIVO (id, nome, imagem) para o match em memória.
+ * Produtos desligados (ativo = false) ficam de fora — não entram nos criativos.
+ */
 export async function carregarCatalogo(): Promise<CatalogoRow[]> {
   return db
     .select({
@@ -31,7 +34,8 @@ export async function carregarCatalogo(): Promise<CatalogoRow[]> {
       imagemB64: catalogoProdutos.imagemB64,
       mime:      catalogoProdutos.mime,
     })
-    .from(catalogoProdutos);
+    .from(catalogoProdutos)
+    .where(eq(catalogoProdutos.ativo, true));
 }
 
 /** Cadastra/atualiza um produto do catálogo (upsert pelo nome normalizado). */
@@ -54,16 +58,27 @@ export async function contarProdutos(): Promise<number> {
   return row?.total ?? 0;
 }
 
-/** Lista os produtos do catálogo (sem a imagem, para ser leve). */
-export async function listarProdutos(): Promise<Array<{ id: number; nome: string; criadoEm: Date | null }>> {
+/** Lista os produtos do catálogo (sem a imagem, para ser leve). Inclui todos, ativos e desligados. */
+export async function listarProdutos(): Promise<Array<{ id: number; nome: string; ativo: boolean; criadoEm: Date | null }>> {
   return db
     .select({
       id:       catalogoProdutos.id,
       nome:     catalogoProdutos.nome,
+      ativo:    catalogoProdutos.ativo,
       criadoEm: catalogoProdutos.criadoEm,
     })
     .from(catalogoProdutos)
     .orderBy(desc(catalogoProdutos.criadoEm));
+}
+
+/** Liga/desliga um produto do catálogo. Retorna false se o produto não existe. */
+export async function setAtivo(id: number, ativo: boolean): Promise<boolean> {
+  const rows = await db
+    .update(catalogoProdutos)
+    .set({ ativo, atualizadoEm: new Date() })
+    .where(eq(catalogoProdutos.id, id))
+    .returning({ id: catalogoProdutos.id });
+  return rows.length > 0;
 }
 
 /** Retorna a imagem (base64 + mime) de um produto. */
