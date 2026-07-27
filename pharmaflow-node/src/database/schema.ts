@@ -160,6 +160,8 @@ export const agendaBloqueios = pgTable('agenda_bloqueios', {
 export const whatsappConfig = pgTable('whatsapp_config', {
   id:              serial('id').primaryKey(),
   instanceName:    varchar('instance_name', { length: 100 }).notNull(),
+  // Nome amigável da conexão (ex.: "WhatsApp Ofertas SP").
+  nome:            varchar('nome', { length: 120 }),
   // open | close | connecting
   status:          varchar('status', { length: 20 }).default('close').notNull(),
   qrCode:          text('qr_code'),
@@ -259,6 +261,8 @@ export const gestorWhatsapp = pgTable('gestor_whatsapp', {
 export const disparosGrupo = pgTable('disparos_grupo', {
   id:           serial('id').primaryKey(),
   gestorId:     integer('gestor_id').notNull().references(() => gestoresTrafego.id),
+  // Instância Evolution escolhida (null = usa a conexão do gestor).
+  instanceName: varchar('instance_name', { length: 100 }),
   titulo:       varchar('titulo', { length: 200 }).notNull(),
   mensagem:     text('mensagem').notNull(),
   // JSON: [{ b64, mime, rotulo }] — um disparo leva vários criativos

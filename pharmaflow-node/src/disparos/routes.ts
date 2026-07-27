@@ -23,6 +23,7 @@ interface CriarDisparoBody {
   timezone?:       string;
   farmacia_id?:    number | null;
   solicitacao_id?: number | null;
+  instance?:       string | null;   // conexão Evolution escolhida no passo 1
 }
 
 /**
@@ -83,16 +84,43 @@ export async function disparosRoutes(
    * GET /api/disparos/grupos
    * Grupos da conexão do gestor logado — os grupos de oferta dos clientes dele.
    */
-  app.get('/api/disparos/grupos', { preHandler: [autenticar] }, async (req, reply) => {
-    try {
-      const grupos = await disparosService.listarGrupos(req.user.id);
-      return reply.send(grupos);
-    } catch (err) {
-      logger.error({ err, gestorId: req.user.id }, 'Erro ao listar grupos do gestor');
-      const msg = err instanceof Error ? err.message : 'Erro ao listar grupos';
-      return reply.code(502).send({ detail: msg });
-    }
+  /**
+   * GET /api/disparos/conexoes
+   * Conexões que o gestor pode usar no disparo: a dele + as globais (opção b).
+   */
+  app.get('/api/disparos/conexoes', { preHandler: [autenticar] }, async (req, reply) => {
+    const conexoes = await disparosService.listarConexoes(req.user.id);
+    return reply.send(conexoes);
   });
+
+  /**
+   * GET /api/disparos/grupos?instance=<instanceName>
+   * Grupos da conexão escolhida (ou a do gestor, se `instance` não vier).
+   */
+  app.get<{ Querystring: { instance?: string } }>(
+    '/api/disparos/grupos',
+    { preHandler: [autenticar] },
+    async (req, reply) => {
+      try {
+        const instance = req.query.instance;
+        let grupos;
+        if (instance) {
+          const permitidas = await disparosService.instanciasPermitidas(req.user.id);
+          if (!permitidas.has(instance)) {
+            return reply.code(403).send({ detail: 'Esta conexão não está disponível para você.' });
+          }
+          grupos = await disparosService.listarGruposDeInstancia(instance);
+        } else {
+          grupos = await disparosService.listarGrupos(req.user.id);
+        }
+        return reply.send(grupos);
+      } catch (err) {
+        logger.error({ err, gestorId: req.user.id }, 'Erro ao listar grupos');
+        const msg = err instanceof Error ? err.message : 'Erro ao listar grupos';
+        return reply.code(502).send({ detail: msg });
+      }
+    },
+  );
 
   // ── Disparos ───────────────────────────────────────────────────────────────
 
@@ -128,11 +156,22 @@ export async function disparosRoutes(
         }
       }
 
-      const status = await disparosService.statusGestor(req.user.id);
-      if (!status.conectado) {
-        return reply.code(409).send({
-          detail: 'Seu WhatsApp não está conectado. Conecte antes de disparar.',
-        });
+      // Conexão escolhida no passo 1 (opção b: a do gestor ou uma global).
+      let instanceName: string | null = null;
+      if (b.instance) {
+        const permitidas = await disparosService.instanciasPermitidas(req.user.id);
+        if (!permitidas.has(b.instance)) {
+          return reply.code(403).send({ detail: 'Esta conexão não está disponível para você.' });
+        }
+        instanceName = b.instance;
+      } else {
+        // Sem escolha explícita: usa a conexão do gestor, que precisa estar conectada.
+        const status = await disparosService.statusGestor(req.user.id);
+        if (!status.conectado) {
+          return reply.code(409).send({
+            detail: 'Selecione uma conexão conectada antes de disparar.',
+          });
+        }
       }
 
       // A solicitação precisa ser do próprio gestor — senão dava para marcar
@@ -145,6 +184,7 @@ export async function disparosRoutes(
 
       const disparo = await disparosRepository.criarDisparo({
         gestorId:      req.user.id,
+        instanceName,
         titulo:        b.titulo?.trim() || 'Ofertas',
         mensagem:      b.mensagem ?? '',
         midiasJson:    midias.length ? JSON.stringify(midias) : null,

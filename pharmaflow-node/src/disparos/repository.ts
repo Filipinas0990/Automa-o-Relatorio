@@ -38,6 +38,7 @@ export const disparosRepository = {
 
   async criarDisparo(data: {
     gestorId:      number;
+    instanceName:  string | null;
     titulo:        string;
     mensagem:      string;
     midiasJson:    string | null;

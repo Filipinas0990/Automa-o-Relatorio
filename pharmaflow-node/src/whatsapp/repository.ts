@@ -9,8 +9,21 @@ export type WhatsAppStatus = 'open' | 'close' | 'connecting';
 
 export const whatsappRepository = {
 
+  /** Conexão "default" (a mais antiga) — usada pelas notificações de reunião. */
   async getConfig(): Promise<WhatsAppConfig | null> {
-    const [row] = await db.select().from(whatsappConfig).limit(1);
+    const [row] = await db.select().from(whatsappConfig)
+      .orderBy(whatsappConfig.id).limit(1);
+    return row ?? null;
+  },
+
+  /** Todas as conexões globais (a tela Conexões lista várias). */
+  async listConfigs(): Promise<WhatsAppConfig[]> {
+    return db.select().from(whatsappConfig).orderBy(whatsappConfig.id);
+  },
+
+  async getConfigByInstance(instanceName: string): Promise<WhatsAppConfig | null> {
+    const [row] = await db.select().from(whatsappConfig)
+      .where(eq(whatsappConfig.instanceName, instanceName)).limit(1);
     return row ?? null;
   },
 
@@ -19,16 +32,21 @@ export const whatsappRepository = {
     status:          WhatsAppStatus;
     qrCode?:         string | null;
     numeroConectado?: string | null;
+    nome?:           string | null;
   }): Promise<WhatsAppConfig> {
+    // Upsert POR instância — cada conexão distinta é a sua própria linha
+    // (é o que permite ter várias conexões globais).
     const [existente] = await db.select({ id: whatsappConfig.id })
-      .from(whatsappConfig).limit(1);
+      .from(whatsappConfig)
+      .where(eq(whatsappConfig.instanceName, data.instanceName))
+      .limit(1);
 
     if (existente) {
       const [atualizado] = await db.update(whatsappConfig).set({
-        instanceName:    data.instanceName,
         status:          data.status,
         qrCode:          data.qrCode          ?? null,
         numeroConectado: data.numeroConectado  ?? null,
+        ...(data.nome !== undefined ? { nome: data.nome } : {}),
         atualizadoEm:    new Date(),
       }).where(eq(whatsappConfig.id, existente.id)).returning();
       return atualizado;
@@ -39,6 +57,7 @@ export const whatsappRepository = {
       status:          data.status,
       qrCode:          data.qrCode          ?? null,
       numeroConectado: data.numeroConectado  ?? null,
+      nome:            data.nome ?? null,
     }).returning();
     return criado;
   },

@@ -76,7 +76,16 @@ async function descobrirPageId(token: MetaToken): Promise<string | null> {
   return buscar(`/${token.adAccountId}/promote_pages?fields=id,name&limit=1`);
 }
 
-type ItemCriativo = { nome: string; preco?: string | null; pngBase64?: string | null };
+type ItemCriativo = {
+  nome: string;
+  preco?: string | null;
+  pngBase64?: string | null;
+  // Copy por criativo (copy padrão com {produto}/{preco}/{cidade} já expandidos no front).
+  // Se vier vazio, cai na copy da campanha (fallback).
+  textoPrincipal?: string | null;
+  titulo?: string | null;
+  descricao?: string | null;
+};
 type Copy = { textoPrincipal: string; titulo: string; descricao: string };
 
 /**
@@ -111,8 +120,12 @@ async function subirCriativos(
   for (const item of comImagem) {
     try {
       const img = await uploadImagem(token, item.pngBase64!, item.nome);
-      const creative = await criarAdCreative(token, img.hash, copy.textoPrincipal, linkDestino, {
-        titulo: copy.titulo, descricao: copy.descricao, whatsapp: usarWhatsapp,
+      // Copy por criativo (copy padrão expandida no front); cai na copy da campanha se vier vazia.
+      const textoItem     = item.textoPrincipal?.trim() || copy.textoPrincipal;
+      const tituloItem    = item.titulo?.trim()         || copy.titulo;
+      const descricaoItem = item.descricao?.trim()      || copy.descricao;
+      const creative = await criarAdCreative(token, img.hash, textoItem, linkDestino, {
+        titulo: tituloItem, descricao: descricaoItem, whatsapp: usarWhatsapp,
       });
       criativos.push({ creativeId: creative.id, rotulo: item.nome });
     } catch (e) {

@@ -1,4 +1,5 @@
 import { evolutionReq } from '../whatsapp/service';
+import { whatsappRepository } from '../whatsapp/repository';
 import { disparosRepository } from './repository';
 import type { InstanciaStatus } from './repository';
 import { logger } from '../logger';
@@ -44,6 +45,15 @@ export interface GrupoWhatsApp {
   jid:           string;   // ...@g.us
   nome:          string;
   participantes: number | null;
+}
+
+/** Conexão que pode originar um disparo — a do gestor ou uma global. */
+export interface ConexaoDisparo {
+  instanceName: string;
+  nome:         string;
+  tipo:         'gestor' | 'global';
+  status:       InstanciaStatus;
+  numero:       string | null;
 }
 
 export interface GrupoSelecionado {
@@ -201,17 +211,63 @@ export const disparosService = {
 
   // ── Grupos ─────────────────────────────────────────────────────────────────
 
-  /** Grupos de WhatsApp do gestor (os grupos de oferta dos clientes dele). */
+  /**
+   * Conexões que podem originar um disparo (opção "b"): a do gestor logado
+   * + todas as conexões globais da tela Conexões. O gestor escolhe uma no
+   * passo 1 do wizard.
+   */
+  async listarConexoes(gestorId: number): Promise<ConexaoDisparo[]> {
+    const conexoes: ConexaoDisparo[] = [];
+
+    const gestorInst = await disparosRepository.getInstancia(gestorId);
+    if (gestorInst) {
+      conexoes.push({
+        instanceName: gestorInst.instanceName,
+        nome:         'Meu WhatsApp',
+        tipo:         'gestor',
+        status:       gestorInst.status as InstanciaStatus,
+        numero:       gestorInst.numeroConectado ?? null,
+      });
+    }
+
+    const globais = await whatsappRepository.listConfigs();
+    for (const g of globais) {
+      conexoes.push({
+        instanceName: g.instanceName,
+        nome:         g.nome ?? g.instanceName,
+        tipo:         'global',
+        status:       g.status as InstanciaStatus,
+        numero:       g.numeroConectado ?? null,
+      });
+    }
+
+    return conexoes;
+  },
+
+  /**
+   * Instâncias que este gestor tem permissão de usar (a dele + as globais).
+   * Impede que ele puxe grupos ou dispare pela conexão de outro gestor.
+   */
+  async instanciasPermitidas(gestorId: number): Promise<Set<string>> {
+    const conexoes = await this.listarConexoes(gestorId);
+    return new Set(conexoes.map((c) => c.instanceName));
+  },
+
+  /** Grupos do gestor logado — usa a conexão dele (atalho do wizard antigo). */
   async listarGrupos(gestorId: number): Promise<GrupoWhatsApp[]> {
     const registro = await disparosRepository.getInstancia(gestorId);
     if (!registro) return [];
+    return this.listarGruposDeInstancia(registro.instanceName);
+  },
 
+  /** Grupos de uma instância Evolution específica (a conexão escolhida). */
+  async listarGruposDeInstancia(instanceName: string): Promise<GrupoWhatsApp[]> {
     const { ok, data } = await evolutionReq<unknown>(
-      'GET', `/group/fetchAllGroups/${registro.instanceName}?getParticipants=false`,
+      'GET', `/group/fetchAllGroups/${instanceName}?getParticipants=false`,
     );
 
     if (!ok) {
-      logger.error({ gestorId, data }, 'Falha ao listar grupos na Evolution');
+      logger.error({ instanceName, data }, 'Falha ao listar grupos na Evolution');
       throw new Error('Não foi possível listar os grupos. Verifique se o WhatsApp está conectado.');
     }
 
@@ -258,6 +314,17 @@ export const disparosService = {
   },
 
   /**
+   * Instância Evolution efetiva do disparo: a que foi escolhida no wizard
+   * (disparo.instanceName) ou, para disparos antigos sem escolha, a do gestor.
+   */
+  async resolverInstancia(disparo: DisparoGrupo): Promise<string> {
+    if (disparo.instanceName) return disparo.instanceName;
+    const registro = await disparosRepository.getInstancia(disparo.gestorId);
+    if (!registro) throw new Error('Disparo sem conexão de WhatsApp');
+    return registro.instanceName;
+  },
+
+  /**
    * Dispara. Se o motor de campanhas estiver configurado (CAMPAIGNS_API_URL),
    * enfileira lá — o envio é assíncrono e o resultado chega em finalizarDisparo
    * via callback. Senão, faz o envio direto pela Evolution (fallback síncrono),
@@ -272,8 +339,7 @@ export const disparosService = {
     const disparo = await disparosRepository.getDisparo(disparoId);
     if (!disparo) throw new Error(`Disparo ${disparoId} não encontrado`);
 
-    const registro = await disparosRepository.getInstancia(disparo.gestorId);
-    if (!registro) throw new Error('Gestor sem WhatsApp conectado');
+    const instanceName = await this.resolverInstancia(disparo);
 
     await disparosRepository.atualizarDisparo(disparoId, { status: 'enviando' });
 
@@ -293,7 +359,7 @@ export const disparosService = {
 
     const { ok, status, data } = await enfileirarDisparoNoCampanhas({
       disparoId,
-      instance:    registro.instanceName,
+      instance:    instanceName,
       message:     disparo.mensagem,
       groups:      grupos,
       medias:      midias,
@@ -308,7 +374,7 @@ export const disparosService = {
     }
 
     logger.info(
-      { disparoId, grupos: grupos.length, instancia: registro.instanceName },
+      { disparoId, grupos: grupos.length, instancia: instanceName },
       'Disparo enfileirado no campanhas',
     );
     return { modo: 'campanhas', grupos: grupos.length };
@@ -365,8 +431,7 @@ export const disparosService = {
     const disparo = await disparosRepository.getDisparo(disparoId);
     if (!disparo) throw new Error(`Disparo ${disparoId} não encontrado`);
 
-    const registro = await disparosRepository.getInstancia(disparo.gestorId);
-    if (!registro) throw new Error('Gestor sem WhatsApp conectado');
+    const instanceName = await this.resolverInstancia(disparo);
 
     await disparosRepository.atualizarDisparo(disparoId, { status: 'enviando' });
 
@@ -394,7 +459,7 @@ export const disparosService = {
       try {
         // 1) A mensagem (só uma vez por grupo)
         if (disparo.mensagem.trim()) {
-          const r = await this.enviarTextoGrupo(registro.instanceName, grupo.jid, disparo.mensagem);
+          const r = await this.enviarTextoGrupo(instanceName, grupo.jid, disparo.mensagem);
           if (r.ok) algoChegou = true;
           else erros.push(`texto: ${JSON.stringify(r.data).slice(0, 200)}`);
           await sleep(DELAY_ENTRE_GRUPOS_MS);
@@ -402,7 +467,7 @@ export const disparosService = {
 
         // 2) Cada criativo, com a própria legenda
         for (const midia of midias) {
-          const r = await this.enviarMidiaGrupo(registro.instanceName, grupo.jid, {
+          const r = await this.enviarMidiaGrupo(instanceName, grupo.jid, {
             media:    midia.b64,
             mimetype: midia.mime || 'image/png',
             caption:  midia.rotulo ?? '',
