@@ -92,10 +92,10 @@ async function verificarDisparosAgendados(): Promise<void> {
 
   for (const disparo of pendentes) {
     try {
-      const { enviados, falhas } = await disparosService.executarDisparo(disparo.id);
+      const resultado = await disparosService.executarDisparo(disparo.id);
       logger.info(
-        { disparoId: disparo.id, enviados, falhas },
-        'Scheduler: disparo em grupos concluído',
+        { disparoId: disparo.id, resultado },
+        'Scheduler: disparo em grupos processado',
       );
     } catch (err) {
       logger.error({ err, disparoId: disparo.id }, 'Erro ao executar disparo agendado');

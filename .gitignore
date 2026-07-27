@@ -1,6 +1,7 @@
 # ── Credenciais — NUNCA commitar ──────────────────────────
 .env
 config/farmacias.json
+logs/
 
 # ── Python ────────────────────────────────────────────────
 __pycache__/

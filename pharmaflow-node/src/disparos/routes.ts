@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyPluginOptions, FastifyRequest, FastifyReply } from 'fastify';
 import { disparosRepository } from './repository';
 import { disparosService, motivoEvolutionIndisponivel } from './service';
-import type { GrupoSelecionado, MidiaDisparo } from './service';
+import type { GrupoSelecionado, MidiaDisparo, ResultadoGrupo } from './service';
 import { ofertasRepository } from '../ofertas/repository';
 import { logger } from '../logger';
 
@@ -165,7 +165,19 @@ export async function disparosRoutes(
           if (solicitacaoId) {
             await ofertasRepository.atualizarStatus(solicitacaoId, 'atendida');
           }
-          return reply.code(201).send({ id: disparo.id, status: 'enviado', ...resultado });
+          if (resultado.modo === 'campanhas') {
+            // Enfileirado no motor de campanhas — o resultado por grupo chega
+            // depois via callback; aqui só confirmamos o aceite.
+            return reply.code(202).send({
+              id: disparo.id, status: 'enviando', total_grupos: resultado.grupos,
+            });
+          }
+          return reply.code(201).send({
+            id:       disparo.id,
+            status:   'enviado',
+            enviados: resultado.enviados,
+            falhas:   resultado.falhas,
+          });
         } catch (err) {
           logger.error({ err, disparoId: disparo.id }, 'Erro ao executar disparo imediato');
           await disparosRepository.atualizarDisparo(disparo.id, { status: 'erro' });
@@ -177,6 +189,38 @@ export async function disparosRoutes(
       return reply.code(201).send({
         id: disparo.id, status: 'agendado', agendado_para: agendadoPara, repetir,
       });
+    },
+  );
+
+  /**
+   * POST /api/disparos/callback
+   * Recebe do motor de campanhas o resultado de um disparo (status por grupo) e
+   * finaliza: grava os logs e recalcula status/próximo envio.
+   *
+   * Autenticação é o segredo interno compartilhado (header x-internal-key) — NÃO
+   * usa o JWT dos gestores, pois quem chama é o campanhas, não um usuário.
+   */
+  app.post<{ Body: { disparoId: number; resultados: ResultadoGrupo[] } }>(
+    '/api/disparos/callback',
+    async (req, reply) => {
+      const key = req.headers['x-internal-key'];
+      if (typeof key !== 'string' || key !== (process.env.INTERNAL_API_KEY || '')) {
+        return reply.code(401).send({ detail: 'não autorizado' });
+      }
+
+      const { disparoId, resultados } = req.body ?? {};
+      if (!disparoId || !Array.isArray(resultados)) {
+        return reply.code(400).send({ detail: 'disparoId e resultados são obrigatórios' });
+      }
+
+      try {
+        const r = await disparosService.finalizarDisparo(Number(disparoId), resultados);
+        return reply.send({ ok: true, ...r });
+      } catch (err) {
+        logger.error({ err, disparoId }, 'Erro ao finalizar disparo (callback do campanhas)');
+        const msg = err instanceof Error ? err.message : 'Erro ao finalizar disparo';
+        return reply.code(500).send({ detail: msg });
+      }
     },
   );
 

@@ -25,6 +25,10 @@ services:
     build: ./pharmaflow-node
     container_name: farmacia_api
     restart: unless-stopped
+    # Permite o container (rede bridge) alcançar serviços no host — ex.: o motor
+    # de disparo (campanhas) que roda em network_mode:host na porta 3000.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     env_file: .env
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-farmacia}:${POSTGRES_PASSWORD:-farmacia123}@postgres:5432/${POSTGRES_DB:-farmacia_monitor}

@@ -3,6 +3,11 @@ import { disparosRepository } from './repository';
 import type { InstanciaStatus } from './repository';
 import { logger } from '../logger';
 import type { DisparoGrupo } from '../database/schema';
+import {
+  campanhasConfigurado,
+  callbackUrl,
+  enfileirarDisparoNoCampanhas,
+} from './campaignsClient';
 
 const EVOLUTION_URL = () => process.env.EVOLUTION_API_URL || '';
 
@@ -52,6 +57,22 @@ export interface MidiaDisparo {
   mime:    string;
   rotulo?: string;   // vira a legenda da imagem (ex.: "Dipirona — R$ 9,90")
 }
+
+/** Resultado de um grupo, como o campanhas devolve no callback. */
+export interface ResultadoGrupo {
+  jid:    string;
+  nome?:  string;
+  status: 'ok' | 'erro';
+  erro?:  string | null;
+}
+
+/**
+ * Retorno do executarDisparo: 'direto' já traz o resultado (envio síncrono);
+ * 'campanhas' só confirma que foi enfileirado — o resultado chega no callback.
+ */
+export type ResultadoDisparo =
+  | { modo: 'direto';    enviados: number; falhas: number }
+  | { modo: 'campanhas'; grupos: number };
 
 /**
  * Intervalo entre envios para não estourar limite da Evolution / do WhatsApp.
@@ -237,12 +258,110 @@ export const disparosService = {
   },
 
   /**
-   * Executa um disparo. Em cada grupo: manda a mensagem como texto e, em
-   * seguida, cada criativo como imagem com a própria legenda — que é como a
-   * oferta fica legível no grupo quando são vários produtos.
+   * Dispara. Se o motor de campanhas estiver configurado (CAMPAIGNS_API_URL),
+   * enfileira lá — o envio é assíncrono e o resultado chega em finalizarDisparo
+   * via callback. Senão, faz o envio direto pela Evolution (fallback síncrono),
+   * para o sistema não parar caso o campanhas ainda não esteja no ar.
+   */
+  async executarDisparo(disparoId: number): Promise<ResultadoDisparo> {
+    if (!campanhasConfigurado()) {
+      const r = await this.executarDisparoDireto(disparoId);
+      return { modo: 'direto', ...r };
+    }
+
+    const disparo = await disparosRepository.getDisparo(disparoId);
+    if (!disparo) throw new Error(`Disparo ${disparoId} não encontrado`);
+
+    const registro = await disparosRepository.getInstancia(disparo.gestorId);
+    if (!registro) throw new Error('Gestor sem WhatsApp conectado');
+
+    await disparosRepository.atualizarDisparo(disparoId, { status: 'enviando' });
+
+    let grupos: GrupoSelecionado[] = [];
+    try {
+      grupos = JSON.parse(disparo.gruposJson) as GrupoSelecionado[];
+    } catch {
+      grupos = [];
+    }
+
+    let midias: MidiaDisparo[] = [];
+    try {
+      midias = disparo.midiasJson ? (JSON.parse(disparo.midiasJson) as MidiaDisparo[]) : [];
+    } catch {
+      midias = [];
+    }
+
+    const { ok, status, data } = await enfileirarDisparoNoCampanhas({
+      disparoId,
+      instance:    registro.instanceName,
+      message:     disparo.mensagem,
+      groups:      grupos,
+      medias:      midias,
+      callbackUrl: callbackUrl() || undefined,
+    });
+
+    if (!ok) {
+      await disparosRepository.atualizarDisparo(disparoId, { status: 'erro' });
+      throw new Error(
+        `Campanhas recusou o disparo (HTTP ${status}): ${JSON.stringify(data).slice(0, 200)}`,
+      );
+    }
+
+    logger.info(
+      { disparoId, grupos: grupos.length, instancia: registro.instanceName },
+      'Disparo enfileirado no campanhas',
+    );
+    return { modo: 'campanhas', grupos: grupos.length };
+  },
+
+  /**
+   * Finaliza um disparo com o resultado devolvido pelo campanhas (callback):
+   * grava um log por grupo e recalcula status/próximo envio — a mesma
+   * finalização que o envio direto faz ao terminar.
+   */
+  async finalizarDisparo(
+    disparoId:  number,
+    resultados: ResultadoGrupo[],
+  ): Promise<{ enviados: number; falhas: number }> {
+    const disparo = await disparosRepository.getDisparo(disparoId);
+    if (!disparo) throw new Error(`Disparo ${disparoId} não encontrado`);
+
+    let enviados = 0;
+    let falhas   = 0;
+
+    for (const r of resultados) {
+      if (r.status === 'ok') enviados += 1;
+      else falhas += 1;
+
+      await disparosRepository.registrarLog({
+        disparoId,
+        grupoJid:  r.jid,
+        grupoNome: r.nome ?? null,
+        status:    r.status === 'ok' ? 'ok' : 'erro',
+        erro:      r.erro ?? null,
+      });
+    }
+
+    const agora   = new Date();
+    const proximo = calcularProximoEnvio(disparo, agora);
+
+    await disparosRepository.atualizarDisparo(disparoId, {
+      status:       proximo ? 'agendado' : (falhas > 0 && enviados === 0 ? 'erro' : 'enviado'),
+      ultimoEnvio:  agora,
+      proximoEnvio: proximo,
+    });
+
+    logger.info({ disparoId, enviados, falhas, proximo }, 'Disparo finalizado (callback do campanhas)');
+    return { enviados, falhas };
+  },
+
+  /**
+   * Envio direto pela Evolution (fallback). Em cada grupo: manda a mensagem
+   * como texto e, em seguida, cada criativo como imagem com a própria legenda —
+   * que é como a oferta fica legível no grupo quando são vários produtos.
    * O grupo conta como enviado se ao menos uma peça chegou.
    */
-  async executarDisparo(disparoId: number): Promise<{ enviados: number; falhas: number }> {
+  async executarDisparoDireto(disparoId: number): Promise<{ enviados: number; falhas: number }> {
     const disparo = await disparosRepository.getDisparo(disparoId);
     if (!disparo) throw new Error(`Disparo ${disparoId} não encontrado`);
 
