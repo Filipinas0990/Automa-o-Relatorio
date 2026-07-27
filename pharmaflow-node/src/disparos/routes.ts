@@ -130,7 +130,9 @@ export async function disparosRoutes(
    */
   app.post<{ Body: CriarDisparoBody }>(
     '/api/disparos',
-    { preHandler: [autenticar] },
+    // bodyLimit alto: o disparo carrega os criativos (imagens) em base64,
+    // e podem ser vários — o padrão de 1 MB do Fastify estoura fácil.
+    { preHandler: [autenticar], bodyLimit: 80 * 1024 * 1024 },
     async (req, reply) => {
       const b = req.body;
       const midias = Array.isArray(b.midias) ? b.midias.filter((m) => m?.b64) : [];
