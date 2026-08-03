@@ -31,9 +31,9 @@ export const ofertasRepository = {
   },
 
   /** Resolve o token para o gestor dono do link. Null se inválido ou inativo. */
-  async gestorPorToken(token: string): Promise<{ id: number; nome: string } | null> {
+  async gestorPorToken(token: string): Promise<{ id: number; nome: string; isAdmin: boolean } | null> {
     const [row] = await db
-      .select({ id: gestoresTrafego.id, nome: gestoresTrafego.nome })
+      .select({ id: gestoresTrafego.id, nome: gestoresTrafego.nome, isAdmin: gestoresTrafego.isAdmin })
       .from(linksOferta)
       .innerJoin(gestoresTrafego, eq(gestoresTrafego.id, linksOferta.gestorId))
       .where(and(
