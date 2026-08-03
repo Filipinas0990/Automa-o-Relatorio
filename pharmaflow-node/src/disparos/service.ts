@@ -94,6 +94,27 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * Monta o que vai para o grupo. Havendo criativo, a mensagem NÃO sai como um
+ * balão de texto solto antes das imagens: ela vira a legenda da primeira
+ * imagem (a descrição que o WhatsApp mostra embaixo da foto), com o rótulo do
+ * produto logo abaixo. Sem criativo, segue como texto puro.
+ */
+function montarEnvio(
+  mensagem: string,
+  midias: MidiaDisparo[],
+): { texto: string; midias: MidiaDisparo[] } {
+  const texto = (mensagem ?? '').trim();
+  if (!texto || midias.length === 0) return { texto, midias };
+
+  const [primeira, ...resto] = midias;
+  const rotulo = primeira.rotulo?.trim();
+  return {
+    texto:  '',
+    midias: [{ ...primeira, rotulo: rotulo ? `${texto}\n\n${rotulo}` : texto }, ...resto],
+  };
+}
+
 export const disparosService = {
 
   configurado(): boolean {
@@ -357,12 +378,15 @@ export const disparosService = {
       midias = [];
     }
 
+    // A mensagem vira legenda do 1º criativo — ver montarEnvio
+    const envio = montarEnvio(disparo.mensagem, midias);
+
     const { ok, status, data } = await enfileirarDisparoNoCampanhas({
       disparoId,
       instance:    instanceName,
-      message:     disparo.mensagem,
+      message:     envio.texto || undefined,
       groups:      grupos,
-      medias:      midias,
+      medias:      envio.midias,
       callbackUrl: callbackUrl() || undefined,
     });
 
@@ -449,6 +473,9 @@ export const disparosService = {
       midias = [];
     }
 
+    // A mensagem vira legenda do 1º criativo — ver montarEnvio
+    const envio = montarEnvio(disparo.mensagem, midias);
+
     let enviados = 0;
     let falhas   = 0;
 
@@ -457,16 +484,16 @@ export const disparosService = {
       let algoChegou = false;
 
       try {
-        // 1) A mensagem (só uma vez por grupo)
-        if (disparo.mensagem.trim()) {
-          const r = await this.enviarTextoGrupo(instanceName, grupo.jid, disparo.mensagem);
+        // 1) Texto solto — só quando o disparo não tem criativo
+        if (envio.texto) {
+          const r = await this.enviarTextoGrupo(instanceName, grupo.jid, envio.texto);
           if (r.ok) algoChegou = true;
           else erros.push(`texto: ${JSON.stringify(r.data).slice(0, 200)}`);
           await sleep(DELAY_ENTRE_GRUPOS_MS);
         }
 
         // 2) Cada criativo, com a própria legenda
-        for (const midia of midias) {
+        for (const midia of envio.midias) {
           const r = await this.enviarMidiaGrupo(instanceName, grupo.jid, {
             media:    midia.b64,
             mimetype: midia.mime || 'image/png',
