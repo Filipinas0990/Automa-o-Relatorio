@@ -46,10 +46,19 @@ export const ofertasRepository = {
 
   // ── Farmácias do gestor (o dono escolhe a dele nessa lista) ────────────────
 
-  async farmaciasDoGestor(gestorId: number): Promise<Farmacia[]> {
-    return db.select().from(farmacias).where(
-      and(eq(farmacias.gestorId, gestorId), eq(farmacias.ativa, true)),
-    );
+  /**
+   * As farmácias que o link oferece. `todas` = admin: ele não tem carteira
+   * própria, então enxerga todas as ativas — mesma regra do GET /api/farmacias.
+   * Sem isso o link do admin abre com a lista vazia.
+   */
+  async farmaciasDoGestor(gestorId: number, todas = false): Promise<Farmacia[]> {
+    return db.select().from(farmacias)
+      .where(
+        todas
+          ? eq(farmacias.ativa, true)
+          : and(eq(farmacias.gestorId, gestorId), eq(farmacias.ativa, true)),
+      )
+      .orderBy(farmacias.nome);
   },
 
   // ── Solicitações ───────────────────────────────────────────────────────────
@@ -103,9 +112,9 @@ export const ofertasRepository = {
    * solicitação vira 'atendida' e o cliente volta a aparecer como sem resposta,
    * pronto para mandar a lista do próximo ciclo.
    */
-  async carteiraDoGestor(gestorId: number) {
+  async carteiraDoGestor(gestorId: number, todas = false) {
     const [lista, solicitacoes] = await Promise.all([
-      this.farmaciasDoGestor(gestorId),
+      this.farmaciasDoGestor(gestorId, todas),
       this.listarSolicitacoes(gestorId),
     ]);
 

@@ -46,7 +46,7 @@ export async function ofertasRoutes(
       if (!gestor) return reply.code(404).send({ detail: 'Link inválido ou expirado.' });
 
       const [lista, produtos] = await Promise.all([
-        ofertasRepository.farmaciasDoGestor(gestor.id),
+        ofertasRepository.farmaciasDoGestor(gestor.id, gestor.isAdmin),
         listarProdutos(),
       ]);
 
@@ -96,7 +96,7 @@ export async function ofertasRoutes(
         return reply.code(400).send({ detail: 'Escolha a sua farmácia.' });
       }
 
-      const doGestor = await ofertasRepository.farmaciasDoGestor(gestor.id);
+      const doGestor = await ofertasRepository.farmaciasDoGestor(gestor.id, gestor.isAdmin);
       if (!doGestor.some((f) => f.id === farmaciaId)) {
         return reply.code(403).send({ detail: 'Esta farmácia não está disponível neste link.' });
       }
@@ -177,7 +177,9 @@ export async function ofertasRoutes(
    * Alimenta o painel de acompanhamento (passo 2 do disparo).
    */
   app.get('/api/ofertas/carteira', { preHandler: [autenticar] }, async (req, reply) => {
-    const carteira = await ofertasRepository.carteiraDoGestor(req.user.id);
+    // Admin vê todas — senão o pedido que chegou pelo link dele ficaria órfão,
+    // sem a farmácia correspondente na carteira.
+    const carteira = await ofertasRepository.carteiraDoGestor(req.user.id, req.user.isAdmin);
 
     return reply.send(
       carteira.map(({ farmacia, pendente, ultimoEnvioEm }) => {
