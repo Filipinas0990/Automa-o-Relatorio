@@ -1,4 +1,4 @@
-import { and, eq, desc, sql } from 'drizzle-orm';
+import { and, eq, desc, sql, isNotNull } from 'drizzle-orm';
 import { db } from '../database/db';
 import {
   linksOferta, solicitacoesOferta, farmacias, gestoresTrafego,
@@ -7,33 +7,57 @@ import type { LinkOferta, SolicitacaoOferta, Farmacia } from '../database/schema
 
 export const ofertasRepository = {
 
-  // ── Link público do gestor ─────────────────────────────────────────────────
+  // ── Links públicos (um por cliente — migration 0021) ───────────────────────
 
-  async getLink(gestorId: number): Promise<LinkOferta | null> {
-    const [row] = await db.select().from(linksOferta)
-      .where(eq(linksOferta.gestorId, gestorId));
+  /** Links por farmácia deste gestor. Não traz o link legado (sem farmácia). */
+  async linksPorFarmacia(gestorId: number): Promise<LinkOferta[]> {
+    return db.select().from(linksOferta)
+      .where(and(
+        eq(linksOferta.gestorId, gestorId),
+        isNotNull(linksOferta.farmaciaId),
+      ));
+  },
+
+  /**
+   * Cria os links que faltam, em uma tacada. `onConflictDoNothing` cobre a
+   * corrida de duas abas abrindo a carteira ao mesmo tempo — quem perder
+   * simplesmente relê o que o outro criou.
+   */
+  async criarLinks(
+    novos: { gestorId: number; farmaciaId: number; token: string }[],
+  ): Promise<void> {
+    if (novos.length === 0) return;
+    await db.insert(linksOferta).values(novos).onConflictDoNothing();
+  },
+
+  /** Troca o token de um cliente — o link antigo morre na hora. */
+  async trocarToken(gestorId: number, farmaciaId: number, token: string): Promise<LinkOferta | null> {
+    const [row] = await db.update(linksOferta)
+      .set({ token, ativo: true, atualizadoEm: sql`NOW()` })
+      .where(and(
+        eq(linksOferta.gestorId, gestorId),
+        eq(linksOferta.farmaciaId, farmaciaId),
+      ))
+      .returning();
     return row ?? null;
   },
 
-  async criarLink(gestorId: number, token: string): Promise<LinkOferta> {
-    const [row] = await db.insert(linksOferta)
-      .values({ gestorId, token })
-      .returning();
-    return row;
-  },
-
-  async trocarToken(id: number, token: string): Promise<LinkOferta> {
-    const [row] = await db.update(linksOferta)
-      .set({ token, ativo: true, atualizadoEm: sql`NOW()` })
-      .where(eq(linksOferta.id, id))
-      .returning();
-    return row;
-  },
-
-  /** Resolve o token para o gestor dono do link. Null se inválido ou inativo. */
-  async gestorPorToken(token: string): Promise<{ id: number; nome: string; isAdmin: boolean } | null> {
+  /**
+   * Resolve o token: quem é o gestor e, se o link for de um cliente, qual
+   * farmácia. `farmaciaId` null = link legado, em que o dono ainda escolhe a
+   * farmácia numa lista. Null geral = token inválido ou inativo.
+   */
+  async porToken(token: string): Promise<{
+    gestor:     { id: number; nome: string; isAdmin: boolean };
+    farmaciaId: number | null;
+  } | null> {
     const [row] = await db
-      .select({ id: gestoresTrafego.id, nome: gestoresTrafego.nome, isAdmin: gestoresTrafego.isAdmin })
+      .select({
+        id:         gestoresTrafego.id,
+        nome:       gestoresTrafego.nome,
+        isAdmin:    gestoresTrafego.isAdmin,
+        farmaciaId: linksOferta.farmaciaId,
+      })
       .from(linksOferta)
       .innerJoin(gestoresTrafego, eq(gestoresTrafego.id, linksOferta.gestorId))
       .where(and(
@@ -41,6 +65,18 @@ export const ofertasRepository = {
         eq(linksOferta.ativo, true),
         eq(gestoresTrafego.ativo, true),
       ));
+
+    if (!row) return null;
+    return {
+      gestor:     { id: row.id, nome: row.nome, isAdmin: row.isAdmin },
+      farmaciaId: row.farmaciaId,
+    };
+  },
+
+  /** Uma farmácia ativa pelo id — o link do cliente resolve direto nela. */
+  async getFarmaciaAtiva(id: number): Promise<Farmacia | null> {
+    const [row] = await db.select().from(farmacias)
+      .where(and(eq(farmacias.id, id), eq(farmacias.ativa, true)));
     return row ?? null;
   },
 

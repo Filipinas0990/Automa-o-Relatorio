@@ -94,24 +94,26 @@ export async function disparosRoutes(
   });
 
   /**
-   * GET /api/disparos/grupos?instance=<instanceName>
+   * GET /api/disparos/grupos?instance=<instanceName>&refresh=1
    * Grupos da conexão escolhida (ou a do gestor, se `instance` não vier).
+   * Vem do cache (migration 0020); `refresh=1` força ir na Evolution e esperar.
    */
-  app.get<{ Querystring: { instance?: string } }>(
+  app.get<{ Querystring: { instance?: string; refresh?: string } }>(
     '/api/disparos/grupos',
     { preHandler: [autenticar] },
     async (req, reply) => {
       try {
         const instance = req.query.instance;
+        const opts = { forcar: req.query.refresh === '1' || req.query.refresh === 'true' };
         let grupos;
         if (instance) {
           const permitidas = await disparosService.instanciasPermitidas(req.user.id);
           if (!permitidas.has(instance)) {
             return reply.code(403).send({ detail: 'Esta conexão não está disponível para você.' });
           }
-          grupos = await disparosService.listarGruposDeInstancia(instance);
+          grupos = await disparosService.listarGruposDeInstancia(instance, opts);
         } else {
-          grupos = await disparosService.listarGrupos(req.user.id);
+          grupos = await disparosService.listarGrupos(req.user.id, opts);
         }
         return reply.send(grupos);
       } catch (err) {

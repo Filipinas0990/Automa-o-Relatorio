@@ -35,23 +35,48 @@ export async function ofertasRoutes(
   // ── Públicas (o dono da farmácia, sem login) ───────────────────────────────
 
   /**
+   * Resolve o token e, quando o link é de um cliente, a farmácia dele.
+   * A farmácia é revalidada a cada acesso: se ela for desativada ou passar
+   * para outro gestor, o link tem de parar de funcionar.
+   */
+  async function abrirLink(token: string) {
+    const link = await ofertasRepository.porToken(token);
+    if (!link) return null;
+
+    if (link.farmaciaId === null) return { ...link, farmacia: null };
+
+    const farmacia = await ofertasRepository.getFarmaciaAtiva(link.farmaciaId);
+    if (!farmacia) return null;
+    if (!link.gestor.isAdmin && farmacia.gestorId !== link.gestor.id) return null;
+
+    return { ...link, farmacia };
+  }
+
+  /**
    * GET /api/publico/ofertas/:token
-   * Abre o link: quem é o gestor, quais farmácias ele atende e o catálogo.
+   * Abre o link: quem é o gestor, a farmácia do cliente e o catálogo.
+   * Nos links legados (sem farmácia) ainda vem a lista para o dono escolher.
    */
   app.get<{ Params: { token: string } }>(
     '/api/publico/ofertas/:token',
     async (req, reply) => {
-      const gestor = await ofertasRepository.gestorPorToken(req.params.token);
+      const link = await abrirLink(req.params.token);
       // 404 genérico: não revela se o token existe mas está inativo
-      if (!gestor) return reply.code(404).send({ detail: 'Link inválido ou expirado.' });
+      if (!link) return reply.code(404).send({ detail: 'Link inválido ou expirado.' });
 
       const [lista, produtos] = await Promise.all([
-        ofertasRepository.farmaciasDoGestor(gestor.id, gestor.isAdmin),
+        // Link de cliente não expõe as outras farmácias da carteira.
+        link.farmacia
+          ? Promise.resolve([])
+          : ofertasRepository.farmaciasDoGestor(link.gestor.id, link.gestor.isAdmin),
         listarProdutos(),
       ]);
 
       return reply.send({
-        gestor:    { nome: gestor.nome },
+        gestor:    { nome: link.gestor.nome },
+        farmacia:  link.farmacia
+          ? { id: link.farmacia.id, nome: link.farmacia.nome, cidade: link.farmacia.cidade }
+          : null,
         farmacias: lista.map((f) => ({ id: f.id, nome: f.nome, cidade: f.cidade })),
         // só produtos ativos são oferecidos ao dono da farmácia
         produtos:  produtos.filter((p) => p.ativo).map((p) => ({ id: p.id, nome: p.nome })),
@@ -66,8 +91,8 @@ export async function ofertasRoutes(
   app.get<{ Params: { token: string; id: string } }>(
     '/api/publico/ofertas/:token/produto/:id/imagem',
     async (req, reply) => {
-      const gestor = await ofertasRepository.gestorPorToken(req.params.token);
-      if (!gestor) return reply.code(404).send({ detail: 'Link inválido ou expirado.' });
+      const link = await abrirLink(req.params.token);
+      if (!link) return reply.code(404).send({ detail: 'Link inválido ou expirado.' });
 
       const img = await getImagem(parseInt(req.params.id, 10));
       if (!img?.imagemB64) return reply.code(404).send({ detail: 'Sem imagem' });
@@ -81,24 +106,32 @@ export async function ofertasRoutes(
 
   /**
    * POST /api/publico/ofertas/:token
-   * O dono envia a seleção. A farmácia precisa ser do gestor daquele token —
+   * O dono envia a seleção. No link de cliente a farmácia vem do próprio token
+   * (o corpo não decide nada); no legado, ela ainda precisa ser do gestor —
    * senão um link permitiria enviar em nome de cliente de outro gestor.
    */
   app.post<{ Params: { token: string }; Body: EnviarOfertaBody }>(
     '/api/publico/ofertas/:token',
     async (req, reply) => {
-      const gestor = await ofertasRepository.gestorPorToken(req.params.token);
-      if (!gestor) return reply.code(404).send({ detail: 'Link inválido ou expirado.' });
+      const link = await abrirLink(req.params.token);
+      if (!link) return reply.code(404).send({ detail: 'Link inválido ou expirado.' });
 
+      const gestor = link.gestor;
       const b = req.body;
-      const farmaciaId = Number(b?.farmacia_id);
-      if (!Number.isFinite(farmaciaId)) {
-        return reply.code(400).send({ detail: 'Escolha a sua farmácia.' });
-      }
 
-      const doGestor = await ofertasRepository.farmaciasDoGestor(gestor.id, gestor.isAdmin);
-      if (!doGestor.some((f) => f.id === farmaciaId)) {
-        return reply.code(403).send({ detail: 'Esta farmácia não está disponível neste link.' });
+      let farmaciaId: number;
+      if (link.farmacia) {
+        farmaciaId = link.farmacia.id;
+      } else {
+        farmaciaId = Number(b?.farmacia_id);
+        if (!Number.isFinite(farmaciaId)) {
+          return reply.code(400).send({ detail: 'Escolha a sua farmácia.' });
+        }
+
+        const doGestor = await ofertasRepository.farmaciasDoGestor(gestor.id, gestor.isAdmin);
+        if (!doGestor.some((f) => f.id === farmaciaId)) {
+          return reply.code(403).send({ detail: 'Esta farmácia não está disponível neste link.' });
+        }
       }
 
       const ids = Array.isArray(b.produtos) ? b.produtos.map(Number).filter(Number.isFinite) : [];
@@ -135,17 +168,25 @@ export async function ofertasRoutes(
 
   // ── Do gestor (JWT) ────────────────────────────────────────────────────────
 
-  /** GET /api/ofertas/link — link do gestor (cria na primeira chamada). */
-  app.get('/api/ofertas/link', { preHandler: [autenticar] }, async (req, reply) => {
-    const link = await ofertasService.obterOuCriarLink(req.user.id);
-    return reply.send(link);
-  });
+  /**
+   * POST /api/ofertas/link/:farmaciaId/regenerar
+   * Troca o token daquele cliente — usado quando o link vaza ou o dono some.
+   */
+  app.post<{ Params: { farmaciaId: string } }>(
+    '/api/ofertas/link/:farmaciaId/regenerar',
+    { preHandler: [autenticar] },
+    async (req, reply) => {
+      const farmaciaId = parseInt(req.params.farmaciaId, 10);
+      const farmacia = await ofertasRepository.getFarmaciaAtiva(farmaciaId);
+      if (!farmacia) return reply.code(404).send({ detail: 'Farmácia não encontrada' });
+      if (!req.user.isAdmin && farmacia.gestorId !== req.user.id) {
+        return reply.code(403).send({ detail: 'Esta farmácia não é da sua carteira' });
+      }
 
-  /** POST /api/ofertas/link/regenerar — invalida o link antigo. */
-  app.post('/api/ofertas/link/regenerar', { preHandler: [autenticar] }, async (req, reply) => {
-    const link = await ofertasService.regenerarLink(req.user.id);
-    return reply.send(link);
-  });
+      const link = await ofertasService.regenerarLink(req.user.id, farmaciaId);
+      return reply.send(link);
+    },
+  );
 
   /** GET /api/ofertas/solicitacoes — o que os clientes enviaram. */
   app.get('/api/ofertas/solicitacoes', { preHandler: [autenticar] }, async (req, reply) => {
@@ -181,6 +222,13 @@ export async function ofertasRoutes(
     // sem a farmácia correspondente na carteira.
     const carteira = await ofertasRepository.carteiraDoGestor(req.user.id, req.user.isAdmin);
 
+    // Cada cliente tem o SEU link (migration 0021) — vem junto para o gestor
+    // copiar direto na linha, sem um request por farmácia.
+    const links = await ofertasService.linksDaCarteira(
+      req.user.id,
+      carteira.map(({ farmacia }) => farmacia.id),
+    );
+
     return reply.send(
       carteira.map(({ farmacia, pendente, ultimoEnvioEm }) => {
         let produtos: { id: number; nome: string }[] = [];
@@ -194,6 +242,8 @@ export async function ofertasRoutes(
           cidade:       farmacia.cidade,
           telefone:     farmacia.telefone,
           responsavel:  farmacia.responsavel,
+          // link exclusivo deste cliente para escolher os produtos
+          link:         links.get(farmacia.id) ?? null,
           // "respondeu" = tem pedido aguardando virar disparo
           respondeu:    Boolean(pendente),
           solicitacao:  pendente ? {

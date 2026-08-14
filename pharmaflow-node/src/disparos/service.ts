@@ -47,6 +47,89 @@ export interface GrupoWhatsApp {
   participantes: number | null;
 }
 
+/** Resposta da listagem de grupos: a lista + o estado do cache por trás. */
+export interface ListagemGrupos {
+  grupos:        GrupoWhatsApp[];
+  /** Quando o cache foi sincronizado (null = conexão sem instância). */
+  atualizadoEm:  Date | null;
+  /** true = tem um refresh rodando em background; vale reconsultar em breve. */
+  sincronizando: boolean;
+  /** Erro do último sync, quando ele falhou mas ainda temos cache para mostrar. */
+  aviso:         string | null;
+}
+
+export interface OpcoesListagem {
+  /** Ignora o cache e espera a Evolution responder (botão "Atualizar"). */
+  forcar?: boolean;
+}
+
+/** Depois disso o cache é servido, mas já pede refresh em background. */
+const TTL_GRUPOS_MS = 15 * 60 * 1000;
+
+/**
+ * O fetchAllGroups é pesado e demorado: se duas abas (ou o refresh em
+ * background e um "Atualizar" clicado junto) pedirem a mesma instância, elas
+ * compartilham a MESMA chamada em vez de brigar por ela na Evolution.
+ */
+const syncsEmVoo = new Map<string, Promise<{ grupos: GrupoWhatsApp[]; atualizadoEm: Date }>>();
+
+/** Busca os grupos na Evolution e regrava o cache. Nunca chame direto do
+ *  request se der para servir cache — isto é o caminho lento. */
+function sincronizarGrupos(
+  instanceName: string,
+): Promise<{ grupos: GrupoWhatsApp[]; atualizadoEm: Date }> {
+  const emVoo = syncsEmVoo.get(instanceName);
+  if (emVoo) return emVoo;
+
+  const promessa = (async () => {
+    let grupos: GrupoWhatsApp[];
+    try {
+      grupos = await buscarGruposNaEvolution(instanceName);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Falha ao sincronizar os grupos';
+      await disparosRepository.registrarErroSyncGrupos(instanceName, msg).catch(() => {});
+      throw err;
+    }
+    const atualizadoEm = await disparosRepository.salvarGruposCache(instanceName, grupos);
+    return { grupos, atualizadoEm };
+  })().finally(() => syncsEmVoo.delete(instanceName));
+
+  syncsEmVoo.set(instanceName, promessa);
+  return promessa;
+}
+
+/** A chamada crua à Evolution, com o parser dos dois formatos de resposta. */
+async function buscarGruposNaEvolution(instanceName: string): Promise<GrupoWhatsApp[]> {
+  const { ok, data } = await evolutionReq<unknown>(
+    'GET', `/group/fetchAllGroups/${instanceName}?getParticipants=false`,
+    undefined,
+    // Sincronizar centenas de grupos passa fácil dos 30s padrão.
+    { timeoutMs: 120_000 },
+  );
+
+  if (!ok) {
+    logger.error({ instanceName, data }, 'Falha ao listar grupos na Evolution');
+    throw new Error('Não foi possível listar os grupos. Verifique se o WhatsApp está conectado.');
+  }
+
+  // A Evolution ora devolve array puro, ora { groups: [...] }
+  const bruto = Array.isArray(data)
+    ? data
+    : ((data as { groups?: unknown[] })?.groups ?? []);
+
+  return (bruto as Record<string, unknown>[])
+    .map((g) => ({
+      jid:  String(g.id ?? g.jid ?? ''),
+      nome: String(g.subject ?? g.name ?? 'Grupo sem nome'),
+      participantes:
+        typeof g.size === 'number' ? g.size
+        : Array.isArray(g.participants) ? g.participants.length
+        : null,
+    }))
+    .filter((g) => g.jid.endsWith('@g.us'))
+    .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+}
+
 /** Conexão que pode originar um disparo — a do gestor ou uma global. */
 export interface ConexaoDisparo {
   instanceName: string;
@@ -182,6 +265,13 @@ export const disparosService = {
         if (registro.status !== 'open' || registro.qrCode) {
           await disparosRepository.atualizarInstancia(registro.id, { status: 'open', qrCode: null });
         }
+        // Acabou de conectar (leu o QR agora): já vai buscando os grupos por
+        // trás, para o passo 2 do disparo não começar do zero e lento.
+        if (registro.status !== 'open') {
+          void sincronizarGrupos(registro.instanceName).catch((err) => {
+            logger.warn({ err, instanceName: registro.instanceName }, 'Aquecimento do cache de grupos falhou');
+          });
+        }
       } else {
         // Ainda conectando: busca QR atualizado
         const { data: qrData } = await evolutionReq<{
@@ -275,39 +365,56 @@ export const disparosService = {
   },
 
   /** Grupos do gestor logado — usa a conexão dele (atalho do wizard antigo). */
-  async listarGrupos(gestorId: number): Promise<GrupoWhatsApp[]> {
+  async listarGrupos(gestorId: number, opts?: OpcoesListagem): Promise<ListagemGrupos> {
     const registro = await disparosRepository.getInstancia(gestorId);
-    if (!registro) return [];
-    return this.listarGruposDeInstancia(registro.instanceName);
+    if (!registro) return { grupos: [], atualizadoEm: null, sincronizando: false, aviso: null };
+    return this.listarGruposDeInstancia(registro.instanceName, opts);
   },
 
-  /** Grupos de uma instância Evolution específica (a conexão escolhida). */
-  async listarGruposDeInstancia(instanceName: string): Promise<GrupoWhatsApp[]> {
-    const { ok, data } = await evolutionReq<unknown>(
-      'GET', `/group/fetchAllGroups/${instanceName}?getParticipants=false`,
-    );
+  /**
+   * Grupos de uma instância Evolution — servidos do cache (migration 0020).
+   *
+   * O fetchAllGroups da Evolution leva dezenas de segundos numa conta com
+   * muitos grupos, então só esperamos por ele quando não há alternativa:
+   *   • cache ausente (primeira vez nesta conexão) ou `forcar` → sincroniza e espera;
+   *   • cache velho  → devolve o que tem AGORA e atualiza em background;
+   *   • cache fresco → devolve direto.
+   */
+  async listarGruposDeInstancia(
+    instanceName: string,
+    opts?: OpcoesListagem,
+  ): Promise<ListagemGrupos> {
+    const sync = await disparosRepository.getSyncGrupos(instanceName);
 
-    if (!ok) {
-      logger.error({ instanceName, data }, 'Falha ao listar grupos na Evolution');
-      throw new Error('Não foi possível listar os grupos. Verifique se o WhatsApp está conectado.');
+    if (!sync || opts?.forcar) {
+      const { grupos, atualizadoEm } = await sincronizarGrupos(instanceName);
+      return { grupos, atualizadoEm, sincronizando: false, aviso: null };
     }
 
-    // A Evolution ora devolve array puro, ora { groups: [...] }
-    const bruto = Array.isArray(data)
-      ? data
-      : ((data as { groups?: unknown[] })?.groups ?? []);
-
-    return (bruto as Record<string, unknown>[])
-      .map((g) => ({
-        jid:  String(g.id ?? g.jid ?? ''),
-        nome: String(g.subject ?? g.name ?? 'Grupo sem nome'),
-        participantes:
-          typeof g.size === 'number' ? g.size
-          : Array.isArray(g.participants) ? g.participants.length
-          : null,
-      }))
-      .filter((g) => g.jid.endsWith('@g.us'))
+    const cache = await disparosRepository.listarGruposCache(instanceName);
+    // Ordena aqui, e não no ORDER BY: a collation do banco joga nome acentuado
+    // ("Ótica", "Água") para o fim da lista.
+    const grupos = cache
+      .map((g) => ({ jid: g.jid, nome: g.nome, participantes: g.participantes }))
       .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+
+    const idadeMs = Date.now() - sync.sincronizadoEm.getTime();
+    const velho   = idadeMs > TTL_GRUPOS_MS;
+
+    if (velho) {
+      // Fire-and-forget: quem pediu não paga a espera. O single-flight lá
+      // dentro garante que várias abas não disparem syncs concorrentes.
+      void sincronizarGrupos(instanceName).catch((err) => {
+        logger.warn({ err, instanceName }, 'Refresh de grupos em background falhou');
+      });
+    }
+
+    return {
+      grupos,
+      atualizadoEm:  sync.sincronizadoEm,
+      sincronizando: velho,
+      aviso:         sync.erro,
+    };
   },
 
   // ── Envio ──────────────────────────────────────────────────────────────────

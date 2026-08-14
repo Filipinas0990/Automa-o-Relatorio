@@ -1,5 +1,5 @@
 import {
-  pgTable, pgView,
+  pgTable, pgView, primaryKey,
   serial, integer, varchar, text, boolean, timestamp, date, numeric,
 } from 'drizzle-orm/pg-core';
 
@@ -297,12 +297,37 @@ export const disparosGrupoLog = pgTable('disparos_grupo_log', {
   enviadoEm:  timestamp('enviado_em', { withTimezone: true }).defaultNow(),
 });
 
+// ── Cache dos grupos de WhatsApp (migration 0020) ────────────────────────────
+
+// O fetchAllGroups da Evolution é lento demais para rodar a cada request; a
+// listagem lê daqui e o refresh acontece em background.
+export const gruposCache = pgTable('grupos_cache', {
+  instanceName:  varchar('instance_name', { length: 100 }).notNull(),
+  jid:           varchar('jid',  { length: 120 }).notNull(),
+  nome:          varchar('nome', { length: 255 }).notNull(),
+  participantes: integer('participantes'),
+  atualizadoEm:  timestamp('atualizado_em', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.instanceName, t.jid] }),
+}));
+
+// Idade do cache por instância — separado porque uma conexão sem nenhum grupo
+// também precisa registrar "já sincronizei".
+export const gruposCacheSync = pgTable('grupos_cache_sync', {
+  instanceName:   varchar('instance_name', { length: 100 }).primaryKey(),
+  sincronizadoEm: timestamp('sincronizado_em', { withTimezone: true }).defaultNow().notNull(),
+  erro:           text('erro'),
+});
+
 // ── Ofertas enviadas pelo dono da farmácia (migration 0017) ──────────────────
 
 // Link público do gestor — o dono abre sem login, o token é a credencial.
 export const linksOferta = pgTable('links_oferta', {
   id:           serial('id').primaryKey(),
-  gestorId:     integer('gestor_id').notNull().unique().references(() => gestoresTrafego.id),
+  gestorId:     integer('gestor_id').notNull().references(() => gestoresTrafego.id),
+  // Cliente dono deste link (migration 0021). NULL = link legado do gestor,
+  // aquele em que o dono escolhia a farmácia numa lista.
+  farmaciaId:   integer('farmacia_id').references(() => farmacias.id),
   token:        varchar('token', { length: 64 }).notNull().unique(),
   ativo:        boolean('ativo').default(true).notNull(),
   criadoEm:     timestamp('criado_em',     { withTimezone: true }).defaultNow(),
@@ -342,4 +367,5 @@ export type GestorWhatsapp  = typeof gestorWhatsapp.$inferSelect;
 export type LinkOferta        = typeof linksOferta.$inferSelect;
 export type SolicitacaoOferta = typeof solicitacoesOferta.$inferSelect;
 export type DisparoGrupo    = typeof disparosGrupo.$inferSelect;
+export type GrupoCache      = typeof gruposCache.$inferSelect;
 export type DisparoGrupoLog = typeof disparosGrupoLog.$inferSelect;

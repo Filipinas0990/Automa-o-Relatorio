@@ -1,7 +1,9 @@
-import { and, eq, lte, desc, sql } from 'drizzle-orm';
+import { and, eq, lte, desc, sql, notInArray } from 'drizzle-orm';
 import { db } from '../database/db';
-import { gestorWhatsapp, disparosGrupo, disparosGrupoLog } from '../database/schema';
-import type { GestorWhatsapp, DisparoGrupo } from '../database/schema';
+import {
+  gestorWhatsapp, disparosGrupo, disparosGrupoLog, gruposCache, gruposCacheSync,
+} from '../database/schema';
+import type { GestorWhatsapp, DisparoGrupo, GrupoCache } from '../database/schema';
 
 export type InstanciaStatus = 'open' | 'close' | 'connecting';
 
@@ -102,5 +104,78 @@ export const disparosRepository = {
     return db.select().from(disparosGrupoLog)
       .where(eq(disparosGrupoLog.disparoId, disparoId))
       .orderBy(desc(disparosGrupoLog.enviadoEm));
+  },
+
+  // ── Cache de grupos (migration 0020) ───────────────────────────────────────
+
+  /** Grupos cacheados de uma instância, já em ordem alfabética. */
+  async listarGruposCache(instanceName: string): Promise<GrupoCache[]> {
+    return db.select().from(gruposCache)
+      .where(eq(gruposCache.instanceName, instanceName))
+      .orderBy(gruposCache.nome);
+  },
+
+  /** Quando esta instância foi sincronizada por inteiro (null = nunca). */
+  async getSyncGrupos(instanceName: string): Promise<{ sincronizadoEm: Date; erro: string | null } | null> {
+    const [row] = await db.select().from(gruposCacheSync)
+      .where(eq(gruposCacheSync.instanceName, instanceName));
+    return row ? { sincronizadoEm: row.sincronizadoEm, erro: row.erro } : null;
+  },
+
+  /**
+   * Substitui o cache da instância pela lista recém-buscada na Evolution.
+   * Numa transação: some quem saiu do WhatsApp, entra/atualiza o resto e o
+   * carimbo de sincronização — assim ninguém lê um estado pela metade.
+   */
+  async salvarGruposCache(
+    instanceName: string,
+    grupos: { jid: string; nome: string; participantes: number | null }[],
+  ): Promise<Date> {
+    const agora = new Date();
+
+    await db.transaction(async (tx) => {
+      const jids = grupos.map((g) => g.jid);
+      await tx.delete(gruposCache).where(
+        jids.length > 0
+          ? and(eq(gruposCache.instanceName, instanceName), notInArray(gruposCache.jid, jids))
+          : eq(gruposCache.instanceName, instanceName),
+      );
+
+      if (grupos.length > 0) {
+        await tx.insert(gruposCache)
+          .values(grupos.map((g) => ({ instanceName, ...g, atualizadoEm: agora })))
+          .onConflictDoUpdate({
+            target: [gruposCache.instanceName, gruposCache.jid],
+            set: {
+              nome:          sql`excluded.nome`,
+              participantes: sql`excluded.participantes`,
+              atualizadoEm:  agora,
+            },
+          });
+      }
+
+      await tx.insert(gruposCacheSync)
+        .values({ instanceName, sincronizadoEm: agora, erro: null })
+        .onConflictDoUpdate({
+          target: gruposCacheSync.instanceName,
+          set:    { sincronizadoEm: agora, erro: null },
+        });
+    });
+
+    return agora;
+  },
+
+  /**
+   * Marca que a sincronização falhou, sem apagar o cache: é melhor mostrar a
+   * lista de 40 min atrás do que uma tela vazia porque a Evolution caiu.
+   *
+   * De propósito só ATUALIZA: se a instância nunca sincronizou, não existe
+   * lista antiga para exibir, e criar o registro aqui faria a próxima consulta
+   * achar que o cache está fresco e devolver "nenhum grupo" em vez do erro.
+   */
+  async registrarErroSyncGrupos(instanceName: string, erro: string): Promise<void> {
+    await db.update(gruposCacheSync)
+      .set({ erro })
+      .where(eq(gruposCacheSync.instanceName, instanceName));
   },
 };

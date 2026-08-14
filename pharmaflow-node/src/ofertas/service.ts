@@ -24,23 +24,49 @@ export function montarUrl(token: string): string {
 
 export const ofertasService = {
 
-  /** Link do gestor, criando na primeira vez que ele pede. */
-  async obterOuCriarLink(gestorId: number) {
-    const existente = await ofertasRepository.getLink(gestorId);
-    if (existente) {
-      return { token: existente.token, url: montarUrl(existente.token) };
+  /**
+   * URL do link de cada farmácia informada, criando as que ainda não existem.
+   *
+   * É chamado pela carteira, que já lista todos os clientes: assim o gestor vê
+   * o botão "Copiar" pronto em cada linha, sem um request por cliente.
+   */
+  async linksDaCarteira(
+    gestorId:    number,
+    farmaciaIds: number[],
+  ): Promise<Map<number, string>> {
+    const existentes = await ofertasRepository.linksPorFarmacia(gestorId);
+    const porFarmacia = new Map<number, string>(
+      existentes.map((l) => [l.farmaciaId as number, l.token]),
+    );
+
+    const faltando = farmaciaIds.filter((id) => !porFarmacia.has(id));
+    if (faltando.length > 0) {
+      await ofertasRepository.criarLinks(
+        faltando.map((farmaciaId) => ({ gestorId, farmaciaId, token: gerarToken() })),
+      );
+      // Relê em vez de assumir os tokens que geramos: se outra aba criou os
+      // links primeiro, o insert virou no-op e valem os tokens dela.
+      const atualizados = await ofertasRepository.linksPorFarmacia(gestorId);
+      porFarmacia.clear();
+      for (const l of atualizados) porFarmacia.set(l.farmaciaId as number, l.token);
     }
 
-    const novo = await ofertasRepository.criarLink(gestorId, gerarToken());
-    return { token: novo.token, url: montarUrl(novo.token) };
+    return new Map(
+      farmaciaIds
+        .filter((id) => porFarmacia.has(id))
+        .map((id) => [id, montarUrl(porFarmacia.get(id) as string)]),
+    );
   },
 
-  /** Troca o token — o link antigo para de funcionar na hora. */
-  async regenerarLink(gestorId: number) {
-    const existente = await ofertasRepository.getLink(gestorId);
-    if (!existente) return this.obterOuCriarLink(gestorId);
+  /** Troca o token de um cliente — o link antigo para de funcionar na hora. */
+  async regenerarLink(gestorId: number, farmaciaId: number) {
+    const trocado = await ofertasRepository.trocarToken(gestorId, farmaciaId, gerarToken());
+    if (trocado) return { token: trocado.token, url: montarUrl(trocado.token) };
 
-    const atualizado = await ofertasRepository.trocarToken(existente.id, gerarToken());
-    return { token: atualizado.token, url: montarUrl(atualizado.token) };
+    // Cliente que ainda não tinha link: criar já entrega um token novo.
+    const links = await this.linksDaCarteira(gestorId, [farmaciaId]);
+    const url = links.get(farmaciaId);
+    if (!url) throw new Error('Não foi possível gerar o link deste cliente.');
+    return { token: url.split('/').pop() as string, url };
   },
 };
