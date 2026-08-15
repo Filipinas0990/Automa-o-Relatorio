@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyPluginOptions, FastifyRequest, FastifyReply } from 'fastify';
 import { ofertasRepository } from './repository';
-import { ofertasService } from './service';
+import { ofertasService, limparPreco } from './service';
 import { listarProdutos, getImagem } from '../catalogo/repository';
 import { logger } from '../logger';
 
@@ -11,13 +11,20 @@ interface OfertasRouteOptions extends FastifyPluginOptions {
   apenasAdmin: Middleware;
 }
 
+/**
+ * O dono manda `[{ id, preco }]`. Ainda aceitamos `number[]` (o formato antigo)
+ * porque um celular com a página em cache continua postando assim.
+ */
+type ProdutoEnviado = number | { id: number; preco?: string | null };
+
 interface EnviarOfertaBody {
   farmacia_id:      number;
-  produtos:         number[];
+  produtos:         ProdutoEnviado[];
   produtos_livres?: string | null;
   observacao?:      string | null;
   enviado_por?:     string | null;
 }
+
 
 /**
  * Ofertas enviadas pelo dono da farmácia.
@@ -134,19 +141,24 @@ export async function ofertasRoutes(
         }
       }
 
-      const ids = Array.isArray(b.produtos) ? b.produtos.map(Number).filter(Number.isFinite) : [];
+      const escolhidos = (Array.isArray(b.produtos) ? b.produtos : [])
+        .map((p) => (typeof p === 'object' && p !== null
+          ? { id: Number(p.id), preco: limparPreco(p.preco) }
+          : { id: Number(p), preco: null }))
+        .filter((p) => Number.isFinite(p.id));
+
       const livres = b.produtos_livres?.trim() || null;
 
-      if (ids.length === 0 && !livres) {
+      if (escolhidos.length === 0 && !livres) {
         return reply.code(400).send({ detail: 'Escolha ao menos um produto.' });
       }
 
-      // Guarda o nome junto do id: o catálogo pode mudar depois do envio
+      // Guarda nome e preço junto do id: o catálogo pode mudar depois do envio
       const catalogo = await listarProdutos();
       const porId = new Map(catalogo.map((p) => [p.id, p.nome]));
-      const produtos = ids
-        .filter((id) => porId.has(id))
-        .map((id) => ({ id, nome: porId.get(id) as string }));
+      const produtos = escolhidos
+        .filter((p) => porId.has(p.id))
+        .map((p) => ({ id: p.id, nome: porId.get(p.id) as string, preco: p.preco }));
 
       const solicitacao = await ofertasRepository.criarSolicitacao({
         gestorId:       gestor.id,
@@ -259,6 +271,39 @@ export async function ofertasRoutes(
       }),
     );
   });
+
+  /**
+   * GET /api/ofertas/ultima-escolha/:farmaciaId
+   * O que este cliente escolheu da última vez pelo link dele. Alimenta o
+   * passo 3 do disparo, que mostra só esses produtos em vez do banco inteiro.
+   * Devolve `null` quando o cliente ainda não enviou nada.
+   */
+  app.get<{ Params: { farmaciaId: string } }>(
+    '/api/ofertas/ultima-escolha/:farmaciaId',
+    { preHandler: [autenticar] },
+    async (req, reply) => {
+      const farmaciaId = parseInt(req.params.farmaciaId, 10);
+      if (!Number.isFinite(farmaciaId)) {
+        return reply.code(400).send({ detail: 'Farmácia inválida' });
+      }
+
+      const ultima = await ofertasRepository.ultimaSolicitacao(req.user.id, farmaciaId);
+      if (!ultima) return reply.send(null);
+
+      let produtos: { id: number; nome: string }[] = [];
+      try { produtos = JSON.parse(ultima.produtosJson); } catch { /* ignore */ }
+
+      return reply.send({
+        id:              ultima.id,
+        produtos,
+        produtos_livres: ultima.produtosLivres,
+        observacao:      ultima.observacao,
+        enviado_por:     ultima.enviadoPor,
+        status:          ultima.status,
+        criado_em:       ultima.criadoEm,
+      });
+    },
+  );
 
   /** PATCH /api/ofertas/solicitacoes/:id — muda o status. */
   app.patch<{ Params: { id: string }; Body: { status: string } }>(

@@ -99,19 +99,27 @@ docker compose up -d --build api
 
 ## Rodando migrations do banco de dados
 
-Quando uma migration nova for adicionada (pasta `migrations/`), ela precisa ser aplicada no banco antes ou logo após o deploy:
+Quando uma migration nova for adicionada (pasta `migrations/`), ela precisa ser aplicada no banco **junto com o deploy**. O código novo já espera as tabelas novas: se a migration ficar para trás, a tela quebra com um erro do Postgres (ex.: `relation "grupos_cache_sync" does not exist`).
+
+A pasta `migrations/` **não** é montada dentro do container do Postgres, então o arquivo tem de ser copiado para lá antes:
 
 ```bash
-docker compose exec postgres psql -U farmacia -d farmacia_monitor -f /migrations/000X_nome.sql
+cd /opt/pharmaflow
+git pull   # traz os .sql novos
+
+docker cp pharmaflow-node/migrations/000X_nome.sql farmacia_db:/tmp/
+docker exec farmacia_db psql -U farmacia -d farmacia_monitor -f /tmp/000X_nome.sql
 ```
 
-Ou usando a variável `DATABASE_URL` diretamente:
+Para conferir se aplicou:
 
 ```bash
-docker compose exec api npx drizzle-kit push
+docker exec farmacia_db psql -U farmacia -d farmacia_monitor -c '\d nome_da_tabela'
 ```
 
 > Sempre verifique o número da última migration aplicada antes de rodar uma nova.
+> As migrations são escritas para poder rodar de novo sem estragar nada
+> (`IF NOT EXISTS`), então repetir uma já aplicada é seguro.
 
 ---
 

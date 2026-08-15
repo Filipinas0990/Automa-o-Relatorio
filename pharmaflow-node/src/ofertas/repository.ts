@@ -167,6 +167,25 @@ export const ofertasRepository = {
     });
   },
 
+  /**
+   * A última lista que este cliente mandou pelo link dele — em qualquer
+   * status. É o que abastece o passo 3 do disparo: o gestor monta o criativo
+   * em cima do que o dono escolheu, não do catálogo inteiro.
+   *
+   * Escopo por gestor (mesma regra da carteira): um gestor não enxerga o que
+   * o cliente mandou pelo link de outro.
+   */
+  async ultimaSolicitacao(gestorId: number, farmaciaId: number): Promise<SolicitacaoOferta | null> {
+    const [row] = await db.select().from(solicitacoesOferta)
+      .where(and(
+        eq(solicitacoesOferta.gestorId, gestorId),
+        eq(solicitacoesOferta.farmaciaId, farmaciaId),
+      ))
+      .orderBy(desc(solicitacoesOferta.criadoEm))
+      .limit(1);
+    return row ?? null;
+  },
+
   async atualizarStatus(id: number, status: string): Promise<void> {
     await db.update(solicitacoesOferta)
       .set({

@@ -22,6 +22,17 @@ export function montarUrl(token: string): string {
   return `${base}/ofertas/${token}`;
 }
 
+/**
+ * O preço vem de uma tela pública e vai parar dentro da arte da oferta, então
+ * entra só o que é preço: dígitos, vírgula e ponto. Vazio vira null — o dono
+ * não é obrigado a informar, o gestor completa no passo 3.
+ */
+export function limparPreco(bruto: unknown): string | null {
+  if (typeof bruto !== 'string') return null;
+  const limpo = bruto.replace(/[^\d.,]/g, '').slice(0, 15).trim();
+  return limpo || null;
+}
+
 export const ofertasService = {
 
   /**
