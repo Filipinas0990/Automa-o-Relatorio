@@ -22,6 +22,8 @@ interface CriarDisparoBody {
   repetir?:        'nunca' | 'diario' | 'semanal' | 'mensal';
   /** Horários fixos do dia ("HH:MM"). Vazio = só o de agendado_para. */
   horarios?:       string[];
+  /** ISO — fim da repetição. Ausente/null = repete até o gestor cancelar. */
+  repetir_ate?:    string | null;
   timezone?:       string;
   farmacia_id?:    number | null;
   solicitacao_id?: number | null;
@@ -231,6 +233,19 @@ export async function disparosRoutes(
         ? [...new Set(b.horarios.filter(horarioValido))].sort()
         : [];
 
+      // Fim da repetição. Só faz sentido quando repete.
+      let repetirAte: Date | null = null;
+      if (repetir !== 'nunca' && b.repetir_ate) {
+        const d = new Date(b.repetir_ate);
+        if (Number.isNaN(d.getTime())) {
+          return reply.code(400).send({ detail: 'Data de término inválida.' });
+        }
+        if (agendadoPara && d.getTime() < agendadoPara.getTime()) {
+          return reply.code(400).send({ detail: 'A data de término é anterior à de início.' });
+        }
+        repetirAte = d;
+      }
+
       const disparo = await disparosRepository.criarDisparo({
         gestorId:      req.user.id,
         instanceName,
@@ -244,6 +259,7 @@ export async function disparosRoutes(
         agendadoPara,
         repetir,
         horariosJson: horarios.length > 1 ? JSON.stringify(horarios) : null,
+        repetirAte,
         timezone:     b.timezone ?? 'America/Sao_Paulo',
         status:       quando === 'agora' ? 'enviando' : 'agendado',
         proximoEnvio: quando === 'agora' ? null : agendadoPara,
@@ -336,6 +352,7 @@ export async function disparosRoutes(
           status:        d.status,
           agendado_para: d.agendadoPara,
           proximo_envio: d.proximoEnvio,
+          repetir_ate:   d.repetirAte,
           ultimo_envio:  d.ultimoEnvio,
           criado_em:     d.criadoEm,
         };

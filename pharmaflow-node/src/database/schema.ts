@@ -280,6 +280,8 @@ export const disparosGrupo = pgTable('disparos_grupo', {
   // JSON: ["08:00","18:00"] — horários fixos do dia (migration 0023).
   // Null/vazio = um horário só, o de agendado_para.
   horariosJson: text('horarios_json'),
+  // Fim da repetição (migration 0024). Null = até o gestor cancelar.
+  repetirAte:   timestamp('repetir_ate', { withTimezone: true }),
   timezone:     varchar('timezone', { length: 50 }).default('America/Sao_Paulo').notNull(),
   // agendado | enviando | enviado | erro | cancelado
   status:       varchar('status', { length: 20 }).default('agendado').notNull(),

@@ -741,11 +741,17 @@ export function calcularProximoEnvio(disparo: DisparoGrupo, base: Date): Date | 
 
   const avancar = (): boolean => proximoNoMesmoDia() || avancarOcorrencia();
 
+  /** Passou da data de término escolhida pelo gestor (null = sem término). */
+  const passouDoFim = (): boolean =>
+    disparo.repetirAte !== null && proximo.getTime() > new Date(disparo.repetirAte).getTime();
+
   if (!avancar()) return null;
+  if (passouDoFim()) return null;
 
   // Se a referência ficou no passado (ex.: serviço parado), avança até o futuro
   while (proximo.getTime() <= base.getTime()) {
     if (!avancar()) return null;
+    if (passouDoFim()) return null;
   }
 
   return proximo;
