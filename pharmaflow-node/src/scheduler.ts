@@ -104,6 +104,31 @@ async function verificarDisparosAgendados(): Promise<void> {
   }
 }
 
+/**
+ * Um disparo entra em "enviando" e só sai de lá quando termina (ou quando o
+ * callback do motor de campanhas chega). Se a API cair no meio, ou o callback
+ * se perder, ele fica "enviando" para sempre e ninguém descobre que a oferta
+ * não foi ao ar. Aqui marcamos esses como erro para aparecerem no Histórico.
+ *
+ * Não reenviamos sozinhos de propósito: parte das mensagens pode ter saído, e
+ * repetir a oferta no grupo do cliente é pior do que avisar o gestor.
+ */
+const LIMITE_ENVIANDO_MS = 30 * 60 * 1000;
+
+async function verificarDisparosTravados(): Promise<void> {
+  const limite = new Date(Date.now() - LIMITE_ENVIANDO_MS);
+  const travados = await disparosRepository.buscarDisparosTravados(limite);
+  if (!travados.length) return;
+
+  for (const disparo of travados) {
+    logger.error(
+      { disparoId: disparo.id, desde: disparo.atualizadoEm },
+      'Disparo preso em "enviando" — marcando como erro',
+    );
+    await disparosRepository.atualizarDisparo(disparo.id, { status: 'erro' });
+  }
+}
+
 // ── Start ─────────────────────────────────────────────────────────────────────
 
 export function iniciarSchedulerWhatsApp(): void {
@@ -116,6 +141,10 @@ export function iniciarSchedulerWhatsApp(): void {
 
     verificarDisparosAgendados().catch(err =>
       logger.error({ err }, 'Erro no scheduler de disparos em grupos'),
+    );
+
+    verificarDisparosTravados().catch(err =>
+      logger.error({ err }, 'Erro ao verificar disparos travados'),
     );
   }, INTERVALO_MS);
 }

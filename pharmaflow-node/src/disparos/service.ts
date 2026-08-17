@@ -66,6 +66,14 @@ export interface OpcoesListagem {
 /** Depois disso o cache é servido, mas já pede refresh em background. */
 const TTL_GRUPOS_MS = 15 * 60 * 1000;
 
+/** Sugestões iniciais de horário — o gestor edita a lista depois. */
+export const HORARIOS_PADRAO = ['08:00', '09:00', '12:00', '15:00', '18:00'];
+
+/** "HH:MM" de 00:00 a 23:59. */
+export function horarioValido(valor: unknown): valor is string {
+  return typeof valor === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(valor);
+}
+
 /**
  * O fetchAllGroups é pesado e demorado: se duas abas (ou o refresh em
  * background e um "Atualizar" clicado junto) pedirem a mesma instância, elas
@@ -318,6 +326,21 @@ export const disparosService = {
     await disparosRepository.atualizarInstancia(registro.id, {
       status: 'close', qrCode: null, numeroConectado: null,
     });
+  },
+
+  // ── Horários pré-definidos ─────────────────────────────────────────────────
+
+  /**
+   * Horários que o gestor usa para agendar. Na primeira vez semeia os padrões
+   * — assim o modal de agendamento nunca abre sem nenhuma sugestão, e o gestor
+   * ajusta a lista depois em Configurações.
+   */
+  async listarHorarios(gestorId: number) {
+    const existentes = await disparosRepository.listarHorarios(gestorId);
+    if (existentes.length > 0) return existentes;
+
+    await disparosRepository.criarHorariosPadrao(gestorId, HORARIOS_PADRAO);
+    return disparosRepository.listarHorarios(gestorId);
   },
 
   // ── Grupos ─────────────────────────────────────────────────────────────────

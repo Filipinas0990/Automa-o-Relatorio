@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyPluginOptions, FastifyRequest, FastifyReply } from 'fastify';
 import { disparosRepository } from './repository';
-import { disparosService, motivoEvolutionIndisponivel } from './service';
+import { disparosService, motivoEvolutionIndisponivel, horarioValido } from './service';
 import type { GrupoSelecionado, MidiaDisparo, ResultadoGrupo } from './service';
 import { ofertasRepository } from '../ofertas/repository';
 import { logger } from '../logger';
@@ -121,6 +121,43 @@ export async function disparosRoutes(
         const msg = err instanceof Error ? err.message : 'Erro ao listar grupos';
         return reply.code(502).send({ detail: msg });
       }
+    },
+  );
+
+  // ── Horários pré-definidos (migration 0022) ────────────────────────────────
+
+  /** GET /api/disparos/horarios — lista do gestor (semeia os padrões na 1ª vez). */
+  app.get('/api/disparos/horarios', { preHandler: [autenticar] }, async (req, reply) => {
+    const horarios = await disparosService.listarHorarios(req.user.id);
+    return reply.send(horarios.map((h) => ({ id: h.id, horario: h.horario, rotulo: h.rotulo })));
+  });
+
+  /** POST /api/disparos/horarios — adiciona um horário à lista. */
+  app.post<{ Body: { horario?: string; rotulo?: string | null } }>(
+    '/api/disparos/horarios',
+    { preHandler: [autenticar] },
+    async (req, reply) => {
+      const horario = req.body?.horario;
+      if (!horarioValido(horario)) {
+        return reply.code(400).send({ detail: 'Horário inválido — use o formato HH:MM.' });
+      }
+
+      const rotulo = req.body?.rotulo?.trim().slice(0, 40) || null;
+      await disparosRepository.criarHorario(req.user.id, horario, rotulo);
+
+      const horarios = await disparosService.listarHorarios(req.user.id);
+      return reply.code(201).send(horarios.map((h) => ({ id: h.id, horario: h.horario, rotulo: h.rotulo })));
+    },
+  );
+
+  /** DELETE /api/disparos/horarios/:id — tira da lista. */
+  app.delete<{ Params: { id: string } }>(
+    '/api/disparos/horarios/:id',
+    { preHandler: [autenticar] },
+    async (req, reply) => {
+      const removido = await disparosRepository.removerHorario(req.user.id, parseInt(req.params.id, 10));
+      if (!removido) return reply.code(404).send({ detail: 'Horário não encontrado' });
+      return reply.code(204).send();
     },
   );
 

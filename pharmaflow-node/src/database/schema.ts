@@ -297,6 +297,18 @@ export const disparosGrupoLog = pgTable('disparos_grupo_log', {
   enviadoEm:  timestamp('enviado_em', { withTimezone: true }).defaultNow(),
 });
 
+// ── Horários pré-definidos de disparo (migration 0022) ───────────────────────
+
+// "HH:MM" como texto: é o formato do <input type="time"> e evita conversão de
+// fuso entre banco, API e navegador.
+export const horariosDisparo = pgTable('horarios_disparo', {
+  id:        serial('id').primaryKey(),
+  gestorId:  integer('gestor_id').notNull().references(() => gestoresTrafego.id),
+  horario:   varchar('horario', { length: 5 }).notNull(),
+  rotulo:    varchar('rotulo',  { length: 40 }),
+  criadoEm:  timestamp('criado_em', { withTimezone: true }).defaultNow().notNull(),
+});
+
 // ── Cache dos grupos de WhatsApp (migration 0020) ────────────────────────────
 
 // O fetchAllGroups da Evolution é lento demais para rodar a cada request; a
@@ -368,4 +380,5 @@ export type LinkOferta        = typeof linksOferta.$inferSelect;
 export type SolicitacaoOferta = typeof solicitacoesOferta.$inferSelect;
 export type DisparoGrupo    = typeof disparosGrupo.$inferSelect;
 export type GrupoCache      = typeof gruposCache.$inferSelect;
+export type HorarioDisparo  = typeof horariosDisparo.$inferSelect;
 export type DisparoGrupoLog = typeof disparosGrupoLog.$inferSelect;

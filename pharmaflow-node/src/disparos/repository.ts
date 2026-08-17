@@ -2,8 +2,11 @@ import { and, eq, lte, desc, sql, notInArray } from 'drizzle-orm';
 import { db } from '../database/db';
 import {
   gestorWhatsapp, disparosGrupo, disparosGrupoLog, gruposCache, gruposCacheSync,
+  horariosDisparo,
 } from '../database/schema';
-import type { GestorWhatsapp, DisparoGrupo, GrupoCache } from '../database/schema';
+import type {
+  GestorWhatsapp, DisparoGrupo, GrupoCache, HorarioDisparo,
+} from '../database/schema';
 
 export type InstanciaStatus = 'open' | 'close' | 'connecting';
 
@@ -104,6 +107,54 @@ export const disparosRepository = {
     return db.select().from(disparosGrupoLog)
       .where(eq(disparosGrupoLog.disparoId, disparoId))
       .orderBy(desc(disparosGrupoLog.enviadoEm));
+  },
+
+  // ── Horários pré-definidos (migration 0022) ────────────────────────────────
+
+  async listarHorarios(gestorId: number): Promise<HorarioDisparo[]> {
+    return db.select().from(horariosDisparo)
+      .where(eq(horariosDisparo.gestorId, gestorId))
+      .orderBy(horariosDisparo.horario);
+  },
+
+  /** Cria (ou ignora, se aquele horário já estiver na lista). */
+  async criarHorario(gestorId: number, horario: string, rotulo: string | null): Promise<void> {
+    await db.insert(horariosDisparo)
+      .values({ gestorId, horario, rotulo })
+      .onConflictDoNothing();
+  },
+
+  /** Semeia os horários padrão — só na primeira vez que o gestor abre a lista. */
+  async criarHorariosPadrao(gestorId: number, horarios: string[]): Promise<void> {
+    if (horarios.length === 0) return;
+    await db.insert(horariosDisparo)
+      .values(horarios.map((horario) => ({ gestorId, horario, rotulo: null })))
+      .onConflictDoNothing();
+  },
+
+  /** Remove, mas só se o horário for daquele gestor. */
+  async removerHorario(gestorId: number, id: number): Promise<boolean> {
+    const removidos = await db.delete(horariosDisparo)
+      .where(and(eq(horariosDisparo.id, id), eq(horariosDisparo.gestorId, gestorId)))
+      .returning({ id: horariosDisparo.id });
+    return removidos.length > 0;
+  },
+
+  // ── Disparos travados ──────────────────────────────────────────────────────
+
+  /**
+   * Disparos parados em "enviando" há tempo demais. Acontece quando a API cai
+   * no meio do envio, ou quando o callback do motor de campanhas nunca chega:
+   * sem isso o disparo fica "enviando" para sempre e ninguém percebe que a
+   * oferta não foi ao ar.
+   */
+  async buscarDisparosTravados(limite: Date): Promise<DisparoGrupo[]> {
+    return db.select().from(disparosGrupo).where(
+      and(
+        eq(disparosGrupo.status, 'enviando'),
+        lte(disparosGrupo.atualizadoEm, limite),
+      ),
+    );
   },
 
   // ── Cache de grupos (migration 0020) ───────────────────────────────────────
