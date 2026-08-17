@@ -53,6 +53,7 @@ export const disparosRepository = {
     quando:       'agora' | 'agendado';
     agendadoPara: Date | null;
     repetir:      'nunca' | 'diario' | 'semanal' | 'mensal';
+    horariosJson: string | null;
     timezone:     string;
     status:       string;
     proximoEnvio: Date | null;

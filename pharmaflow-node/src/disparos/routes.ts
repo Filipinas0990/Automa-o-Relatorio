@@ -20,6 +20,8 @@ interface CriarDisparoBody {
   quando:          'agora' | 'agendado';
   agendado_para?:  string | null;   // ISO
   repetir?:        'nunca' | 'diario' | 'semanal' | 'mensal';
+  /** Horários fixos do dia ("HH:MM"). Vazio = só o de agendado_para. */
+  horarios?:       string[];
   timezone?:       string;
   farmacia_id?:    number | null;
   solicitacao_id?: number | null;
@@ -223,6 +225,12 @@ export async function disparosRoutes(
         if (s && s.gestorId === req.user.id) solicitacaoId = s.id;
       }
 
+      // Horários fixos do dia. Guardamos só com 2 ou mais: com um só, quem
+      // manda é o agendado_para e o comportamento é o de sempre.
+      const horarios = Array.isArray(b.horarios)
+        ? [...new Set(b.horarios.filter(horarioValido))].sort()
+        : [];
+
       const disparo = await disparosRepository.criarDisparo({
         gestorId:      req.user.id,
         instanceName,
@@ -235,6 +243,7 @@ export async function disparosRoutes(
         quando,
         agendadoPara,
         repetir,
+        horariosJson: horarios.length > 1 ? JSON.stringify(horarios) : null,
         timezone:     b.timezone ?? 'America/Sao_Paulo',
         status:       quando === 'agora' ? 'enviando' : 'agendado',
         proximoEnvio: quando === 'agora' ? null : agendadoPara,
