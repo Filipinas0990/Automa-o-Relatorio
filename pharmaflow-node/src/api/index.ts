@@ -217,14 +217,19 @@ app.delete('/api/gestores/:id', { preHandler: [autenticar, apenasAdmin] }, async
 
 app.post('/api/farmacias', { preHandler: [autenticar, apenasAdmin] }, async (request, reply) => {
   const body = request.body as Record<string, unknown>;
-  const { nome, url_base, email, senha, gestor_id, tem_chatbot, fase,
+  const { nome, nome_fachada, url_base, email, senha, gestor_id, tem_chatbot, fase,
           telefone, responsavel, cidade, observacoes } = body as {
-    nome: string; url_base?: string; email?: string; senha?: string;
+    nome: string; nome_fachada?: string; url_base?: string; email?: string; senha?: string;
     gestor_id?: number; tem_chatbot?: boolean; fase?: string;
     telefone?: string; responsavel?: string; cidade?: string; observacoes?: string;
   };
 
-  if (!nome) return reply.code(400).send({ detail: 'Campo "nome" é obrigatório.' });
+  if (!nome) return reply.code(400).send({ detail: 'Campo "nome" (razão social) é obrigatório.' });
+  // Obrigatório no cadastro novo: é o nome que vai para o criativo do grupo.
+  // Os cadastros antigos ficam com null até alguém editá-los (migration 0025).
+  if (!nome_fachada?.trim()) {
+    return reply.code(400).send({ detail: 'Campo "nome_fachada" é obrigatório.' });
+  }
 
   const faseFinal     = fase === 'entrada' ? 'entrada' : 'ativo';
   const temChatbotBool = tem_chatbot !== false;
@@ -238,6 +243,7 @@ app.post('/api/farmacias', { preHandler: [autenticar, apenasAdmin] }, async (req
 
   const [f] = await db.insert(farmacias).values({
     nome,
+    nomeFachada: nome_fachada.trim(),
     fase:       faseFinal,
     urlBase:    (faseFinal === 'ativo' && temChatbotBool) ? url_base! : (url_base ?? null),
     email:      (faseFinal === 'ativo' && temChatbotBool) ? email!    : (email   ?? null),
@@ -251,9 +257,10 @@ app.post('/api/farmacias', { preHandler: [autenticar, apenasAdmin] }, async (req
   }).returning();
 
   return reply.code(201).send({
-    id:          f.id,
-    nome:        f.nome,
-    fase:        f.fase,
+    id:           f.id,
+    nome:         f.nome,
+    nome_fachada: f.nomeFachada,
+    fase:         f.fase,
     gestor_id:   f.gestorId,
     tem_chatbot: f.temChatbot,
   });
@@ -268,6 +275,7 @@ app.put('/api/farmacias/:id', { preHandler: [autenticar, apenasAdmin] }, async (
   const b = request.body as any;
   const dados: Partial<typeof farmacias.$inferInsert> = {};
   if (b.nome              !== undefined) dados.nome            = b.nome;
+  if (b.nome_fachada      !== undefined) dados.nomeFachada     = b.nome_fachada?.trim() || null;
   if (b.url_base          !== undefined) dados.urlBase         = b.url_base;
   if (b.email             !== undefined) dados.email           = b.email;
   if (b.gestor_id         !== undefined) dados.gestorId        = b.gestor_id;
@@ -464,7 +472,7 @@ app.get('/api/farmacias', { preHandler: autenticar }, async (request) => {
   const dias      = parseInt(q.dias || '7', 10);
 
   const { rows } = await db.execute(sql`
-    SELECT f.id AS farmacia_id, f.nome AS farmacia, f.gestor_id, f.ativa, f.tem_chatbot,
+    SELECT f.id AS farmacia_id, f.nome AS farmacia, f.nome_fachada, f.gestor_id, f.ativa, f.tem_chatbot,
            f.fase, f.telefone, f.responsavel, f.cidade,
            f.meta_vendas, f.meta_receita, f.meta_leads_google, f.meta_leads_meta,
            COALESCE(r.nivel_alerta, 'verde')    AS nivel_alerta,
@@ -558,7 +566,8 @@ app.get('/api/farmacias', { preHandler: autenticar }, async (request) => {
     }
 
     resultado.push({
-      id: fid, nome: r.farmacia, status: labelStatus, nivel_alerta: r.nivel_alerta,
+      id: fid, nome: r.farmacia, nome_fachada: r.nome_fachada ?? null,
+      status: labelStatus, nivel_alerta: r.nivel_alerta,
       fase: r.fase ?? 'ativo',
       telefone:    r.telefone    ?? null,
       responsavel: r.responsavel ?? null,

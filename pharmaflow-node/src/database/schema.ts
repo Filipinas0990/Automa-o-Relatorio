@@ -25,7 +25,12 @@ export const gestoresTrafego = pgTable('gestores_trafego', {
 
 export const farmacias = pgTable('farmacias', {
   id:          serial('id').primaryKey(),
+  // Razão social — nome jurídico, uso interno.
   nome:        varchar('nome', { length: 120 }).notNull(),
+  // Nome de fachada (migration 0025): é o que o cliente final vê no criativo
+  // e na mensagem do grupo. Null nos cadastros antigos — quem lê usa
+  // `nomeVisivel()`, que cai na razão social enquanto não for preenchido.
+  nomeFachada: varchar('nome_fachada', { length: 120 }),
   urlBase:     varchar('url_base', { length: 255 }),
   email:       varchar('email', { length: 120 }),
   senhaEnc:    text('senha_enc'),
@@ -44,6 +49,16 @@ export const farmacias = pgTable('farmacias', {
   metaLeadsGoogle:  integer('meta_leads_google'),
   metaLeadsMeta:    integer('meta_leads_meta'),
 });
+
+/**
+ * Nome que pode aparecer para o cliente final: o de fachada, caindo na razão
+ * social enquanto os cadastros antigos não forem completados (migration 0025).
+ * Use isto em tudo que sai para fora — criativo, mensagem do grupo, link
+ * público. Telas internas continuam mostrando a razão social.
+ */
+export function nomeVisivel(f: { nome: string; nomeFachada?: string | null }): string {
+  return f.nomeFachada?.trim() || f.nome;
+}
 
 export const coletas = pgTable('coletas', {
   id:                   serial('id').primaryKey(),

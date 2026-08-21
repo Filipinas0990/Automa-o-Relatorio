@@ -3,6 +3,7 @@ import { ofertasRepository } from './repository';
 import { ofertasService, limparPreco } from './service';
 import { listarProdutos, getImagem } from '../catalogo/repository';
 import { logger } from '../logger';
+import { nomeVisivel } from '../database/schema';
 
 type Middleware = (req: FastifyRequest, reply: FastifyReply) => Promise<void>;
 
@@ -82,9 +83,9 @@ export async function ofertasRoutes(
       return reply.send({
         gestor:    { nome: link.gestor.nome },
         farmacia:  link.farmacia
-          ? { id: link.farmacia.id, nome: link.farmacia.nome, cidade: link.farmacia.cidade }
+          ? { id: link.farmacia.id, nome: nomeVisivel(link.farmacia), cidade: link.farmacia.cidade }
           : null,
-        farmacias: lista.map((f) => ({ id: f.id, nome: f.nome, cidade: f.cidade })),
+        farmacias: lista.map((f) => ({ id: f.id, nome: nomeVisivel(f), cidade: f.cidade })),
         // só produtos ativos são oferecidos ao dono da farmácia
         produtos:  produtos.filter((p) => p.ativo).map((p) => ({ id: p.id, nome: p.nome })),
       });
@@ -251,6 +252,9 @@ export async function ofertasRoutes(
         return {
           farmacia_id:  farmacia.id,
           farmacia:     farmacia.nome,
+          // O que pode aparecer para o cliente final (criativo, mensagem do grupo)
+          nome_fachada: farmacia.nomeFachada ?? null,
+          farmacia_visivel: nomeVisivel(farmacia),
           cidade:       farmacia.cidade,
           telefone:     farmacia.telefone,
           responsavel:  farmacia.responsavel,
