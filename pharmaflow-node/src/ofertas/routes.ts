@@ -21,8 +21,6 @@ type ProdutoEnviado = number | { id: number; preco?: string | null };
 interface EnviarOfertaBody {
   farmacia_id:      number;
   produtos:         ProdutoEnviado[];
-  produtos_livres?: string | null;
-  observacao?:      string | null;
   enviado_por?:     string | null;
 }
 
@@ -148,9 +146,7 @@ export async function ofertasRoutes(
           : { id: Number(p), preco: null }))
         .filter((p) => Number.isFinite(p.id));
 
-      const livres = b.produtos_livres?.trim() || null;
-
-      if (escolhidos.length === 0 && !livres) {
+      if (escolhidos.length === 0) {
         return reply.code(400).send({ detail: 'Escolha ao menos um produto.' });
       }
 
@@ -165,8 +161,6 @@ export async function ofertasRoutes(
         gestorId:       gestor.id,
         farmaciaId,
         produtosJson:   JSON.stringify(produtos),
-        produtosLivres: livres,
-        observacao:     b.observacao?.trim() || null,
         enviadoPor:     b.enviado_por?.trim() || null,
       });
 
@@ -214,8 +208,6 @@ export async function ofertasRoutes(
           farmacia_id:     s.farmaciaId,
           farmacia:        s.farmacia,
           produtos,
-          produtos_livres: s.produtosLivres,
-          observacao:      s.observacao,
           enviado_por:     s.enviadoPor,
           status:          s.status,
           criado_em:       s.criadoEm,
@@ -265,8 +257,6 @@ export async function ofertasRoutes(
           solicitacao:  pendente ? {
             id:              pendente.id,
             produtos,
-            produtos_livres: pendente.produtosLivres,
-            observacao:      pendente.observacao,
             enviado_por:     pendente.enviadoPor,
             criado_em:       pendente.criadoEm,
           } : null,
@@ -300,8 +290,6 @@ export async function ofertasRoutes(
       return reply.send({
         id:              ultima.id,
         produtos,
-        produtos_livres: ultima.produtosLivres,
-        observacao:      ultima.observacao,
         enviado_por:     ultima.enviadoPor,
         status:          ultima.status,
         criado_em:       ultima.criadoEm,

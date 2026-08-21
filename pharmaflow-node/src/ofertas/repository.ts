@@ -103,8 +103,6 @@ export const ofertasRepository = {
     gestorId:       number;
     farmaciaId:     number;
     produtosJson:   string;
-    produtosLivres: string | null;
-    observacao:     string | null;
     enviadoPor:     string | null;
   }): Promise<SolicitacaoOferta> {
     const [row] = await db.insert(solicitacoesOferta).values(data).returning();
@@ -125,8 +123,6 @@ export const ofertasRepository = {
         farmaciaId:     solicitacoesOferta.farmaciaId,
         farmacia:       farmacias.nome,
         produtosJson:   solicitacoesOferta.produtosJson,
-        produtosLivres: solicitacoesOferta.produtosLivres,
-        observacao:     solicitacoesOferta.observacao,
         enviadoPor:     solicitacoesOferta.enviadoPor,
         status:         solicitacoesOferta.status,
         criadoEm:       solicitacoesOferta.criadoEm,

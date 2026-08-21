@@ -372,9 +372,6 @@ export const solicitacoesOferta = pgTable('solicitacoes_oferta', {
   farmaciaId:     integer('farmacia_id').notNull().references(() => farmacias.id),
   // JSON: [{ id, nome }] — produtos do catálogo
   produtosJson:   text('produtos_json').notNull(),
-  // itens fora do catálogo, um por linha (sem imagem pronta)
-  produtosLivres: text('produtos_livres'),
-  observacao:     text('observacao'),
   enviadoPor:     varchar('enviado_por', { length: 120 }),
   // pendente | atendida | descartada
   status:         varchar('status', { length: 20 }).default('pendente').notNull(),
