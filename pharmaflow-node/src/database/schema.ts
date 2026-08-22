@@ -372,7 +372,8 @@ export const solicitacoesOferta = pgTable('solicitacoes_oferta', {
   farmaciaId:     integer('farmacia_id').notNull().references(() => farmacias.id),
   // JSON: [{ id, nome }] — produtos do catálogo
   produtosJson:   text('produtos_json').notNull(),
-  enviadoPor:     varchar('enviado_por', { length: 120 }),
+  // Obrigatório (migration 0027): pedido de oferta não chega anônimo.
+  enviadoPor:     varchar('enviado_por', { length: 120 }).notNull(),
   // pendente | atendida | descartada
   status:         varchar('status', { length: 20 }).default('pendente').notNull(),
   criadoEm:       timestamp('criado_em',   { withTimezone: true }).defaultNow(),

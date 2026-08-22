@@ -21,7 +21,8 @@ type ProdutoEnviado = number | { id: number; preco?: string | null };
 interface EnviarOfertaBody {
   farmacia_id:      number;
   produtos:         ProdutoEnviado[];
-  enviado_por?:     string | null;
+  /** Obrigatório: o gestor precisa saber com quem falar sobre a lista. */
+  enviado_por:      string;
 }
 
 
@@ -150,6 +151,13 @@ export async function ofertasRoutes(
         return reply.code(400).send({ detail: 'Escolha ao menos um produto.' });
       }
 
+      // Nome de quem enviou é obrigatório (migration 0027). O corte em 120
+      // acompanha o tamanho da coluna.
+      const enviadoPor = (b.enviado_por ?? '').trim().slice(0, 120);
+      if (enviadoPor.length < 2) {
+        return reply.code(400).send({ detail: 'Informe o seu nome para enviar a lista.' });
+      }
+
       // Guarda nome e preço junto do id: o catálogo pode mudar depois do envio
       const catalogo = await listarProdutos();
       const porId = new Map(catalogo.map((p) => [p.id, p.nome]));
@@ -161,7 +169,7 @@ export async function ofertasRoutes(
         gestorId:       gestor.id,
         farmaciaId,
         produtosJson:   JSON.stringify(produtos),
-        enviadoPor:     b.enviado_por?.trim() || null,
+        enviadoPor,
       });
 
       logger.info(
