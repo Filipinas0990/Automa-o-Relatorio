@@ -107,7 +107,7 @@ CREATE TABLE public.catalogo_produtos (
     imagem_b64 text,
     mime character varying(40) DEFAULT 'image/png'::character varying,
     ativo boolean DEFAULT true NOT NULL,
-    categoria character varying(40),
+    categoria character varying(60),
     criado_em timestamp with time zone DEFAULT now(),
     atualizado_em timestamp with time zone DEFAULT now()
 );

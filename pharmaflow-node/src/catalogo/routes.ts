@@ -2,9 +2,10 @@ import type { FastifyInstance, FastifyPluginOptions, FastifyRequest, FastifyRepl
 import {
   identificarProdutos, upsertProduto, contarProdutos,
   listarProdutos, getImagem, deletarProduto, setAtivo, setCategoriaEmLote,
+  categoriasEmUso, canonizarCategoria,
   type ProdutoEntrada,
 } from './repository';
-import { categoriaValida, type Categoria } from './categorias';
+import { limparCategoria, SUGESTOES_INICIAIS } from './categorias';
 
 type Middleware = (req: FastifyRequest, reply: FastifyReply) => Promise<void>;
 
@@ -67,6 +68,28 @@ export async function catalogoRoutes(
   );
 
   /**
+   * GET /api/catalogo/categorias
+   * Categorias em uso, com a contagem de cada uma. Alimenta as sugestões do
+   * campo de digitação e os chips de filtro.
+   *
+   * `sugestoes` só vem preenchido enquanto NINGUÉM classificou nada: com o
+   * banco zerado o campo abriria vazio e cada gestor inventaria a sua no
+   * primeiro upload. Assim que existe uma categoria de verdade, as sugestões
+   * saem de cena e quem manda é o que já está em uso.
+   */
+  app.get(
+    '/api/catalogo/categorias',
+    { preHandler: [autenticar] },
+    async (_req, reply) => {
+      const categorias = await categoriasEmUso();
+      return reply.send({
+        categorias,
+        sugestoes: categorias.length === 0 ? SUGESTOES_INICIAIS : [],
+      });
+    },
+  );
+
+  /**
    * GET /api/catalogo/produtos/:id/imagem
    * Devolve os bytes da imagem. Autentica via header OU ?token= (para usar em <img src>).
    */
@@ -103,15 +126,22 @@ export async function catalogoRoutes(
       if (!nome?.trim() || !imagem_b64?.trim()) {
         return reply.code(400).send({ detail: 'nome e imagem_b64 são obrigatórios.' });
       }
-      // Categoria é opcional: o modal deixa subir sem classificar. Mas se veio
-      // algo, tem de ser um slug conhecido — senão cria categoria fantasma que
-      // nenhum chip da interface mostra, e o produto some do filtro.
-      if (categoria !== undefined && !categoriaValida(categoria)) {
-        return reply.code(400).send({ detail: `Categoria inválida: "${categoria}".` });
+
+      // Categoria é texto livre e opcional — o modal deixa subir sem classificar.
+      // `undefined` (campo ausente) preserva a categoria de um produto que já
+      // existe; string vazia limpa. Só o tipo errado é recusado.
+      let categoriaFinal: string | null | undefined;
+      if (categoria !== undefined) {
+        const limpa = limparCategoria(categoria);
+        if (limpa === undefined) {
+          return reply.code(400).send({ detail: 'Categoria deve ser texto.' });
+        }
+        categoriaFinal = await canonizarCategoria(limpa);
       }
+
       // Remove o prefixo data: se vier junto
       const b64 = imagem_b64.includes(',') ? imagem_b64.split(',')[1] : imagem_b64;
-      await upsertProduto(nome.trim(), b64, mime ?? 'image/png', categoria as Categoria | null | undefined);
+      await upsertProduto(nome.trim(), b64, mime ?? 'image/png', categoriaFinal);
       return reply.code(201).send({ ok: true });
     },
   );
@@ -143,11 +173,15 @@ export async function catalogoRoutes(
       if (limpos.length > 500) {
         return reply.code(400).send({ detail: 'Classifique no máximo 500 produtos por vez.' });
       }
-      if (categoria === undefined || !categoriaValida(categoria)) {
-        return reply.code(400).send({ detail: `Categoria inválida: "${String(categoria)}".` });
+      if (categoria === undefined) {
+        return reply.code(400).send({ detail: 'Envie o campo "categoria" (texto, ou null para limpar).' });
+      }
+      const limpa = limparCategoria(categoria);
+      if (limpa === undefined) {
+        return reply.code(400).send({ detail: 'Categoria deve ser texto.' });
       }
 
-      const total = await setCategoriaEmLote(limpos, categoria);
+      const total = await setCategoriaEmLote(limpos, await canonizarCategoria(limpa));
       return reply.send({ ok: true, total });
     },
   );
