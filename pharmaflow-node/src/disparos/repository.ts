@@ -47,6 +47,7 @@ export const disparosRepository = {
     titulo:        string;
     mensagem:      string;
     midiasJson:    string | null;
+    produtosJson:  string | null;
     farmaciaId:    number | null;
     solicitacaoId: number | null;
     gruposJson:   string;
@@ -61,6 +62,35 @@ export const disparosRepository = {
   }): Promise<DisparoGrupo> {
     const [row] = await db.insert(disparosGrupo).values(data).returning();
     return row;
+  },
+
+  /**
+   * Produtos do último disparo daquele cliente — alimenta o chip "Recentes".
+   *
+   * Escopado por gestor E por farmácia: sem o gestorId, um gestor veria o que
+   * outro anunciou para um cliente que não é dele.
+   *
+   * Ignora disparo cancelado (não foi ao ar) e os anteriores à migration 0029
+   * (produtos_json NULL). Um disparo agendado que ainda não saiu CONTA: para
+   * quem está montando a próxima campanha, o que já está na fila é tão
+   * relevante quanto o que já foi.
+   */
+  async ultimosProdutosDaFarmacia(
+    gestorId:   number,
+    farmaciaId: number,
+  ): Promise<{ produtosJson: string; criadoEm: Date | null } | null> {
+    const [row] = await db
+      .select({ produtosJson: disparosGrupo.produtosJson, criadoEm: disparosGrupo.criadoEm })
+      .from(disparosGrupo)
+      .where(and(
+        eq(disparosGrupo.gestorId, gestorId),
+        eq(disparosGrupo.farmaciaId, farmaciaId),
+        sql`${disparosGrupo.produtosJson} IS NOT NULL`,
+        sql`${disparosGrupo.status} <> 'cancelado'`,
+      ))
+      .orderBy(desc(disparosGrupo.criadoEm))
+      .limit(1);
+    return row?.produtosJson ? { produtosJson: row.produtosJson, criadoEm: row.criadoEm } : null;
   },
 
   async getDisparo(id: number): Promise<DisparoGrupo | null> {

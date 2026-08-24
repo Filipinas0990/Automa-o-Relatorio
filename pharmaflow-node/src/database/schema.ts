@@ -285,6 +285,9 @@ export const disparosGrupo = pgTable('disparos_grupo', {
   mensagem:     text('mensagem').notNull(),
   // JSON: [{ b64, mime, rotulo }] — um disparo leva vários criativos
   midiasJson:   text('midias_json'),
+  // JSON: [{ id, nome }] — quais produtos do catálogo geraram esses criativos.
+  // Alimenta o filtro "Recentes" do passo 3 (migration 0029). Null nos antigos.
+  produtosJson: text('produtos_json'),
   // de qual cliente/pedido veio (null = envio avulso, sem solicitação)
   farmaciaId:   integer('farmacia_id').references(() => farmacias.id),
   solicitacaoId: integer('solicitacao_id'),

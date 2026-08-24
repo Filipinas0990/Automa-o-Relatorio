@@ -16,6 +16,8 @@ interface CriarDisparoBody {
   titulo:          string;
   mensagem:        string;
   midias?:         MidiaDisparo[];
+  /** Produtos do catálogo que geraram os criativos — alimenta o "Recentes". */
+  produtos?:       { id: number; nome: string }[];
   grupos:          GrupoSelecionado[];
   quando:          'agora' | 'agendado';
   agendado_para?:  string | null;   // ISO
@@ -180,6 +182,15 @@ export async function disparosRoutes(
       const b = req.body;
       const midias = Array.isArray(b.midias) ? b.midias.filter((m) => m?.b64) : [];
 
+      // Só id e nome: o corpo do disparo já carrega dezenas de MB de imagem,
+      // não é lugar para reboque. Nome vai junto para o histórico sobreviver
+      // ao produto ser apagado do banco de imagens.
+      const produtos = Array.isArray(b.produtos)
+        ? b.produtos
+            .filter((p) => Number.isInteger(p?.id) && p.id > 0)
+            .map((p) => ({ id: p.id, nome: String(p.nome ?? '').slice(0, 200) }))
+        : [];
+
       if (!b.mensagem?.trim() && midias.length === 0) {
         return reply.code(400).send({ detail: 'Informe a mensagem ou ao menos um criativo.' });
       }
@@ -252,6 +263,7 @@ export async function disparosRoutes(
         titulo:        b.titulo?.trim() || 'Ofertas',
         mensagem:      b.mensagem ?? '',
         midiasJson:    midias.length ? JSON.stringify(midias) : null,
+        produtosJson:  produtos.length ? JSON.stringify(produtos) : null,
         farmaciaId:    b.farmacia_id ? Number(b.farmacia_id) : null,
         solicitacaoId,
         gruposJson:   JSON.stringify(b.grupos),
@@ -327,6 +339,38 @@ export async function disparosRoutes(
         const msg = err instanceof Error ? err.message : 'Erro ao finalizar disparo';
         return reply.code(500).send({ detail: msg });
       }
+    },
+  );
+
+  /**
+   * GET /api/disparos/ultimos-produtos/:farmaciaId
+   * Produtos anunciados na última campanha DESTE cliente — o chip "Recentes"
+   * do passo 3. Devolve lista vazia quando não há disparo anterior com o dado
+   * (todo disparo anterior à migration 0029 se enquadra aqui).
+   *
+   * Não precisa checar se a farmácia é do gestor: a consulta já filtra por
+   * gestorId, então perguntar pelo cliente de outro gestor devolve vazio.
+   */
+  app.get<{ Params: { farmaciaId: string } }>(
+    '/api/disparos/ultimos-produtos/:farmaciaId',
+    { preHandler: [autenticar] },
+    async (req, reply) => {
+      const farmaciaId = parseInt(req.params.farmaciaId, 10);
+      if (Number.isNaN(farmaciaId)) {
+        return reply.code(400).send({ detail: 'farmaciaId inválido.' });
+      }
+
+      const ultimo = await disparosRepository.ultimosProdutosDaFarmacia(req.user.id, farmaciaId);
+      if (!ultimo) return reply.send({ produtos: [], disparado_em: null });
+
+      let produtos: { id: number; nome: string }[] = [];
+      // JSON quebrado não pode derrubar o passo 3 inteiro por causa de um chip.
+      try { produtos = JSON.parse(ultimo.produtosJson); } catch { /* ignore */ }
+
+      return reply.send({
+        produtos: Array.isArray(produtos) ? produtos : [],
+        disparado_em: ultimo.criadoEm,
+      });
     },
   );
 

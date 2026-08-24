@@ -1,46 +1,63 @@
 /**
- * Categorias do banco de imagens — lista FECHADA, definida aqui.
+ * Categorias do banco de imagens — TEXTO LIVRE, digitado pelo gestor.
  *
- * Por que não deixar o gestor digitar a categoria livremente: com texto livre um
- * cadastra "Higiene", outro "higiene pessoal" e um terceiro "Higiene e beleza".
- * O filtro racha em três e o dono da farmácia não acha o produto. Lista fixa
- * custa uma decisão nossa e resolve o problema de vez.
+ * Era uma lista fechada (migration 0028) e virou campo aberto (0030): quem
+ * opera o sistema precisa criar categoria nova sem esperar deploy.
  *
- * O banco guarda o SLUG (`higiene-beleza`), não o rótulo. Assim dá para renomear
- * "Mamãe e Bebê" para "Infantil" mexendo só em ROTULOS, sem migration de dados.
+ * O preço do texto livre é a fragmentação — "Higiene", "higiene" e "HIGIENE "
+ * viram três chips que dividem o mesmo acervo. Quem segura isso são duas
+ * coisas, e nenhuma delas é uma lista fixa:
  *
- * ATENÇÃO: esta lista é espelhada em FrontEND/src/lib/categorias.ts — os dois
- * arquivos vivem em pacotes separados e não compartilham import. Mexeu em um,
- * mexa no outro.
+ *   • `normalizarCategoria` aqui, que dá a chave de comparação;
+ *   • `canonizarCategoria` no repository, que ao salvar reaproveita a grafia
+ *     de uma categoria existente que normalize igual;
+ *   • e a interface, que sugere o que já existe enquanto o gestor digita.
  */
 
-export const CATEGORIAS = [
-  'higiene-beleza',
-  'dermocosmeticos',
-  'medicamentos',
-  'mamae-bebe',
-  'vitaminas',
-  'cuidado-pessoal',
-  'sazonais',
-] as const;
-
-export type Categoria = (typeof CATEGORIAS)[number];
-
-export const ROTULOS: Record<Categoria, string> = {
-  'higiene-beleza':  'Higiene e Beleza',
-  'dermocosmeticos': 'Dermocosméticos',
-  'medicamentos':    'Medicamentos (MIP)',
-  'mamae-bebe':      'Mamãe e Bebê',
-  'vitaminas':       'Vitaminas e Suplementos',
-  'cuidado-pessoal': 'Cuidado Pessoal',
-  'sazonais':        'Sazonais / Datas',
-};
+/** Teto do campo no banco (migration 0030: varchar(60)). */
+export const MAX_CATEGORIA = 60;
 
 /**
- * Aceita um slug conhecido. `null` é válido de propósito: significa "sem
- * categoria", que é o estado de todo produto cadastrado antes da migration 0028
- * e o jeito de LIMPAR a categoria de um produto já classificado.
+ * Sugestões oferecidas SÓ quando o banco ainda não tem categoria nenhuma —
+ * senão o campo abre vazio e cada um inventa a sua no primeiro upload.
+ * Não são obrigatórias e não são validadas: é dica de partida, nada mais.
  */
-export function categoriaValida(v: unknown): v is Categoria | null {
-  return v === null || (typeof v === 'string' && (CATEGORIAS as readonly string[]).includes(v));
+export const SUGESTOES_INICIAIS = [
+  'Higiene e Beleza',
+  'Dermocosméticos',
+  'Medicamentos (MIP)',
+  'Mamãe e Bebê',
+  'Vitaminas e Suplementos',
+  'Cuidado Pessoal',
+  'Sazonais / Datas',
+];
+
+/**
+ * Chave de comparação entre categorias: sem acento, minúscula, espaços
+ * colapsados. "  Higiene  e  Beleza " e "higiene e beleza" dão a mesma chave.
+ */
+export function normalizarCategoria(s: string): string {
+  return s
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Valida o que veio do cliente e devolve o texto pronto para gravar.
+ *
+ * - `null`, `undefined` ou string vazia → `null` (limpa a categoria)
+ * - texto → aparado e cortado no teto do banco
+ * - qualquer outro tipo → `undefined`, que o chamador traduz em 400
+ *
+ * `null` e `undefined` chegam aqui com o mesmo resultado de propósito; quem
+ * distingue "limpar" de "não mexer" é a rota, olhando se o campo veio no corpo.
+ */
+export function limparCategoria(v: unknown): string | null | undefined {
+  if (v === null || v === undefined) return null;
+  if (typeof v !== 'string') return undefined;
+  const texto = v.replace(/\s+/g, ' ').trim();
+  return texto ? texto.slice(0, MAX_CATEGORIA) : null;
 }

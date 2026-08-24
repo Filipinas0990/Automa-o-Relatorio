@@ -1,7 +1,7 @@
 import { sql, eq, desc, inArray } from 'drizzle-orm';
 import { db } from '../database/db';
 import { catalogoProdutos } from '../database/schema';
-import type { Categoria } from './categorias';
+import { normalizarCategoria } from './categorias';
 
 // ── Normalização de nomes (usada no cadastro e no match) ──────────────────────
 // Remove acentos, coloca em minúsculo e colapsa espaços.
@@ -51,7 +51,7 @@ export async function upsertProduto(
   nome: string,
   imagemB64: string,
   mime = 'image/png',
-  categoria?: Categoria | null,
+  categoria?: string | null,
 ): Promise<void> {
   const nomeNorm = normalizar(nome);
   const set: Record<string, unknown> = { nome, imagemB64, mime, atualizadoEm: new Date() };
@@ -95,7 +95,7 @@ export async function listarProdutos(): Promise<Array<{
  * seria inviável, então a tela oferece seleção múltipla e chama isto.
  * `categoria: null` limpa a classificação.
  */
-export async function setCategoriaEmLote(ids: number[], categoria: Categoria | null): Promise<number> {
+export async function setCategoriaEmLote(ids: number[], categoria: string | null): Promise<number> {
   if (ids.length === 0) return 0;
   const rows = await db
     .update(catalogoProdutos)
@@ -128,6 +128,47 @@ export async function getImagem(id: number): Promise<{ imagemB64: string | null;
 /** Remove um produto do catálogo. */
 export async function deletarProduto(id: number): Promise<void> {
   await db.delete(catalogoProdutos).where(eq(catalogoProdutos.id, id));
+}
+
+/**
+ * Categorias em uso, com quantos produtos cada uma tem.
+ *
+ * Alimenta as sugestões do campo de digitação e os chips das telas. Só o que
+ * está realmente aplicado a algum produto: categoria que ficou sem produto
+ * nenhum simplesmente deixa de existir, sem cadastro para limpar.
+ */
+export async function categoriasEmUso(): Promise<Array<{ nome: string; total: number }>> {
+  const rows = await db
+    .select({
+      nome:  catalogoProdutos.categoria,
+      total: sql<number>`count(*)::int`,
+    })
+    .from(catalogoProdutos)
+    .where(sql`${catalogoProdutos.categoria} IS NOT NULL AND ${catalogoProdutos.categoria} <> ''`)
+    .groupBy(catalogoProdutos.categoria)
+    .orderBy(catalogoProdutos.categoria);
+  return rows.map((r) => ({ nome: r.nome as string, total: r.total }));
+}
+
+/**
+ * Antifragmentação do texto livre: se o que o gestor digitou normaliza igual a
+ * uma categoria que já existe, grava a GRAFIA JÁ CADASTRADA em vez da digitada.
+ *
+ * Sem isto, "higiene e beleza" digitado com pressa abre um chip separado do
+ * "Higiene e Beleza" que já existia, e o acervo racha em dois. Com isto, a
+ * primeira grafia cadastrada vira a oficial e as variações caem nela.
+ *
+ * Custa um SELECT numa lista de dezenas de linhas, no caminho de salvar — não
+ * é caminho quente.
+ */
+export async function canonizarCategoria(texto: string | null): Promise<string | null> {
+  if (!texto) return null;
+  const alvo = normalizarCategoria(texto);
+  if (!alvo) return null;
+
+  const existentes = await categoriasEmUso();
+  const igual = existentes.find((c) => normalizarCategoria(c.nome) === alvo);
+  return igual ? igual.nome : texto;
 }
 
 // ── Match de uma lista de produtos vindos da planilha ─────────────────────────

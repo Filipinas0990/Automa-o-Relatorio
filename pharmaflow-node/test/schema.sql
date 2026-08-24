@@ -238,6 +238,7 @@ CREATE TABLE public.disparos_grupo (
     criado_em timestamp with time zone DEFAULT now(),
     atualizado_em timestamp with time zone DEFAULT now(),
     midias_json text,
+    produtos_json text,
     farmacia_id integer,
     solicitacao_id integer
 );
