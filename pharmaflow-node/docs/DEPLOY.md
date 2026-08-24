@@ -182,3 +182,5 @@ Compilar TypeScript dentro de um container em VPS de pouca RAM frequentemente ca
 - Falha silenciosa sem mensagem de erro clara
 
 Compilando no host (na própria VPS, fora do Docker), o Node.js tem acesso direto à memória disponível sem as restrições do container, tornando o processo mais estável e rápido.
+
+ssh -i ~/.ssh/minha-chave-aws ubuntu@3.239.249.15

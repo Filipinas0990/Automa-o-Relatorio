@@ -86,7 +86,9 @@ export async function ofertasRoutes(
           : null,
         farmacias: lista.map((f) => ({ id: f.id, nome: nomeVisivel(f), cidade: f.cidade })),
         // só produtos ativos são oferecidos ao dono da farmácia
-        produtos:  produtos.filter((p) => p.ativo).map((p) => ({ id: p.id, nome: p.nome })),
+        produtos:  produtos
+          .filter((p) => p.ativo)
+          .map((p) => ({ id: p.id, nome: p.nome, categoria: p.categoria })),
       });
     },
   );

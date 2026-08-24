@@ -1,9 +1,10 @@
 import type { FastifyInstance, FastifyPluginOptions, FastifyRequest, FastifyReply } from 'fastify';
 import {
   identificarProdutos, upsertProduto, contarProdutos,
-  listarProdutos, getImagem, deletarProduto, setAtivo,
+  listarProdutos, getImagem, deletarProduto, setAtivo, setCategoriaEmLote,
   type ProdutoEntrada,
 } from './repository';
+import { categoriaValida, type Categoria } from './categorias';
 
 type Middleware = (req: FastifyRequest, reply: FastifyReply) => Promise<void>;
 
@@ -93,19 +94,61 @@ export async function catalogoRoutes(
    * bodyLimit elevado para aceitar imagens.
    */
   app.post<{
-    Body: { nome: string; imagem_b64: string; mime?: string };
+    Body: { nome: string; imagem_b64: string; mime?: string; categoria?: string | null };
   }>(
     '/api/catalogo/produtos',
     { preHandler: [autenticar, apenasAdmin], bodyLimit: 15 * 1024 * 1024 },
     async (req, reply) => {
-      const { nome, imagem_b64, mime } = req.body ?? {};
+      const { nome, imagem_b64, mime, categoria } = req.body ?? {};
       if (!nome?.trim() || !imagem_b64?.trim()) {
         return reply.code(400).send({ detail: 'nome e imagem_b64 são obrigatórios.' });
       }
+      // Categoria é opcional: o modal deixa subir sem classificar. Mas se veio
+      // algo, tem de ser um slug conhecido — senão cria categoria fantasma que
+      // nenhum chip da interface mostra, e o produto some do filtro.
+      if (categoria !== undefined && !categoriaValida(categoria)) {
+        return reply.code(400).send({ detail: `Categoria inválida: "${categoria}".` });
+      }
       // Remove o prefixo data: se vier junto
       const b64 = imagem_b64.includes(',') ? imagem_b64.split(',')[1] : imagem_b64;
-      await upsertProduto(nome.trim(), b64, mime ?? 'image/png');
+      await upsertProduto(nome.trim(), b64, mime ?? 'image/png', categoria as Categoria | null | undefined);
       return reply.code(201).send({ ok: true });
+    },
+  );
+
+  /**
+   * PATCH /api/catalogo/produtos/categoria
+   * Admin classifica um ou vários produtos de uma vez.
+   * Body: { ids: number[]; categoria: string | null }  (null limpa a categoria)
+   *
+   * Rota estática antes da paramétrica `/produtos/:id` — o Fastify já dá
+   * precedência ao segmento estático, então "categoria" nunca cai como id.
+   */
+  app.patch<{ Body: { ids?: unknown; categoria?: unknown } }>(
+    '/api/catalogo/produtos/categoria',
+    { preHandler: [autenticar, apenasAdmin] },
+    async (req, reply) => {
+      const { ids, categoria } = req.body ?? {};
+
+      if (!Array.isArray(ids) || ids.length === 0) {
+        return reply.code(400).send({ detail: 'Envie ao menos um id em "ids".' });
+      }
+      const limpos = ids
+        .map((v) => (typeof v === 'number' ? v : parseInt(String(v), 10)))
+        .filter((n) => Number.isInteger(n) && n > 0);
+      if (limpos.length !== ids.length) {
+        return reply.code(400).send({ detail: 'A lista "ids" tem valores que não são id de produto.' });
+      }
+      // Teto para não transformar um bug de front num UPDATE no acervo inteiro.
+      if (limpos.length > 500) {
+        return reply.code(400).send({ detail: 'Classifique no máximo 500 produtos por vez.' });
+      }
+      if (categoria === undefined || !categoriaValida(categoria)) {
+        return reply.code(400).send({ detail: `Categoria inválida: "${String(categoria)}".` });
+      }
+
+      const total = await setCategoriaEmLote(limpos, categoria);
+      return reply.send({ ok: true, total });
     },
   );
 

@@ -1,6 +1,7 @@
-import { sql, eq, desc } from 'drizzle-orm';
+import { sql, eq, desc, inArray } from 'drizzle-orm';
 import { db } from '../database/db';
 import { catalogoProdutos } from '../database/schema';
+import type { Categoria } from './categorias';
 
 // ── Normalização de nomes (usada no cadastro e no match) ──────────────────────
 // Remove acentos, coloca em minúsculo e colapsa espaços.
@@ -38,16 +39,28 @@ export async function carregarCatalogo(): Promise<CatalogoRow[]> {
     .where(eq(catalogoProdutos.ativo, true));
 }
 
-/** Cadastra/atualiza um produto do catálogo (upsert pelo nome normalizado). */
-export async function upsertProduto(nome: string, imagemB64: string, mime = 'image/png'): Promise<void> {
+/**
+ * Cadastra/atualiza um produto do catálogo (upsert pelo nome normalizado).
+ *
+ * `categoria` é opcional e `undefined` NÃO é o mesmo que `null` aqui: quando
+ * vem undefined o campo fica fora do UPDATE, para que reenviar a foto de um
+ * produto já classificado não apague a categoria dele. Passe `null` explícito
+ * para de fato limpar.
+ */
+export async function upsertProduto(
+  nome: string,
+  imagemB64: string,
+  mime = 'image/png',
+  categoria?: Categoria | null,
+): Promise<void> {
   const nomeNorm = normalizar(nome);
+  const set: Record<string, unknown> = { nome, imagemB64, mime, atualizadoEm: new Date() };
+  if (categoria !== undefined) set.categoria = categoria;
+
   await db
     .insert(catalogoProdutos)
-    .values({ nome, nomeNorm, imagemB64, mime })
-    .onConflictDoUpdate({
-      target: catalogoProdutos.nomeNorm,
-      set: { nome, imagemB64, mime, atualizadoEm: new Date() },
-    });
+    .values({ nome, nomeNorm, imagemB64, mime, categoria: categoria ?? null })
+    .onConflictDoUpdate({ target: catalogoProdutos.nomeNorm, set });
 }
 
 /** Conta quantos produtos existem no catálogo. */
@@ -59,16 +72,37 @@ export async function contarProdutos(): Promise<number> {
 }
 
 /** Lista os produtos do catálogo (sem a imagem, para ser leve). Inclui todos, ativos e desligados. */
-export async function listarProdutos(): Promise<Array<{ id: number; nome: string; ativo: boolean; criadoEm: Date | null }>> {
+export async function listarProdutos(): Promise<Array<{
+  id: number; nome: string; ativo: boolean; categoria: string | null; criadoEm: Date | null;
+}>> {
   return db
     .select({
-      id:       catalogoProdutos.id,
-      nome:     catalogoProdutos.nome,
-      ativo:    catalogoProdutos.ativo,
-      criadoEm: catalogoProdutos.criadoEm,
+      id:        catalogoProdutos.id,
+      nome:      catalogoProdutos.nome,
+      ativo:     catalogoProdutos.ativo,
+      categoria: catalogoProdutos.categoria,
+      criadoEm:  catalogoProdutos.criadoEm,
     })
     .from(catalogoProdutos)
     .orderBy(desc(catalogoProdutos.criadoEm));
+}
+
+/**
+ * Classifica vários produtos de uma vez. Devolve quantos foram alterados.
+ *
+ * Existe por causa do acervo antigo: são centenas de imagens cadastradas antes
+ * da migration 0028, todas sem categoria. Classificar uma a uma na interface
+ * seria inviável, então a tela oferece seleção múltipla e chama isto.
+ * `categoria: null` limpa a classificação.
+ */
+export async function setCategoriaEmLote(ids: number[], categoria: Categoria | null): Promise<number> {
+  if (ids.length === 0) return 0;
+  const rows = await db
+    .update(catalogoProdutos)
+    .set({ categoria, atualizadoEm: new Date() })
+    .where(inArray(catalogoProdutos.id, ids))
+    .returning({ id: catalogoProdutos.id });
+  return rows.length;
 }
 
 /** Liga/desliga um produto do catálogo. Retorna false se o produto não existe. */

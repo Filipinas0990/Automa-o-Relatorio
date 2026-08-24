@@ -251,6 +251,9 @@ export const catalogoProdutos = pgTable('catalogo_produtos', {
   mime:         varchar('mime', { length: 40 }).default('image/png'),
   // produto desligado não entra no match de criativos nem é oferecido (migration 0018)
   ativo:        boolean('ativo').notNull().default(true),
+  // slug da categoria — ver src/catalogo/categorias.ts. NULL = sem categoria,
+  // que é o estado de tudo que foi cadastrado antes da migration 0028.
+  categoria:    varchar('categoria', { length: 40 }),
   criadoEm:     timestamp('criado_em',     { withTimezone: true }).defaultNow(),
   atualizadoEm: timestamp('atualizado_em', { withTimezone: true }).defaultNow(),
 });
