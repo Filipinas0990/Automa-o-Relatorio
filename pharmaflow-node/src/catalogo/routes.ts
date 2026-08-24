@@ -5,7 +5,7 @@ import {
   categoriasEmUso, canonizarCategoria,
   type ProdutoEntrada,
 } from './repository';
-import { limparCategoria, SUGESTOES_INICIAIS } from './categorias';
+import { limparCategoria, CATEGORIAS_PADRAO } from './categorias';
 
 type Middleware = (req: FastifyRequest, reply: FastifyReply) => Promise<void>;
 
@@ -72,20 +72,16 @@ export async function catalogoRoutes(
    * Categorias em uso, com a contagem de cada uma. Alimenta as sugestões do
    * campo de digitação e os chips de filtro.
    *
-   * `sugestoes` só vem preenchido enquanto NINGUÉM classificou nada: com o
-   * banco zerado o campo abriria vazio e cada gestor inventaria a sua no
-   * primeiro upload. Assim que existe uma categoria de verdade, as sugestões
-   * saem de cena e quem manda é o que já está em uso.
+   * `sugestoes` são as categorias padrão do negócio, devolvidas SEMPRE. Quem
+   * consome soma com `categorias` e tira as repetidas — assim o campo oferece
+   * o conjunto completo, e não só o que por acaso já foi usado.
    */
   app.get(
     '/api/catalogo/categorias',
     { preHandler: [autenticar] },
     async (_req, reply) => {
       const categorias = await categoriasEmUso();
-      return reply.send({
-        categorias,
-        sugestoes: categorias.length === 0 ? SUGESTOES_INICIAIS : [],
-      });
+      return reply.send({ categorias, sugestoes: CATEGORIAS_PADRAO });
     },
   );
 

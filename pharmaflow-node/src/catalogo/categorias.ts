@@ -18,11 +18,14 @@
 export const MAX_CATEGORIA = 60;
 
 /**
- * Sugestões oferecidas SÓ quando o banco ainda não tem categoria nenhuma —
- * senão o campo abre vazio e cada um inventa a sua no primeiro upload.
- * Não são obrigatórias e não são validadas: é dica de partida, nada mais.
+ * Categorias oferecidas SEMPRE no campo de classificação, estejam ou não em
+ * uso. São somadas às que já existem no acervo, sem duplicar.
+ *
+ * Não são obrigatórias e não são validadas — o campo continua aceitando
+ * qualquer texto. Existem porque o gestor não deve precisar lembrar de cor as
+ * categorias do negócio nem redigitá-las a cada acervo novo.
  */
-export const SUGESTOES_INICIAIS = [
+export const CATEGORIAS_PADRAO = [
   'Higiene e Beleza',
   'Dermocosméticos',
   'Medicamentos (MIP)',
