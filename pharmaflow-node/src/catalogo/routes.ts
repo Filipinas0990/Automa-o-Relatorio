@@ -2,10 +2,11 @@ import type { FastifyInstance, FastifyPluginOptions, FastifyRequest, FastifyRepl
 import {
   identificarProdutos, upsertProduto, contarProdutos,
   listarProdutos, getImagem, deletarProduto, setAtivo, setCategoriaEmLote,
-  categoriasEmUso, canonizarCategoria,
+  garantirCategoria,
+  listarCategorias, criarCategoria, renomearCategoria, excluirCategoria,
   type ProdutoEntrada,
 } from './repository';
-import { limparCategoria, CATEGORIAS_PADRAO } from './categorias';
+import { limparCategoria } from './categorias';
 
 type Middleware = (req: FastifyRequest, reply: FastifyReply) => Promise<void>;
 
@@ -69,19 +70,104 @@ export async function catalogoRoutes(
 
   /**
    * GET /api/catalogo/categorias
-   * Categorias em uso, com a contagem de cada uma. Alimenta as sugestões do
-   * campo de digitação e os chips de filtro.
+   * O cadastro de categorias com a contagem de produtos de cada uma. Serve
+   * três consumidores: a tela de Categorias (CRUD), as sugestões do campo de
+   * digitação e o campo de classificação em lote.
    *
-   * `sugestoes` são as categorias padrão do negócio, devolvidas SEMPRE. Quem
-   * consome soma com `categorias` e tira as repetidas — assim o campo oferece
-   * o conjunto completo, e não só o que por acaso já foi usado.
+   * `sugestoes` é a mesma lista, só com os nomes. Existe por compatibilidade —
+   * antes eram as categorias padrão fixas no código, e quem consome soma as
+   * duas e tira as repetidas.
+   *
+   * Categoria com `total: 0` é normal e não é sujeira: foi criada aqui e ainda
+   * não recebeu imagem. Quem monta chip de filtro deve continuar olhando o
+   * acervo, não esta lista — chip que não filtra nada é armadilha.
    */
   app.get(
     '/api/catalogo/categorias',
     { preHandler: [autenticar] },
     async (_req, reply) => {
-      const categorias = await categoriasEmUso();
-      return reply.send({ categorias, sugestoes: CATEGORIAS_PADRAO });
+      const categorias = await listarCategorias();
+      return reply.send({ categorias, sugestoes: categorias.map((c) => c.nome) });
+    },
+  );
+
+  /**
+   * POST /api/catalogo/categorias
+   * Cria uma categoria vazia, antes de existir imagem nela.
+   * Body: { nome: string }
+   */
+  app.post<{ Body: { nome?: unknown } }>(
+    '/api/catalogo/categorias',
+    { preHandler: [autenticar, apenasAdmin] },
+    async (req, reply) => {
+      const nome = limparCategoria(req.body?.nome);
+      if (nome === undefined) {
+        return reply.code(400).send({ detail: 'Nome da categoria deve ser texto.' });
+      }
+      if (!nome) {
+        return reply.code(400).send({ detail: 'Informe o nome da categoria.' });
+      }
+
+      const categoria = await criarCategoria(nome);
+      if (!categoria) {
+        return reply.code(409).send({ detail: `A categoria "${nome}" já existe.` });
+      }
+      return reply.code(201).send({ ok: true, categoria });
+    },
+  );
+
+  /**
+   * PATCH /api/catalogo/categorias/:id
+   * Renomeia a categoria E reescreve a categoria dos produtos que estavam
+   * nela — o produto guarda o texto, não um id.
+   * Body: { nome: string }
+   */
+  app.patch<{ Params: { id: string }; Body: { nome?: unknown } }>(
+    '/api/catalogo/categorias/:id',
+    { preHandler: [autenticar, apenasAdmin] },
+    async (req, reply) => {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isInteger(id) || id <= 0) {
+        return reply.code(400).send({ detail: 'id inválido.' });
+      }
+
+      const nome = limparCategoria(req.body?.nome);
+      if (nome === undefined) {
+        return reply.code(400).send({ detail: 'Nome da categoria deve ser texto.' });
+      }
+      if (!nome) {
+        return reply.code(400).send({ detail: 'Informe o nome da categoria.' });
+      }
+
+      const r = await renomearCategoria(id, nome);
+      if (!r.ok) {
+        return r.motivo === 'nao-existe'
+          ? reply.code(404).send({ detail: 'Categoria não encontrada.' })
+          : reply.code(409).send({ detail: `Já existe uma categoria "${nome}".` });
+      }
+      return reply.send({ ok: true, categoria: r.categoria, produtos: r.produtos });
+    },
+  );
+
+  /**
+   * DELETE /api/catalogo/categorias/:id
+   * Remove a categoria do cadastro. Os produtos dela ficam SEM categoria —
+   * imagem nenhuma é apagada.
+   */
+  app.delete<{ Params: { id: string } }>(
+    '/api/catalogo/categorias/:id',
+    { preHandler: [autenticar, apenasAdmin] },
+    async (req, reply) => {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isInteger(id) || id <= 0) {
+        return reply.code(400).send({ detail: 'id inválido.' });
+      }
+
+      const r = await excluirCategoria(id);
+      if (!r.ok) {
+        return reply.code(404).send({ detail: 'Categoria não encontrada.' });
+      }
+      return reply.send({ ok: true, produtos: r.produtos });
     },
   );
 
@@ -132,7 +218,7 @@ export async function catalogoRoutes(
         if (limpa === undefined) {
           return reply.code(400).send({ detail: 'Categoria deve ser texto.' });
         }
-        categoriaFinal = await canonizarCategoria(limpa);
+        categoriaFinal = await garantirCategoria(limpa);
       }
 
       // Remove o prefixo data: se vier junto
@@ -177,7 +263,7 @@ export async function catalogoRoutes(
         return reply.code(400).send({ detail: 'Categoria deve ser texto.' });
       }
 
-      const total = await setCategoriaEmLote(limpos, await canonizarCategoria(limpa));
+      const total = await setCategoriaEmLote(limpos, await garantirCategoria(limpa));
       return reply.send({ ok: true, total });
     },
   );

@@ -1,6 +1,6 @@
-import { sql, eq, desc, inArray } from 'drizzle-orm';
+import { sql, eq, ne, and, desc, inArray } from 'drizzle-orm';
 import { db } from '../database/db';
-import { catalogoProdutos } from '../database/schema';
+import { catalogoProdutos, catalogoCategorias } from '../database/schema';
 import { normalizarCategoria } from './categorias';
 
 // ── Normalização de nomes (usada no cadastro e no match) ──────────────────────
@@ -131,11 +131,12 @@ export async function deletarProduto(id: number): Promise<void> {
 }
 
 /**
- * Categorias em uso, com quantos produtos cada uma tem.
+ * Categorias APLICADAS a algum produto, com quantas imagens cada uma tem.
  *
- * Alimenta as sugestões do campo de digitação e os chips das telas. Só o que
- * está realmente aplicado a algum produto: categoria que ficou sem produto
- * nenhum simplesmente deixa de existir, sem cadastro para limpar.
+ * Não é a lista oficial — essa é o cadastro (`listarCategorias`), que também
+ * guarda categoria sem imagem nenhuma. Isto aqui é o retrato do acervo, e é o
+ * que alimenta os chips de filtro das telas: chip de categoria vazia seria um
+ * filtro que não filtra.
  */
 export async function categoriasEmUso(): Promise<Array<{ nome: string; total: number }>> {
   const rows = await db
@@ -156,19 +157,223 @@ export async function categoriasEmUso(): Promise<Array<{ nome: string; total: nu
  *
  * Sem isto, "higiene e beleza" digitado com pressa abre um chip separado do
  * "Higiene e Beleza" que já existia, e o acervo racha em dois. Com isto, a
- * primeira grafia cadastrada vira a oficial e as variações caem nela.
+ * grafia oficial vence e as variações caem nela.
  *
- * Custa um SELECT numa lista de dezenas de linhas, no caminho de salvar — não
- * é caminho quente.
+ * Olha o CADASTRO primeiro e o acervo depois: uma categoria recém-criada ainda
+ * não tem produto nenhum, e é justamente ela que precisa atrair a digitação.
+ *
+ * Custa dois SELECTs numa lista de dezenas de linhas, no caminho de salvar —
+ * não é caminho quente.
  */
 export async function canonizarCategoria(texto: string | null): Promise<string | null> {
   if (!texto) return null;
   const alvo = normalizarCategoria(texto);
   if (!alvo) return null;
 
-  const existentes = await categoriasEmUso();
-  const igual = existentes.find((c) => normalizarCategoria(c.nome) === alvo);
+  const [cadastrada] = await db
+    .select({ nome: catalogoCategorias.nome })
+    .from(catalogoCategorias)
+    .where(eq(catalogoCategorias.nomeNorm, alvo))
+    .limit(1);
+  if (cadastrada) return cadastrada.nome;
+
+  const igual = (await categoriasEmUso()).find((c) => normalizarCategoria(c.nome) === alvo);
   return igual ? igual.nome : texto;
+}
+
+/**
+ * Canoniza E garante linha no cadastro. É por aqui que TODA escrita de
+ * categoria passa (upload de imagem e classificação em lote).
+ *
+ * Sem isto o cadastro descolaria da realidade: quem digita uma categoria nova
+ * no modal de upload criaria uma categoria que a tela de Categorias não lista
+ * — e portanto ninguém consegue renomear nem excluir.
+ */
+export async function garantirCategoria(texto: string | null): Promise<string | null> {
+  const nome = await canonizarCategoria(texto);
+  if (!nome) return null;
+  await db
+    .insert(catalogoCategorias)
+    .values({ nome, nomeNorm: normalizarCategoria(nome) })
+    .onConflictDoNothing({ target: catalogoCategorias.nomeNorm });
+  return nome;
+}
+
+// ── Cadastro de categorias (migration 0031) ───────────────────────────────────
+// CRUD da tela Configurações › Categorias. O vínculo com o produto continua
+// sendo o TEXTO em catalogo_produtos.categoria, então renomear e excluir aqui
+// precisam mexer no acervo — é o que reclassificar() faz.
+
+export interface CategoriaCadastrada {
+  id: number;
+  nome: string;
+  /** Produtos classificados nela agora. Zero é normal: categoria recém-criada. */
+  total: number;
+  criadoEm: Date | null;
+}
+
+/** Linhas cruas do cadastro, em ordem alfabética. */
+async function linhasDoCadastro() {
+  return db
+    .select({
+      id:       catalogoCategorias.id,
+      nome:     catalogoCategorias.nome,
+      criadoEm: catalogoCategorias.criadoEm,
+    })
+    .from(catalogoCategorias);
+}
+
+/**
+ * Registra as categorias que estão aplicadas a produtos mas ficaram sem linha
+ * no cadastro. Devolve quantas entraram.
+ *
+ * É rede de segurança, não caminho normal: toda escrita passa por
+ * `garantirCategoria` e a migration 0031 já trouxe o acervo. Cobre o que
+ * escapar por fora (import direto no banco, restore de dump antigo) e existe
+ * porque categoria que a tela lista mas não deixa editar é pior que categoria
+ * nenhuma. No caso comum não escreve nada.
+ */
+async function sincronizarCadastro(
+  emUso: Array<{ nome: string }>,
+  cadastradas: Array<{ nome: string }>,
+): Promise<number> {
+  const conhecidas = new Set(cadastradas.map((c) => normalizarCategoria(c.nome)));
+  const faltando = new Map<string, string>();
+  for (const c of emUso) {
+    const chave = normalizarCategoria(c.nome);
+    if (!chave || conhecidas.has(chave) || faltando.has(chave)) continue;
+    faltando.set(chave, c.nome);
+  }
+  if (faltando.size === 0) return 0;
+
+  await db
+    .insert(catalogoCategorias)
+    .values([...faltando].map(([nomeNorm, nome]) => ({ nome, nomeNorm })))
+    .onConflictDoNothing({ target: catalogoCategorias.nomeNorm });
+  return faltando.size;
+}
+
+/** O cadastro com a contagem de produtos de cada categoria, em ordem alfabética. */
+export async function listarCategorias(): Promise<CategoriaCadastrada[]> {
+  const emUso = await categoriasEmUso();
+  let cadastro = await linhasDoCadastro();
+
+  if (await sincronizarCadastro(emUso, cadastro)) {
+    cadastro = await linhasDoCadastro();
+  }
+
+  // Contagem casada pela chave normalizada, calculada em JS dos dois lados:
+  // assim uma divergência entre o normalizador do SQL (migration) e o do
+  // TypeScript não faria a categoria aparecer com zero produto.
+  const total = new Map(emUso.map((c) => [normalizarCategoria(c.nome), c.total]));
+
+  return cadastro
+    .map((c) => ({
+      id:       c.id,
+      nome:     c.nome,
+      total:    total.get(normalizarCategoria(c.nome)) ?? 0,
+      criadoEm: c.criadoEm,
+    }))
+    .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+}
+
+/** Cadastra uma categoria. `null` = já existe uma que normaliza igual. */
+export async function criarCategoria(nome: string): Promise<CategoriaCadastrada | null> {
+  const [row] = await db
+    .insert(catalogoCategorias)
+    .values({ nome, nomeNorm: normalizarCategoria(nome) })
+    .onConflictDoNothing({ target: catalogoCategorias.nomeNorm })
+    .returning();
+  return row ? { id: row.id, nome: row.nome, total: 0, criadoEm: row.criadoEm } : null;
+}
+
+/**
+ * Todas as grafias de uma categoria que aparecem no acervo.
+ *
+ * Renomear precisa disto porque o produto guarda texto: em teoria só existe a
+ * grafia canônica, mas basta um registro anterior à canonização para que um
+ * UPDATE por igualdade exata deixasse produto para trás — órfão de uma
+ * categoria que não está mais no cadastro.
+ */
+async function grafiasNoAcervo(nome: string): Promise<string[]> {
+  const alvo = normalizarCategoria(nome);
+  return (await categoriasEmUso())
+    .filter((c) => normalizarCategoria(c.nome) === alvo)
+    .map((c) => c.nome);
+}
+
+/** Reescreve a categoria dos produtos. `para: null` deixa sem categoria. */
+async function reclassificar(de: string, para: string | null): Promise<number> {
+  const grafias = await grafiasNoAcervo(de);
+  if (grafias.length === 0) return 0;
+  const rows = await db
+    .update(catalogoProdutos)
+    .set({ categoria: para, atualizadoEm: new Date() })
+    .where(inArray(catalogoProdutos.categoria, grafias))
+    .returning({ id: catalogoProdutos.id });
+  return rows.length;
+}
+
+export type ResultadoRenomear =
+  | { ok: false; motivo: 'nao-existe' | 'duplicada' }
+  | { ok: true; categoria: CategoriaCadastrada; produtos: number };
+
+/**
+ * Renomeia a categoria e arrasta os produtos junto.
+ *
+ * Os dois passos não estão numa transação: o segundo é o UPDATE em cascata, e
+ * se ele falhar sobra o cadastro novo com produtos na grafia velha — que a
+ * própria `sincronizarCadastro` recolhe na listagem seguinte, sem perder
+ * produto nenhum. O estado intermediário é feio, não é destrutivo.
+ */
+export async function renomearCategoria(id: number, nome: string): Promise<ResultadoRenomear> {
+  const [atual] = await db
+    .select()
+    .from(catalogoCategorias)
+    .where(eq(catalogoCategorias.id, id))
+    .limit(1);
+  if (!atual) return { ok: false, motivo: 'nao-existe' };
+
+  const norm = normalizarCategoria(nome);
+  const [conflito] = await db
+    .select({ id: catalogoCategorias.id })
+    .from(catalogoCategorias)
+    .where(and(eq(catalogoCategorias.nomeNorm, norm), ne(catalogoCategorias.id, id)))
+    .limit(1);
+  if (conflito) return { ok: false, motivo: 'duplicada' };
+
+  await db
+    .update(catalogoCategorias)
+    .set({ nome, nomeNorm: norm, atualizadoEm: new Date() })
+    .where(eq(catalogoCategorias.id, id));
+
+  const produtos = await reclassificar(atual.nome, nome);
+
+  return {
+    ok: true,
+    categoria: { id: atual.id, nome, total: produtos, criadoEm: atual.criadoEm },
+    produtos,
+  };
+}
+
+/**
+ * Exclui a categoria. Os produtos dela NÃO são apagados: ficam sem categoria.
+ *
+ * Apagar imagem porque a categoria saiu seria destruir acervo por uma operação
+ * de organização. Devolve quantos produtos ficaram sem classificação, para a
+ * tela poder avisar antes e confirmar depois.
+ */
+export async function excluirCategoria(id: number): Promise<{ ok: boolean; produtos: number }> {
+  const [atual] = await db
+    .select({ nome: catalogoCategorias.nome })
+    .from(catalogoCategorias)
+    .where(eq(catalogoCategorias.id, id))
+    .limit(1);
+  if (!atual) return { ok: false, produtos: 0 };
+
+  const produtos = await reclassificar(atual.nome, null);
+  await db.delete(catalogoCategorias).where(eq(catalogoCategorias.id, id));
+  return { ok: true, produtos };
 }
 
 // ── Match de uma lista de produtos vindos da planilha ─────────────────────────

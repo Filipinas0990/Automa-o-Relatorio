@@ -97,6 +97,39 @@ ALTER SEQUENCE public.agenda_bloqueios_id_seq OWNED BY public.agenda_bloqueios.i
 
 
 --
+-- Name: catalogo_categorias; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.catalogo_categorias (
+    id integer NOT NULL,
+    nome character varying(60) NOT NULL,
+    nome_norm character varying(60) NOT NULL,
+    criado_em timestamp with time zone DEFAULT now(),
+    atualizado_em timestamp with time zone DEFAULT now()
+);
+
+
+--
+-- Name: catalogo_categorias_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.catalogo_categorias_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: catalogo_categorias_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.catalogo_categorias_id_seq OWNED BY public.catalogo_categorias.id;
+
+
+--
 -- Name: catalogo_produtos; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -698,6 +731,13 @@ ALTER TABLE ONLY public.agenda_bloqueios ALTER COLUMN id SET DEFAULT nextval('pu
 -- Name: catalogo_produtos id; Type: DEFAULT; Schema: public; Owner: -
 --
 
+--
+-- Name: catalogo_categorias id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.catalogo_categorias ALTER COLUMN id SET DEFAULT nextval('public.catalogo_categorias_id_seq'::regclass);
+
+
 ALTER TABLE ONLY public.catalogo_produtos ALTER COLUMN id SET DEFAULT nextval('public.catalogo_produtos_id_seq'::regclass);
 
 
@@ -799,6 +839,22 @@ ALTER TABLE ONLY public.acoes
 
 ALTER TABLE ONLY public.agenda_bloqueios
     ADD CONSTRAINT agenda_bloqueios_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: catalogo_produtos catalogo_produtos_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.catalogo_categorias
+    ADD CONSTRAINT catalogo_categorias_nome_norm_key UNIQUE (nome_norm);
+
+
+--
+-- Name: catalogo_categorias catalogo_categorias_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.catalogo_categorias
+    ADD CONSTRAINT catalogo_categorias_pkey PRIMARY KEY (id);
 
 
 --

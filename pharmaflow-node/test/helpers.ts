@@ -9,7 +9,7 @@ import { sql } from 'drizzle-orm';
 import { db } from '../src/database/db';
 import { app } from '../src/api';
 import {
-  gestoresTrafego, farmacias, catalogoProdutos,
+  gestoresTrafego, farmacias, catalogoProdutos, catalogoCategorias,
   linksOferta, solicitacoesOferta,
   disparosGrupo, disparosGrupoLog, gestorWhatsapp,
 } from '../src/database/schema';
@@ -51,12 +51,16 @@ export async function criarFarmacia(gestorId: number, opts: { nome?: string; tel
   return f;
 }
 
-export async function criarProduto(nome = `Produto ${unico()}`) {
+export async function criarProduto(
+  nome = `Produto ${unico()}`,
+  categoria: string | null = null,
+) {
   const [p] = await db.insert(catalogoProdutos).values({
     nome,
     nomeNorm:  nome.toLowerCase(),
     imagemB64: Buffer.from('imagem-falsa').toString('base64'),
     mime:      'image/png',
+    categoria,
   }).returning();
   return p;
 }
@@ -116,6 +120,7 @@ export async function limparBanco(): Promise<void> {
   await db.execute(sql`
     TRUNCATE ${disparosGrupoLog}, ${disparosGrupo}, ${solicitacoesOferta},
              ${linksOferta}, ${gestorWhatsapp}, ${catalogoProdutos},
+             ${catalogoCategorias},
              ${farmacias}, ${gestoresTrafego}
     RESTART IDENTITY CASCADE
   `);

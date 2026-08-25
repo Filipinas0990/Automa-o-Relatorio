@@ -18,12 +18,13 @@
 export const MAX_CATEGORIA = 60;
 
 /**
- * Categorias oferecidas SEMPRE no campo de classificação, estejam ou não em
- * uso. São somadas às que já existem no acervo, sem duplicar.
+ * Semente do cadastro de categorias — histórico, NÃO é mais lida em runtime.
  *
- * Não são obrigatórias e não são validadas — o campo continua aceitando
- * qualquer texto. Existem porque o gestor não deve precisar lembrar de cor as
- * categorias do negócio nem redigitá-las a cada acervo novo.
+ * Eram devolvidas como "sugestões" em toda listagem, fixas no código: mudar
+ * qualquer uma exigia deploy, e ninguém conseguia excluir a que não usava. A
+ * migration 0031 inseriu esta lista na tabela `catalogo_categorias` e a partir
+ * dali o cadastro manda. Fica aqui só para documentar de onde vieram as sete
+ * linhas que todo banco tem; apagar daqui não muda nada em produção.
  */
 export const CATEGORIAS_PADRAO = [
   'Higiene e Beleza',

@@ -251,9 +251,26 @@ export const catalogoProdutos = pgTable('catalogo_produtos', {
   mime:         varchar('mime', { length: 40 }).default('image/png'),
   // produto desligado não entra no match de criativos nem é oferecido (migration 0018)
   ativo:        boolean('ativo').notNull().default(true),
-  // slug da categoria — ver src/catalogo/categorias.ts. NULL = sem categoria,
-  // que é o estado de tudo que foi cadastrado antes da migration 0028.
-  categoria:    varchar('categoria', { length: 40 }),
+  // Categoria em TEXTO LIVRE (migration 0030 — antes era slug de lista fechada).
+  // NULL = sem categoria, estado de tudo que foi cadastrado antes da 0028.
+  // O cadastro em catalogoCategorias é a lista oficial; aqui fica o texto.
+  categoria:    varchar('categoria', { length: 60 }),
+  criadoEm:     timestamp('criado_em',     { withTimezone: true }).defaultNow(),
+  atualizadoEm: timestamp('atualizado_em', { withTimezone: true }).defaultNow(),
+});
+
+// ── Cadastro de categorias do banco de imagens (migration 0031) ──────────────
+// O vínculo com o produto é o TEXTO (catalogoProdutos.categoria), não um id:
+// as três telas que filtram o acervo comparam por texto, e trocar isso por FK
+// seria refatorá-las para ganhar integridade que a canonização já entrega.
+// Consequência: renomear aqui faz UPDATE em cascata nos produtos, e excluir
+// deixa os produtos sem categoria — ver src/catalogo/repository.ts.
+export const catalogoCategorias = pgTable('catalogo_categorias', {
+  id:           serial('id').primaryKey(),
+  nome:         varchar('nome', { length: 60 }).notNull(),
+  // Chave de unicidade: sem acento, minúscula, espaços colapsados.
+  // Espelha normalizarCategoria() em src/catalogo/categorias.ts.
+  nomeNorm:     varchar('nome_norm', { length: 60 }).notNull().unique(),
   criadoEm:     timestamp('criado_em',     { withTimezone: true }).defaultNow(),
   atualizadoEm: timestamp('atualizado_em', { withTimezone: true }).defaultNow(),
 });
@@ -399,6 +416,7 @@ export type WhatsAppConfig  = typeof whatsappConfig.$inferSelect;
 export type MetaToken       = typeof metaTokens.$inferSelect;
 export type CampanhaMeta    = typeof campanhasMeta.$inferSelect;
 export type CatalogoProduto = typeof catalogoProdutos.$inferSelect;
+export type CatalogoCategoria = typeof catalogoCategorias.$inferSelect;
 export type GestorWhatsapp  = typeof gestorWhatsapp.$inferSelect;
 export type LinkOferta        = typeof linksOferta.$inferSelect;
 export type SolicitacaoOferta = typeof solicitacoesOferta.$inferSelect;
