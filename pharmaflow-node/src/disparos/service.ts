@@ -187,9 +187,14 @@ function sleep(ms: number): Promise<void> {
 
 /**
  * Monta o que vai para o grupo. Havendo criativo, a mensagem NÃO sai como um
- * balão de texto solto antes das imagens: ela vira a legenda da primeira
- * imagem (a descrição que o WhatsApp mostra embaixo da foto), com o rótulo do
- * produto logo abaixo. Sem criativo, segue como texto puro.
+ * balão de texto solto antes das imagens: ela vira a legenda de CADA imagem (a
+ * descrição que o WhatsApp mostra embaixo da foto), com o rótulo do produto
+ * logo abaixo. Sem criativo, segue como texto puro.
+ *
+ * Já foi só na primeira imagem, para não repetir o cabeçalho. Não funciona: no
+ * WhatsApp cada foto é uma mensagem que pode ser encaminhada, salva e lida
+ * sozinha — quem abre a segunda oferta não vê legenda nenhuma, e a foto chega
+ * sem dizer de que farmácia é nem até quando vale. Repetir é o certo aqui.
  */
 function montarEnvio(
   mensagem: string,
@@ -198,11 +203,12 @@ function montarEnvio(
   const texto = (mensagem ?? '').trim();
   if (!texto || midias.length === 0) return { texto, midias };
 
-  const [primeira, ...resto] = midias;
-  const rotulo = primeira.rotulo?.trim();
   return {
     texto:  '',
-    midias: [{ ...primeira, rotulo: rotulo ? `${texto}\n\n${rotulo}` : texto }, ...resto],
+    midias: midias.map((midia) => {
+      const rotulo = midia.rotulo?.trim();
+      return { ...midia, rotulo: rotulo ? `${texto}\n\n${rotulo}` : texto };
+    }),
   };
 }
 
@@ -508,7 +514,7 @@ export const disparosService = {
       midias = [];
     }
 
-    // A mensagem vira legenda do 1º criativo — ver montarEnvio
+    // A mensagem vira legenda de cada criativo — ver montarEnvio
     const envio = montarEnvio(disparo.mensagem, midias);
 
     const { ok, status, data } = await enfileirarDisparoNoCampanhas({
@@ -603,7 +609,7 @@ export const disparosService = {
       midias = [];
     }
 
-    // A mensagem vira legenda do 1º criativo — ver montarEnvio
+    // A mensagem vira legenda de cada criativo — ver montarEnvio
     const envio = montarEnvio(disparo.mensagem, midias);
 
     let enviados = 0;
