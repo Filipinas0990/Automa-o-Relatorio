@@ -30,6 +30,8 @@ interface CriarDisparoBody {
   farmacia_id?:    number | null;
   solicitacao_id?: number | null;
   instance?:       string | null;   // conexão Evolution escolhida no passo 1
+  /** Ciência explícita de que um grupo é de outro cliente — ver a trava no POST. */
+  confirmar_grupo_de_outro_cliente?: boolean;
 }
 
 /**
@@ -127,6 +129,37 @@ export async function disparosRoutes(
         const msg = err instanceof Error ? err.message : 'Erro ao listar grupos';
         return reply.code(502).send({ detail: msg });
       }
+    },
+  );
+
+  /**
+   * GET /api/disparos/donos-grupos?jids=a@g.us,b@g.us
+   * Para cada grupo, as farmácias que JÁ receberam disparo nele.
+   *
+   * O modal de agendamento usa isto para avisar quando o grupo escolhido é de
+   * outro cliente — foi assim que a oferta da Farma Fátima caiu no grupo da
+   * Mais Saúde (ver donosDeGrupos no repositório). Escopo por gestor: o
+   * histórico de um gestor não vaza para outro.
+   */
+  app.get<{ Querystring: { jids?: string } }>(
+    '/api/disparos/donos-grupos',
+    { preHandler: [autenticar] },
+    async (req, reply) => {
+      const jids = (req.query.jids ?? '')
+        .split(',')
+        .map((j) => j.trim())
+        .filter((j) => j.endsWith('@g.us'))
+        .slice(0, 200);   // teto: a lista vem da tela, não do banco
+
+      if (jids.length === 0) return reply.send([]);
+
+      const donos = await disparosRepository.donosDeGrupos(req.user.id, jids);
+
+      return reply.send(donos.map((d) => ({
+        jid:         d.jid,
+        farmacia_id: d.farmaciaId,
+        farmacia:    d.nomeFachada?.trim() || d.nome,
+      })));
     },
   );
 
@@ -255,6 +288,52 @@ export async function disparosRoutes(
           return reply.code(400).send({ detail: 'A data de término é anterior à de início.' });
         }
         repetirAte = d;
+      }
+
+      /*
+       * TRAVA DE SERVIDOR — grupo que pertence a outro cliente.
+       *
+       * INCIDENTE 29/08: disparos da farmácia 83 (Farma Fátima) foram gravados
+       * com o grupo da farmácia 75 (Mais Saúde) e a oferta de um cliente caiu
+       * no grupo do outro. O gestor afirma ter escolhido o grupo certo, e os
+       * dados dão margem a ele: o erro "começa certo e depois gruda", que não
+       * é a forma de um engano de clique. Não achei o vazamento no front.
+       *
+       * Por isso a checagem mora AQUI, e não só na tela: se o corpo chegar com
+       * um grupo cujo histórico é de outra farmácia, a API recusa. Vale para
+       * engano humano e para bug de estado que eu não encontrei — nenhum dos
+       * dois passa. Para postar mesmo assim (grupo compartilhado, cliente que
+       * mudou de dono), o front manda `confirmar_grupo_de_outro_cliente`.
+       */
+      const farmaciaEscolhida = b.farmacia_id ? Number(b.farmacia_id) : null;
+      if (farmaciaEscolhida && !b.confirmar_grupo_de_outro_cliente) {
+        const jids  = b.grupos.map((g) => g.jid).filter(Boolean);
+        const donos = await disparosRepository.donosDeGrupos(req.user.id, jids);
+        const alheios = donos.filter((d) => d.farmaciaId !== farmaciaEscolhida);
+
+        if (alheios.length > 0) {
+          const porGrupo = b.grupos
+            .filter((g) => alheios.some((d) => d.jid === g.jid))
+            .map((g) => ({
+              jid:   g.jid,
+              grupo: g.nome,
+              donos: alheios
+                .filter((d) => d.jid === g.jid)
+                .map((d) => d.nomeFachada?.trim() || d.nome),
+            }));
+
+          logger.warn(
+            { gestorId: req.user.id, farmaciaId: farmaciaEscolhida, porGrupo },
+            'Disparo recusado: grupo pertence a outro cliente',
+          );
+
+          return reply.code(409).send({
+            detail:
+              'Um dos grupos escolhidos já recebeu disparo de outro cliente. '
+              + 'Confira o grupo antes de continuar.',
+            grupos_de_outro_cliente: porGrupo,
+          });
+        }
       }
 
       const disparo = await disparosRepository.criarDisparo({

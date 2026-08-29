@@ -2,7 +2,7 @@ import { and, eq, lte, desc, sql, notInArray } from 'drizzle-orm';
 import { db } from '../database/db';
 import {
   gestorWhatsapp, disparosGrupo, disparosGrupoLog, gruposCache, gruposCacheSync,
-  horariosDisparo,
+  horariosDisparo, farmacias,
 } from '../database/schema';
 import type {
   GestorWhatsapp, DisparoGrupo, GrupoCache, HorarioDisparo,
@@ -91,6 +91,53 @@ export const disparosRepository = {
       .orderBy(desc(disparosGrupo.criadoEm))
       .limit(1);
     return row?.produtosJson ? { produtosJson: row.produtosJson, criadoEm: row.criadoEm } : null;
+  },
+
+  /**
+   * A quem cada um destes grupos JÁ pertenceu, segundo o histórico de disparos
+   * do próprio gestor.
+   *
+   * INCIDENTE 2026-08-29: a Farma Fátima (cadastrada como "M.R CARDOSO
+   * DROGARIA", sem nome de fachada) não casa por nome com o grupo dela, então
+   * a pré-seleção não marca nada e o gestor escolhe na mão numa lista com
+   * TODOS os grupos. Ele marcou o "Grupo VIP Drogaria mais Saúde" — de outro
+   * cliente — em 8 disparos seguidos, e a oferta de um caiu no grupo do outro.
+   *
+   * Nome não resolve (73 das 86 farmácias estão sem fachada), mas o histórico
+   * sim: esse grupo já tinha recebido 4 disparos da Mais Saúde. Quem já usou o
+   * grupo é um fato, não um palpite — é isso que o modal mostra antes de
+   * confirmar. Disparo cancelado não conta: não foi ao ar.
+   */
+  async donosDeGrupos(
+    gestorId: number,
+    jids:     string[],
+  ): Promise<{ jid: string; farmaciaId: number; nome: string; nomeFachada: string | null }[]> {
+    if (jids.length === 0) return [];
+
+    const lista = sql.join(jids.map((j) => sql`${j}`), sql`, `);
+
+    const resultado = await db.execute<{
+      jid: string; farmacia_id: number; nome: string; nome_fachada: string | null;
+    }>(sql`
+      SELECT el->>'jid'   AS jid,
+             d.farmacia_id AS farmacia_id,
+             f.nome        AS nome,
+             f.nome_fachada AS nome_fachada
+      FROM ${disparosGrupo} d
+      JOIN ${farmacias} f ON f.id = d.farmacia_id
+      CROSS JOIN LATERAL jsonb_array_elements(d.grupos_json::jsonb) el
+      WHERE d.gestor_id = ${gestorId}
+        AND d.status <> 'cancelado'
+        AND el->>'jid' IN (${lista})
+      GROUP BY 1, 2, 3, 4
+    `);
+
+    return resultado.rows.map((r) => ({
+      jid:         r.jid,
+      farmaciaId:  Number(r.farmacia_id),
+      nome:        r.nome,
+      nomeFachada: r.nome_fachada,
+    }));
   },
 
   async getDisparo(id: number): Promise<DisparoGrupo | null> {
