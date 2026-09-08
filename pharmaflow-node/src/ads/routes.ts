@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyPluginOptions, FastifyRequest, FastifyReply } from 'fastify';
 import { upsertToken } from './repository';
 import { adsService } from './service';
-import { verificarTokenMeta, listarContasDeAnuncio } from '../meta/client';
+import { verificarTokenMeta, buscarLocalizacoes } from '../meta/client';
 
 type Middleware = (req: FastifyRequest, reply: FastifyReply) => Promise<void>;
 
@@ -54,16 +54,16 @@ export async function adsRoutes(
    * Lista TODAS as contas de anúncios acessíveis pelo token Meta (System User do BM).
    * Usado na etapa 1 do wizard de campanha ("Em qual conta será subida a campanha?").
    */
-  app.get(
+  app.get<{ Querystring: { forcar?: string } }>(
     '/api/ads/contas',
     { preHandler: [autenticar] },
-    async (_req, reply) => {
+    async (req, reply) => {
       const token = process.env.META_ACCESS_TOKEN ?? '';
       if (!token) {
         return reply.code(400).send({ detail: 'META_ACCESS_TOKEN não configurado no servidor.' });
       }
       try {
-        const contas = await listarContasDeAnuncio(token);
+        const contas = await adsService.getContasAnuncio(token, { forcar: req.query.forcar === '1' });
         return reply.send({ contas });
       } catch (err) {
         const msg = (err as Error).message;
@@ -73,6 +73,27 @@ export async function adsRoutes(
           return reply.code(502).send({ detail: 'Token do Meta expirado ou inválido. Gere um novo e atualize o servidor.' });
         }
         return reply.code(502).send({ detail: `Erro ao consultar a Meta: ${msg}` });
+      }
+    },
+  );
+
+  /**
+   * GET /api/ads/geo-busca?q=termo
+   * Autocomplete de cidades (Brasil) para a segmentação por localização do wizard.
+   */
+  app.get<{ Querystring: { q?: string } }>(
+    '/api/ads/geo-busca',
+    { preHandler: [autenticar] },
+    async (req, reply) => {
+      const token = process.env.META_ACCESS_TOKEN ?? '';
+      if (!token) {
+        return reply.code(400).send({ detail: 'META_ACCESS_TOKEN não configurado no servidor.' });
+      }
+      try {
+        const resultados = await buscarLocalizacoes(token, req.query.q ?? '');
+        return reply.send({ resultados });
+      } catch (err) {
+        return reply.code(502).send({ detail: `Erro ao buscar localização na Meta: ${(err as Error).message}` });
       }
     },
   );

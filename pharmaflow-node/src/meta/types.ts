@@ -21,7 +21,12 @@ export interface CriarCampanhaInput {
     genero:       'ALL' | 'MALE' | 'FEMALE';
     idadeMin:     number;
     idadeMax:     number;
-    localizacao:  string;
+    // null = país inteiro (Brasil). Com cidade, o Meta exige a "key" (não aceita nome livre).
+    localizacao:  { key: string; nome: string } | null;
+    raioKm:       number;   // só usado quando há cidade selecionada
+    // undefined/"todas"/"todos" = deixa o Meta escolher sozinho (Advantage+ placements).
+    plataforma?:     'todas' | 'instagram' | 'facebook';
+    posicionamento?: 'todos' | 'feed' | 'story' | 'feed_story' | 'story_reels';
   };
   copy:           string;
   imagemUrl?:     string;        // URL da imagem já uploadada no Meta

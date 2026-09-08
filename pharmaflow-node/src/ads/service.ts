@@ -10,6 +10,7 @@ import { interpretarMensagem } from '../ai/interpretar';
 import type { HistoricoMensagem } from '../ai/interpretar';
 import { uploadImagem, criarAdCreative } from '../meta/criativo';
 import { criarCampanhaCompleta } from '../meta/campanha';
+import { listarContasDeAnuncio, type ContaAnuncio } from '../meta/client';
 import { whatsappService } from '../whatsapp/service';
 import { logger } from '../logger';
 import {
@@ -102,6 +103,35 @@ function formatarResumo(c: CampanhaExtraida): string {
     `🖼️ Criativo: ${c.temMidia ? 'Imagem recebida ✓' : 'Nenhuma imagem'}\n\n` +
     `Confirma para publicar? Responda *SIM* ou faça correções.`
   );
+}
+
+// ── Cache das contas de anúncio ───────────────────────────────────────────────
+//
+// /me/adaccounts com business{name} e funding_source_details leva ~15s numa
+// conta com muitas contas de anúncio (System User do BM enxerga dezenas) —
+// mesma classe de problema que o cache de grupos (migration 0020): sem cache,
+// o gestor paga essa espera toda vez que abre o passo 1 do wizard de campanha.
+// Só existe UM token global (META_ACCESS_TOKEN), então basta uma cache global
+// em memória — não precisa de tabela como a de grupos, que é por instância.
+
+/** Depois disso o cache é servido, mas já pede refresh em background. */
+const TTL_CONTAS_MS = 10 * 60 * 1000;
+
+let cacheContas: { contas: ContaAnuncio[]; atualizadoEm: number } | null = null;
+let syncContasEmVoo: Promise<ContaAnuncio[]> | null = null;
+
+/** Busca na Meta e regrava o cache. Compartilha a chamada em voo entre pedidos concorrentes. */
+function sincronizarContas(token: string): Promise<ContaAnuncio[]> {
+  if (syncContasEmVoo) return syncContasEmVoo;
+
+  syncContasEmVoo = listarContasDeAnuncio(token)
+    .then((contas) => {
+      cacheContas = { contas, atualizadoEm: Date.now() };
+      return contas;
+    })
+    .finally(() => { syncContasEmVoo = null; });
+
+  return syncContasEmVoo;
 }
 
 // ── Lógica interna (canal-agnóstica) ──────────────────────────────────────────
@@ -267,7 +297,10 @@ async function confirmarInterno(identificador: string, reply: ReplyFn): Promise<
         genero:      campanha.publico.genero      ?? 'ALL',
         idadeMin:    campanha.publico.idadeMin     ?? 18,
         idadeMax:    campanha.publico.idadeMax     ?? 65,
-        localizacao: campanha.publico.localizacao  ?? 'Brasil',
+        // Fluxo do WhatsApp extrai a localização como texto livre (IA), e não
+        // tem como virar a "key" que o Meta exige — cai no Brasil inteiro.
+        localizacao: null,
+        raioKm:      10,
       },
       copy:       campanha.copy ?? '',
       imagemHash: creativeId,
@@ -339,5 +372,26 @@ export const adsService = {
   /** Lista as campanhas de todas as farmácias vinculadas ao gestor */
   async getCampanhasDoGestor(gestorId: number) {
     return getCampanhasPorGestor(gestorId);
+  },
+
+  /**
+   * Contas de anúncio do token Meta — servidas do cache (ver comentário acima).
+   *   • cache ausente ou `forcar` → busca e espera (só a 1ª vez, ou pós-restart);
+   *   • cache velho  → devolve o que tem agora e atualiza em background;
+   *   • cache fresco → devolve direto.
+   */
+  async getContasAnuncio(token: string, opts?: { forcar?: boolean }): Promise<ContaAnuncio[]> {
+    if (!cacheContas || opts?.forcar) {
+      return sincronizarContas(token);
+    }
+
+    const velho = Date.now() - cacheContas.atualizadoEm > TTL_CONTAS_MS;
+    if (velho) {
+      void sincronizarContas(token).catch((err) => {
+        logger.warn({ err }, 'Refresh de contas de anúncio em background falhou');
+      });
+    }
+
+    return cacheContas.contas;
   },
 };
