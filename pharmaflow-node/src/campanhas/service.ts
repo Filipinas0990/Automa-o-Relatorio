@@ -307,6 +307,9 @@ export async function publicarNovosAnuncios(input: NovosAnunciosInput): Promise<
     novoConjuntoId = novo.conjuntoId;
     configAplicada = true;
     avisos.push(`O Meta recusou a duplicação do conjunto (${msg}). Criamos um conjunto novo com a mesma configuração — confira no Ads Manager.`);
+    if (novo.placementsAutomaticos) {
+      avisos.push('Os posicionamentos do conjunto original não foram aceitos pelo Meta; o conjunto novo ficou com posicionamentos automáticos (Advantage+). Público, idade e localização seguem iguais.');
+    }
   }
 
   // 2) Aplica o que o gestor revisou na etapa de público/orçamento.

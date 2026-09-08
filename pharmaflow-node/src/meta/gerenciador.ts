@@ -98,6 +98,36 @@ export async function listarConjuntosDaConta(
     });
 }
 
+/** Campos de posicionamento. Removê-los todos = Advantage+ (Meta escolhe sozinho). */
+const CAMPOS_PLACEMENT = [
+  'publisher_platforms', 'facebook_positions', 'instagram_positions',
+  'audience_network_positions', 'messenger_positions', 'threads_positions',
+] as const;
+
+/**
+ * Ajusta o targeting lido de um conjunto antigo para que ele seja ACEITO numa
+ * escrita. O Meta só valida targeting quando grava: um conjunto que roda há
+ * meses pode carregar combinação que hoje é recusada, e aí tanto editar quanto
+ * recriar quebram — sem que o original tenha problema nenhum.
+ *
+ * Hoje trata a dependência do Explorar do Instagram: `explore_home` sozinho é
+ * recusado, o Meta exige `explore` na mesma lista.
+ */
+function normalizarTargeting(targeting: Record<string, unknown>): Record<string, unknown> {
+  const ig = targeting.instagram_positions;
+  if (Array.isArray(ig) && ig.includes('explore_home') && !ig.includes('explore')) {
+    return { ...targeting, instagram_positions: [...ig, 'explore'] };
+  }
+  return targeting;
+}
+
+/** Tira os posicionamentos do targeting — o conjunto passa a usar Advantage+. */
+function semPlacements(targeting: Record<string, unknown>): Record<string, unknown> {
+  const limpo = { ...targeting };
+  for (const campo of CAMPOS_PLACEMENT) delete limpo[campo];
+  return limpo;
+}
+
 /**
  * Atualiza um conjunto existente. O targeting é MESCLADO com o atual — o Meta
  * substitui o objeto inteiro, então enviar só idade/gênero apagaria a
@@ -128,12 +158,12 @@ export async function atualizarConjunto(
     const GENEROS_META: Record<string, number[]> = {
       todos: [1, 2], homens: [1], mulheres: [2],
     };
-    body.targeting = {
+    body.targeting = normalizarTargeting({
       ...(atual.targeting ?? {}),
       age_min: dados.publico.idadeMin,
       age_max: dados.publico.idadeMax,
       genders: GENEROS_META[dados.publico.genero] ?? [1, 2],
-    };
+    });
   }
 
   if (!Object.keys(body).length) return;   // nada mudou
@@ -163,13 +193,17 @@ export interface RecriarConjuntoOpcoes {
  *
  * Não se perde nada com isso: uma cópia do Meta também nasce sem histórico —
  * conjunto novo é sempre fase de aprendizado nova.
+ *
+ * O targeting do original é reaproveitado, mas passa pelo `normalizarTargeting`;
+ * se ainda assim for recusado, tenta uma vez sem os posicionamentos (Advantage+)
+ * e avisa por `placementsAutomaticos`.
  */
 export async function recriarConjunto(
   accessToken:      string,
   adAccountId:      string,
   conjuntoOrigemId: string,
   opcoes:           RecriarConjuntoOpcoes,
-): Promise<{ conjuntoId: string }> {
+): Promise<{ conjuntoId: string; placementsAutomaticos: boolean }> {
   const CAMPOS = 'name,campaign_id,optimization_goal,billing_event,bid_strategy,bid_amount,'
     + 'destination_type,promoted_object,targeting,daily_budget,start_time,end_time';
 
@@ -189,6 +223,7 @@ export async function recriarConjunto(
     targeting.age_max = opcoes.publico.idadeMax;
     targeting.genders = GENEROS_META[opcoes.publico.genero] ?? [1, 2];
   }
+  const targetingFiel = normalizarTargeting(targeting);
 
   const body: Record<string, unknown> = {
     name:              `${origem.name ?? 'Conjunto'}${opcoes.sufixo ?? ''}`.slice(0, 100),
@@ -196,7 +231,7 @@ export async function recriarConjunto(
     optimization_goal: origem.optimization_goal,
     billing_event:     origem.billing_event,
     bid_strategy:      origem.bid_strategy,
-    targeting,
+    targeting:         targetingFiel,
     status:            opcoes.status,
   };
 
@@ -217,8 +252,33 @@ export async function recriarConjunto(
   if (inicio) body.start_time = inicio;
   if (opcoes.dataFim) body.end_time = `${opcoes.dataFim}T23:59:59-0300`;
 
-  const res = await metaReq<{ id: string }>('POST', `/${adAccountId}/adsets`, accessToken, body);
-  return { conjuntoId: res.id };
+  try {
+    const res = await metaReq<{ id: string }>('POST', `/${adAccountId}/adsets`, accessToken, body);
+    return { conjuntoId: res.id, placementsAutomaticos: false };
+  } catch (e) {
+    const msg = (e as Error).message;
+    if (msg === 'META_TOKEN_EXPIRADO') throw e;
+
+    // Última tentativa: o targeting antigo pode ter outras combinações de
+    // posicionamento que o Meta não aceita mais. Sem esses campos ele usa
+    // Advantage+ (escolhe os posicionamentos sozinho) e o resto do público —
+    // idade, gênero, geolocalização — continua igual ao do original.
+    const semPlacement = semPlacements(targetingFiel);
+    const mudou = Object.keys(semPlacement).length !== Object.keys(targetingFiel).length;
+    if (!mudou) throw e;
+
+    try {
+      const res = await metaReq<{ id: string }>(
+        'POST', `/${adAccountId}/adsets`, accessToken, { ...body, targeting: semPlacement },
+      );
+      return { conjuntoId: res.id, placementsAutomaticos: true };
+    } catch (e2) {
+      // O erro que interessa ao gestor é o primeiro — sem posicionamento a
+      // recusa costuma ser de outra coisa, e mostrar a segunda confunde.
+      console.error('[Meta API] Recriar conjunto sem placements também falhou:', (e2 as Error).message);
+      throw e;
+    }
+  }
 }
 
 export interface DuplicarConjuntoOpcoes {
