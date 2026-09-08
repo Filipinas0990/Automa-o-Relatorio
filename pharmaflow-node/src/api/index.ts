@@ -18,6 +18,7 @@ import { logger } from '../logger';
 import { iniciarSchedulerWhatsApp } from '../scheduler';
 import { whatsappRoutes } from '../whatsapp/routes';
 import { adsRoutes } from '../ads/routes';
+import { aquecerContasAnuncio } from '../ads/service';
 import { catalogoRoutes } from '../catalogo/routes';
 import { campanhasRoutes } from '../campanhas/routes';
 import { relatoriosRoutes } from '../relatorios/routes';
@@ -2469,6 +2470,11 @@ if (require.main === module) {
     if (err) { console.error(err); process.exit(1); }
     console.log(`PharmaFlow API rodando em http://0.0.0.0:${PORT}`);
     iniciarSchedulerWhatsApp();
+    // Aquece o cache das contas de anúncio (migration 0032): o primeiro gestor
+    // a abrir o wizard de campanha depois do deploy encontra a lista pronta,
+    // em vez de esperar a Meta responder. Falha aqui não derruba nada — a
+    // listagem sincroniza sozinha na primeira visita.
+    aquecerContasAnuncio();
   });
 }
 

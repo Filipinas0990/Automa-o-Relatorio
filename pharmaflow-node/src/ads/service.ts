@@ -19,7 +19,12 @@ import {
   getCampanhasPorGestor,
   atualizarStatusCampanha,
   listarClientesComToken,
+  listarContasCache,
+  getSyncContas,
+  salvarContasCache,
+  registrarErroSyncContas,
 } from './repository';
+import { listarContasDeAnuncio, type ContaAnuncio } from '../meta/client';
 import type { CampanhaExtraida } from '../ai/types';
 
 type ReplyFn = (text: string) => Promise<void>;
@@ -296,9 +301,127 @@ async function confirmarInterno(identificador: string, reply: ReplyFn): Promise<
   }
 }
 
+// ── Contas de anúncio: cache com refresh em background (migration 0032) ──────
+
+/** Resposta da listagem: a lista + o estado do cache por trás dela. */
+export interface ListagemContas {
+  contas:        ContaAnuncio[];
+  /** Quando o cache foi sincronizado (null = nunca sincronizou). */
+  atualizadoEm:  Date | null;
+  /** true = tem um refresh rodando por trás; vale reconsultar em breve. */
+  sincronizando: boolean;
+  /** Erro do último sync, quando ele falhou mas ainda há cache para mostrar. */
+  aviso:         string | null;
+}
+
+/**
+ * Depois disso o cache ainda é servido, mas já pede refresh em background.
+ *
+ * Bem mais folgado que o TTL dos grupos (15 min): conta de anúncio nova
+ * aparece quando entra cliente no BM, o que é questão de semanas — e quem
+ * acabou de cadastrar uma tem o botão "Atualizar" ao lado da lista.
+ */
+const TTL_CONTAS_MS = 60 * 60 * 1000;
+
+/**
+ * Duas abas (ou o refresh em background junto com um "Atualizar" clicado)
+ * compartilham a MESMA chamada em vez de brigarem por ela na Meta.
+ */
+let syncContasEmVoo: Promise<{ contas: ContaAnuncio[]; atualizadoEm: Date }> | null = null;
+
+/** Busca na Meta e regrava o cache. É o caminho lento — evite esperar por ele. */
+function sincronizarContas(token: string): Promise<{ contas: ContaAnuncio[]; atualizadoEm: Date }> {
+  if (syncContasEmVoo) return syncContasEmVoo;
+
+  syncContasEmVoo = (async () => {
+    let contas: ContaAnuncio[];
+    try {
+      contas = await listarContasDeAnuncio(token);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Falha ao listar as contas de anúncio';
+      await registrarErroSyncContas(msg).catch(() => {});
+      throw err;
+    }
+    const atualizadoEm = await salvarContasCache(contas);
+    return { contas, atualizadoEm };
+  })().finally(() => { syncContasEmVoo = null; });
+
+  return syncContasEmVoo;
+}
+
+/**
+ * Enche o cache logo depois do boot, sem ninguém esperando.
+ *
+ * Só sincroniza se o cache estiver vencido ou vazio: reiniciar o processo duas
+ * vezes seguidas não vira duas chamadas à Meta.
+ */
+export function aquecerContasAnuncio(): void {
+  const token = process.env.META_ACCESS_TOKEN ?? '';
+  if (!token) return;
+
+  void (async () => {
+    const sync = await getSyncContas();
+    if (sync && Date.now() - sync.sincronizadoEm.getTime() <= TTL_CONTAS_MS) return;
+    await sincronizarContas(token);
+    logger.info('Cache de contas de anúncio aquecido');
+  })().catch((err) => {
+    logger.warn({ err }, 'Aquecimento do cache de contas de anúncio falhou');
+  });
+}
+
 // ── Service público ───────────────────────────────────────────────────────────
 
 export const adsService = {
+
+  /**
+   * Contas de anúncio do token do BM — servidas do cache (migration 0032).
+   *
+   * O /me/adaccounts da Meta leva segundos (ele monta business e forma de
+   * pagamento de cada conta), então só esperamos por ele quando não há
+   * alternativa:
+   *   • cache ausente (primeira vez) ou `forcar` → sincroniza e espera;
+   *   • cache velho  → devolve o que tem AGORA e atualiza em background;
+   *   • cache fresco → devolve direto.
+   *
+   * Se o cache estiver indisponível (migration ainda não aplicada, banco fora),
+   * cai no caminho antigo — chamada direta à Meta. Lento, mas a tela funciona.
+   */
+  async listarContasAnuncio(token: string, opts?: { forcar?: boolean }): Promise<ListagemContas> {
+    let sync: { sincronizadoEm: Date; erro: string | null } | null = null;
+    try {
+      sync = await getSyncContas();
+    } catch (err) {
+      logger.warn({ err }, 'Cache de contas de anúncio indisponível — indo direto na Meta');
+      return {
+        contas: await listarContasDeAnuncio(token),
+        atualizadoEm: null, sincronizando: false, aviso: null,
+      };
+    }
+
+    if (!sync || opts?.forcar) {
+      const { contas, atualizadoEm } = await sincronizarContas(token);
+      return { contas, atualizadoEm, sincronizando: false, aviso: null };
+    }
+
+    const contas = await listarContasCache();
+    const velho  = Date.now() - sync.sincronizadoEm.getTime() > TTL_CONTAS_MS;
+
+    if (velho) {
+      // Fire-and-forget: quem pediu não paga a espera. O single-flight lá
+      // dentro garante que várias abas não disparem syncs concorrentes.
+      void sincronizarContas(token).catch((err) => {
+        logger.warn({ err }, 'Refresh das contas de anúncio em background falhou');
+      });
+    }
+
+    return {
+      contas,
+      atualizadoEm:  sync.sincronizadoEm,
+      sincronizando: velho,
+      aviso:         sync.erro,
+    };
+  },
+
 
   /** Chamado pelo webhook do WhatsApp — envia resposta de volta via WhatsApp */
   async processarMensagem(

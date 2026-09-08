@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyPluginOptions, FastifyRequest, FastifyReply } from 'fastify';
 import { upsertToken } from './repository';
 import { adsService } from './service';
-import { verificarTokenMeta, listarContasDeAnuncio } from '../meta/client';
+import { verificarTokenMeta } from '../meta/client';
 
 type Middleware = (req: FastifyRequest, reply: FastifyReply) => Promise<void>;
 
@@ -50,21 +50,25 @@ export async function adsRoutes(
   );
 
   /**
-   * GET /api/ads/contas
+   * GET /api/ads/contas?refresh=1
    * Lista TODAS as contas de anúncios acessíveis pelo token Meta (System User do BM).
    * Usado na etapa 1 do wizard de campanha ("Em qual conta será subida a campanha?").
+   *
+   * Responde do cache (migration 0032) — a chamada à Meta é lenta demais para
+   * ficar no caminho da tela. `refresh=1` é o botão "Atualizar": ignora o cache
+   * e espera a Meta responder.
    */
-  app.get(
+  app.get<{ Querystring: { refresh?: string } }>(
     '/api/ads/contas',
     { preHandler: [autenticar] },
-    async (_req, reply) => {
+    async (req, reply) => {
       const token = process.env.META_ACCESS_TOKEN ?? '';
       if (!token) {
         return reply.code(400).send({ detail: 'META_ACCESS_TOKEN não configurado no servidor.' });
       }
       try {
-        const contas = await listarContasDeAnuncio(token);
-        return reply.send({ contas });
+        const forcar = req.query.refresh === '1' || req.query.refresh === 'true';
+        return reply.send(await adsService.listarContasAnuncio(token, { forcar }));
       } catch (err) {
         const msg = (err as Error).message;
         // 502 (não 401): problema é o token do META, não a sessão do usuário.

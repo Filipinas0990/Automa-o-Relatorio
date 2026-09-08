@@ -221,6 +221,31 @@ export const metaTokens = pgTable('meta_tokens', {
   atualizadoEm: timestamp('atualizado_em',{ withTimezone: true }).defaultNow(),
 });
 
+// ── Cache das contas de anúncio do Meta (migration 0032) ─────────────────────
+//
+// Retrato do que o token do System User enxerga em /me/adaccounts. Não é
+// cadastro: quem sai do BM some daqui no próximo sync.
+export const contasAnuncioCache = pgTable('contas_anuncio_cache', {
+  id:             varchar('id', { length: 40 }).primaryKey(),   // "act_123456789"
+  accountId:      varchar('account_id', { length: 40 }).notNull(),
+  nome:           varchar('nome',    { length: 255 }).notNull(),
+  cliente:        varchar('cliente', { length: 255 }).notNull().default(''),
+  moeda:          varchar('moeda',   { length: 10 }).notNull().default(''),
+  status:         varchar('status',  { length: 40 }).notNull().default(''),
+  ativa:          boolean('ativa').notNull().default(false),
+  temPagamento:   boolean('tem_pagamento').notNull().default(false),
+  formaPagamento: text('forma_pagamento').notNull().default(''),
+  atualizadoEm:   timestamp('atualizado_em', { withTimezone: true }).defaultNow().notNull(),
+});
+
+// Idade do cache. Linha única (id = 1): o token é um só e enxerga o mesmo
+// conjunto de contas para todo mundo.
+export const contasAnuncioCacheSync = pgTable('contas_anuncio_cache_sync', {
+  id:             integer('id').primaryKey().default(1),
+  sincronizadoEm: timestamp('sincronizado_em', { withTimezone: true }).defaultNow().notNull(),
+  erro:           text('erro'),
+});
+
 // ── Campanhas criadas via automação WhatsApp (adicionado pela migration 0012) ─
 
 export const campanhasMeta = pgTable('campanhas_meta', {
