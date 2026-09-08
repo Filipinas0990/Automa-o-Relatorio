@@ -140,6 +140,87 @@ export async function atualizarConjunto(
   await metaReq('POST', `/${conjuntoId}`, accessToken, body);
 }
 
+export interface RecriarConjuntoOpcoes {
+  status:                   'ACTIVE' | 'PAUSED';
+  /** Sufixo no nome, para diferenciar do original no Ads Manager. */
+  sufixo?:                  string;
+  orcamentoDiarioCentavos?: number;
+  dataInicio?:              string;
+  dataFim?:                 string | null;
+  publico?: { genero: 'todos' | 'homens' | 'mulheres'; idadeMin: number; idadeMax: number };
+}
+
+/**
+ * Cria um conjunto NOVO com a mesma configuração de um existente, lendo os
+ * campos do original. Usado quando o `/copies` do Meta recusa a cópia.
+ *
+ * A diferença que importa: a `attribution_spec` NÃO é copiada. O `/copies`
+ * arrasta a janela de atribuição do original e a revalida — conjuntos antigos
+ * guardam uma janela que a meta de otimização deles já não aceita (o original
+ * segue rodando porque o Meta só valida na escrita), e a cópia morre com
+ * "erro 100 — os valores suportados são uma janela de 1 dia". Omitindo o campo,
+ * o Meta aplica a janela padrão válida para a meta de otimização.
+ *
+ * Não se perde nada com isso: uma cópia do Meta também nasce sem histórico —
+ * conjunto novo é sempre fase de aprendizado nova.
+ */
+export async function recriarConjunto(
+  accessToken:      string,
+  adAccountId:      string,
+  conjuntoOrigemId: string,
+  opcoes:           RecriarConjuntoOpcoes,
+): Promise<{ conjuntoId: string }> {
+  const CAMPOS = 'name,campaign_id,optimization_goal,billing_event,bid_strategy,bid_amount,'
+    + 'destination_type,promoted_object,targeting,daily_budget,start_time,end_time';
+
+  const origem = await metaReq<{
+    name?: string; campaign_id?: string; optimization_goal?: string; billing_event?: string;
+    bid_strategy?: string; bid_amount?: string; destination_type?: string;
+    promoted_object?: Record<string, unknown>; targeting?: Record<string, unknown>;
+    daily_budget?: string; start_time?: string; end_time?: string;
+  }>('GET', `/${conjuntoOrigemId}?fields=${CAMPOS}`, accessToken);
+
+  if (!origem.campaign_id) throw new Error('Não consegui ler a campanha do conjunto de origem.');
+
+  const targeting: Record<string, unknown> = { ...(origem.targeting ?? {}) };
+  if (opcoes.publico) {
+    const GENEROS_META: Record<string, number[]> = { todos: [1, 2], homens: [1], mulheres: [2] };
+    targeting.age_min = opcoes.publico.idadeMin;
+    targeting.age_max = opcoes.publico.idadeMax;
+    targeting.genders = GENEROS_META[opcoes.publico.genero] ?? [1, 2];
+  }
+
+  const body: Record<string, unknown> = {
+    name:              `${origem.name ?? 'Conjunto'}${opcoes.sufixo ?? ''}`.slice(0, 100),
+    campaign_id:       origem.campaign_id,
+    optimization_goal: origem.optimization_goal,
+    billing_event:     origem.billing_event,
+    bid_strategy:      origem.bid_strategy,
+    targeting,
+    status:            opcoes.status,
+  };
+
+  // Orçamento no conjunto só existe quando a campanha NÃO usa CBO — com CBO o
+  // original vem sem daily_budget e mandar um aqui seria recusado.
+  const orcamento = opcoes.orcamentoDiarioCentavos ?? Number(origem.daily_budget ?? 0);
+  if (origem.daily_budget && orcamento) body.daily_budget = orcamento;
+
+  // bid_amount só faz sentido nas estratégias com teto/meta de custo.
+  if (origem.bid_amount && origem.bid_strategy && origem.bid_strategy !== 'LOWEST_COST_WITHOUT_CAP') {
+    body.bid_amount = Number(origem.bid_amount);
+  }
+  // Click-to-WhatsApp e conversões dependem desses dois para o Meta aceitar o conjunto.
+  if (origem.destination_type) body.destination_type = origem.destination_type;
+  if (origem.promoted_object)  body.promoted_object  = origem.promoted_object;
+
+  const inicio = opcoes.dataInicio ? `${opcoes.dataInicio}T00:00:00-0300` : origem.start_time;
+  if (inicio) body.start_time = inicio;
+  if (opcoes.dataFim) body.end_time = `${opcoes.dataFim}T23:59:59-0300`;
+
+  const res = await metaReq<{ id: string }>('POST', `/${adAccountId}/adsets`, accessToken, body);
+  return { conjuntoId: res.id };
+}
+
 export interface DuplicarConjuntoOpcoes {
   /** true = copia também os anúncios de dentro do conjunto. */
   comAnuncios: boolean;

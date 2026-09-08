@@ -1,7 +1,7 @@
 import { metaReq } from '../meta/client';
 import { uploadImagem, criarAdCreative } from '../meta/criativo';
 import { criarCampanhaCompleta, criarAnuncios } from '../meta/campanha';
-import { duplicarConjunto, atualizarConjunto } from '../meta/gerenciador';
+import { duplicarConjunto, atualizarConjunto, recriarConjunto } from '../meta/gerenciador';
 import { gerarCopyPadrao } from './copy-ia';
 import { logger } from '../logger';
 import type { MetaToken } from '../meta/types';
@@ -276,28 +276,56 @@ export async function publicarNovosAnuncios(input: NovosAnunciosInput): Promise<
 
   const status: 'ACTIVE' | 'PAUSED' = input.ativar ? 'ACTIVE' : 'PAUSED';
 
-  // 1) Cópia SEM os anúncios antigos — só queremos a configuração herdada.
-  const copia = await duplicarConjunto(accessToken, input.conjuntoId, {
-    comAnuncios: false,
-    status,
-    sufixo:      ' — Novos criativos',
-  });
+  const SUFIXO = ' — Novos criativos';
 
-  // 2) Aplica o que o gestor revisou na etapa de público/orçamento.
+  // 1) Cópia SEM os anúncios antigos — só queremos a configuração herdada.
+  let novoConjuntoId: string;
+  let configAplicada = false;   // o caminho de recriação já nasce com a config revisada
   try {
-    // O nome não vai aqui: o sufixo " — Novos criativos" já foi aplicado pelo
-    // rename_options do /copies.
-    await atualizarConjunto(accessToken, copia.conjuntoId, {
+    const copia = await duplicarConjunto(accessToken, input.conjuntoId, {
+      comAnuncios: false,
+      status,
+      sufixo:      SUFIXO,
+    });
+    novoConjuntoId = copia.conjuntoId;
+  } catch (e) {
+    const msg = (e as Error).message;
+    if (msg === 'META_TOKEN_EXPIRADO') throw e;   // não adianta tentar de outro jeito
+    // O /copies arrasta configurações do original que o Meta revalida e pode
+    // recusar (janela de atribuição antiga é o caso comum). Recriar o conjunto
+    // com os mesmos campos contorna isso — e não custa histórico, porque cópia
+    // do Meta também nasce em aprendizado novo.
+    logger.warn({ err: msg, conjunto: input.conjuntoId }, 'POST /copies recusado — recriando o conjunto do zero');
+    const novo = await recriarConjunto(accessToken, adAccountId, input.conjuntoId, {
+      status,
+      sufixo:                  SUFIXO,
       orcamentoDiarioCentavos: input.orcamento.diarioCentavos,
       dataInicio:              input.orcamento.dataInicio,
       dataFim:                 input.orcamento.dataFim,
       publico:                 input.publico,
     });
-  } catch (e) {
-    // A cópia já existe; sem isso ela roda com a config herdada do original.
-    const msg = (e as Error).message;
-    logger.warn({ err: msg, conjunto: copia.conjuntoId }, 'Falha ao aplicar configs na cópia');
-    avisos.push(`As configurações revisadas não puderam ser aplicadas (${msg}). A cópia ficou com a configuração do conjunto original.`);
+    novoConjuntoId = novo.conjuntoId;
+    configAplicada = true;
+    avisos.push(`O Meta recusou a duplicação do conjunto (${msg}). Criamos um conjunto novo com a mesma configuração — confira no Ads Manager.`);
+  }
+
+  // 2) Aplica o que o gestor revisou na etapa de público/orçamento.
+  if (!configAplicada) {
+    try {
+      // O nome não vai aqui: o sufixo " — Novos criativos" já foi aplicado pelo
+      // rename_options do /copies.
+      await atualizarConjunto(accessToken, novoConjuntoId, {
+        orcamentoDiarioCentavos: input.orcamento.diarioCentavos,
+        dataInicio:              input.orcamento.dataInicio,
+        dataFim:                 input.orcamento.dataFim,
+        publico:                 input.publico,
+      });
+    } catch (e) {
+      // A cópia já existe; sem isso ela roda com a config herdada do original.
+      const msg = (e as Error).message;
+      logger.warn({ err: msg, conjunto: novoConjuntoId }, 'Falha ao aplicar configs na cópia');
+      avisos.push(`As configurações revisadas não puderam ser aplicadas (${msg}). A cópia ficou com a configuração do conjunto original.`);
+    }
   }
 
   // 3) Criativos novos → anúncios dentro da cópia.
@@ -312,17 +340,17 @@ export async function publicarNovosAnuncios(input: NovosAnunciosInput): Promise<
 
   const nomeBase = (input.nomeConjunto?.trim() || 'Novos criativos').slice(0, 80);
   const anuncioIds = criativosMeta.length
-    ? await criarAnuncios(token, copia.conjuntoId, nomeBase, criativosMeta, status)
+    ? await criarAnuncios(token, novoConjuntoId, nomeBase, criativosMeta, status)
     : [];
 
   if (!anuncioIds.length) {
-    avisos.push('A cópia do conjunto foi criada, mas ficou sem anúncios.');
+    avisos.push('O conjunto novo foi criado, mas ficou sem anúncios.');
   }
 
   return {
-    conjuntoId: copia.conjuntoId,
+    conjuntoId: novoConjuntoId,
     anuncioIds,
-    linkGerenciador: `https://www.facebook.com/adsmanager/manage/adsets?act=${adAccountId.replace('act_', '')}&selected_adset_ids=${copia.conjuntoId}`,
+    linkGerenciador: `https://www.facebook.com/adsmanager/manage/adsets?act=${adAccountId.replace('act_', '')}&selected_adset_ids=${novoConjuntoId}`,
     copyUsada: copy,
     avisos,
   };
