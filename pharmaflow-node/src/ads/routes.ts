@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyPluginOptions, FastifyRequest, FastifyReply } from 'fastify';
 import { upsertToken } from './repository';
 import { adsService } from './service';
-import { verificarTokenMeta } from '../meta/client';
+import { verificarTokenMeta, buscarLocalizacoes } from '../meta/client';
 
 type Middleware = (req: FastifyRequest, reply: FastifyReply) => Promise<void>;
 
@@ -58,7 +58,7 @@ export async function adsRoutes(
    * ficar no caminho da tela. `refresh=1` é o botão "Atualizar": ignora o cache
    * e espera a Meta responder.
    */
-  app.get<{ Querystring: { refresh?: string } }>(
+  app.get<{ Querystring: { refresh?: string; forcar?: string } }>(
     '/api/ads/contas',
     { preHandler: [autenticar] },
     async (req, reply) => {
@@ -67,7 +67,10 @@ export async function adsRoutes(
         return reply.code(400).send({ detail: 'META_ACCESS_TOKEN não configurado no servidor.' });
       }
       try {
-        const forcar = req.query.refresh === '1' || req.query.refresh === 'true';
+        const { refresh, forcar: forcarQuery } = req.query;
+        const forcar =
+          refresh === '1' || refresh === 'true' ||
+          forcarQuery === '1' || forcarQuery === 'true';
         return reply.send(await adsService.listarContasAnuncio(token, { forcar }));
       } catch (err) {
         const msg = (err as Error).message;
@@ -77,6 +80,27 @@ export async function adsRoutes(
           return reply.code(502).send({ detail: 'Token do Meta expirado ou inválido. Gere um novo e atualize o servidor.' });
         }
         return reply.code(502).send({ detail: `Erro ao consultar a Meta: ${msg}` });
+      }
+    },
+  );
+
+  /**
+   * GET /api/ads/geo-busca?q=termo
+   * Autocomplete de cidades (Brasil) para a segmentação por localização do wizard.
+   */
+  app.get<{ Querystring: { q?: string } }>(
+    '/api/ads/geo-busca',
+    { preHandler: [autenticar] },
+    async (req, reply) => {
+      const token = process.env.META_ACCESS_TOKEN ?? '';
+      if (!token) {
+        return reply.code(400).send({ detail: 'META_ACCESS_TOKEN não configurado no servidor.' });
+      }
+      try {
+        const resultados = await buscarLocalizacoes(token, req.query.q ?? '');
+        return reply.send({ resultados });
+      } catch (err) {
+        return reply.code(502).send({ detail: `Erro ao buscar localização na Meta: ${(err as Error).message}` });
       }
     },
   );

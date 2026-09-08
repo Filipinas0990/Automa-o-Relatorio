@@ -23,6 +23,12 @@ export interface PublicarCampanhaInput {
     genero: 'todos' | 'homens' | 'mulheres';
     idadeMin: number;
     idadeMax: number;
+    // null = Brasil inteiro (padrão). Com cidade, exige a "key" do Meta.
+    localizacao?: { key: string; nome: string } | null;
+    raioKm?: number;
+    // undefined/"todas"/"todos" = Advantage+ placements (Meta escolhe sozinho).
+    plataforma?: 'todas' | 'instagram' | 'facebook';
+    posicionamento?: 'todos' | 'feed' | 'story' | 'feed_story' | 'story_reels';
   };
   orcamento: {
     diarioCentavos: number;
@@ -220,10 +226,13 @@ export async function publicarCampanha(input: PublicarCampanhaInput): Promise<{
     status:          'ACTIVE',
     whatsapp:        usarWhatsapp,
     publico: {
-      genero:      GENERO_MAP[input.publico.genero] ?? 'ALL',
-      idadeMin:    input.publico.idadeMin,
-      idadeMax:    input.publico.idadeMax,
-      localizacao: 'Brasil',
+      genero:         GENERO_MAP[input.publico.genero] ?? 'ALL',
+      idadeMin:       input.publico.idadeMin,
+      idadeMax:       input.publico.idadeMax,
+      localizacao:    input.publico.localizacao ?? null,
+      raioKm:         input.publico.raioKm ?? 10,
+      plataforma:     input.publico.plataforma,
+      posicionamento: input.publico.posicionamento,
     },
     copy:      copy.textoPrincipal,
     criativos: criativosMeta,   // N criativos → N anúncios no mesmo conjunto

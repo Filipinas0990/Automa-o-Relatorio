@@ -117,6 +117,31 @@ export async function listarContasDeAnuncio(accessToken: string): Promise<ContaA
   return contas;
 }
 
+export interface LocalizacaoMeta {
+  key:    string;   // ex: "2450022" — chave interna do Meta, exigida pelo geo_locations
+  nome:   string;   // ex: "São Paulo"
+  regiao: string;   // ex: "São Paulo" (estado)
+}
+
+/**
+ * Busca cidades brasileiras na Graph API (mesmo mecanismo que o Gerenciador de
+ * Anúncios usa pro autocomplete de localização). O Meta não aceita nome de
+ * cidade em texto puro no targeting — precisa dessa "key".
+ */
+export async function buscarLocalizacoes(accessToken: string, termo: string): Promise<LocalizacaoMeta[]> {
+  const q = termo.trim();
+  if (q.length < 2) return [];
+
+  const path = `/search?type=adgeolocation&location_types=${encodeURIComponent('["city"]')}`
+    + `&country_code=BR&q=${encodeURIComponent(q)}&limit=8`;
+
+  const res = await metaReq<{ data?: Array<{ key: string; name: string; region?: string }> }>(
+    'GET', path, accessToken,
+  );
+
+  return (res.data ?? []).map((d) => ({ key: d.key, nome: d.name, regiao: d.region ?? '' }));
+}
+
 /**
  * Verifica se o token está válido e retorna quantos dias restam.
  * Chame em /api/ads/token-status para exibir no painel de configurações.

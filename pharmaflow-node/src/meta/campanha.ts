@@ -34,6 +34,57 @@ const GENERO_META: Record<string, number[]> = {
   FEMALE: [2],
 };
 
+// "feed" no Instagram é a posição "stream" na Graph API — nomes diferentes do Facebook.
+const POSICOES_FACEBOOK: Record<string, string[]> = {
+  feed:        ['feed'],
+  story:       ['story'],
+  feed_story:  ['feed', 'story'],
+  story_reels: ['story', 'facebook_reels'],
+};
+const POSICOES_INSTAGRAM: Record<string, string[]> = {
+  feed:        ['stream'],
+  story:       ['story'],
+  feed_story:  ['stream', 'story'],
+  story_reels: ['story', 'reels'],
+};
+
+/**
+ * Monta publisher_platforms/facebook_positions/instagram_positions a partir
+ * das escolhas do wizard. "todas" + "todos" (ou nada escolhido) omite os três
+ * campos de propósito — é o que ativa o Advantage+ placements (Meta escolhe
+ * sozinho), que é o padrão recomendado.
+ */
+function montarPlacements(
+  plataforma?:     'todas' | 'instagram' | 'facebook',
+  posicionamento?: 'todos' | 'feed' | 'story' | 'feed_story' | 'story_reels',
+): Record<string, unknown> {
+  if (!plataforma || plataforma === 'todas') {
+    if (!posicionamento || posicionamento === 'todos') return {};
+    return {
+      publisher_platforms: ['facebook', 'instagram'],
+      facebook_positions:  POSICOES_FACEBOOK[posicionamento],
+      instagram_positions: POSICOES_INSTAGRAM[posicionamento],
+    };
+  }
+
+  if (plataforma === 'facebook') {
+    return {
+      publisher_platforms: ['facebook'],
+      ...(posicionamento && posicionamento !== 'todos'
+        ? { facebook_positions: POSICOES_FACEBOOK[posicionamento] }
+        : {}),
+    };
+  }
+
+  // instagram
+  return {
+    publisher_platforms: ['instagram'],
+    ...(posicionamento && posicionamento !== 'todos'
+      ? { instagram_positions: POSICOES_INSTAGRAM[posicionamento] }
+      : {}),
+  };
+}
+
 /**
  * Cria os anúncios de um conjunto — um por criativo. Com mais de um, o rótulo
  * vai numerado, porque no Ads Manager o gestor precisa distinguir os anúncios
@@ -96,15 +147,27 @@ export async function criarCampanhaCompleta(
     },
   );
 
-  // Monta targeting — usa Brasil como padrão quando não há geocoding disponível
+  // Localização: com cidade escolhida, segmenta por ela + raio; sem cidade, Brasil inteiro.
+  const geoLocations: Record<string, unknown> = publico.localizacao
+    ? {
+        cities: [{
+          key:           publico.localizacao.key,
+          radius:        publico.raioKm ?? 10,
+          distance_unit: 'kilometer',
+        }],
+        location_types: ['home', 'recent'],
+      }
+    : {
+        countries:      ['BR'],
+        location_types: ['home', 'recent'],
+      };
+
   const targeting: Record<string, unknown> = {
     age_min: publico.idadeMin ?? 18,
     age_max: publico.idadeMax ?? 65,
     genders: GENERO_META[publico.genero ?? 'ALL'],
-    geo_locations: {
-      countries:      ['BR'],
-      location_types: ['home', 'recent'],
-    },
+    geo_locations: geoLocations,
+    ...montarPlacements(publico.plataforma, publico.posicionamento),
     targeting_automation: {
       advantage_audience: 0,  // 0 = desabilitado (público manual)
     },

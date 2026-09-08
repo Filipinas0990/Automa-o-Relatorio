@@ -10,6 +10,7 @@ import { interpretarMensagem } from '../ai/interpretar';
 import type { HistoricoMensagem } from '../ai/interpretar';
 import { uploadImagem, criarAdCreative } from '../meta/criativo';
 import { criarCampanhaCompleta } from '../meta/campanha';
+import { listarContasDeAnuncio, type ContaAnuncio } from '../meta/client';
 import { whatsappService } from '../whatsapp/service';
 import { logger } from '../logger';
 import {
@@ -24,7 +25,6 @@ import {
   salvarContasCache,
   registrarErroSyncContas,
 } from './repository';
-import { listarContasDeAnuncio, type ContaAnuncio } from '../meta/client';
 import type { CampanhaExtraida } from '../ai/types';
 
 type ReplyFn = (text: string) => Promise<void>;
@@ -272,7 +272,10 @@ async function confirmarInterno(identificador: string, reply: ReplyFn): Promise<
         genero:      campanha.publico.genero      ?? 'ALL',
         idadeMin:    campanha.publico.idadeMin     ?? 18,
         idadeMax:    campanha.publico.idadeMax     ?? 65,
-        localizacao: campanha.publico.localizacao  ?? 'Brasil',
+        // Fluxo do WhatsApp extrai a localização como texto livre (IA), e não
+        // tem como virar a "key" que o Meta exige — cai no Brasil inteiro.
+        localizacao: null,
+        raioKm:      10,
       },
       copy:       campanha.copy ?? '',
       imagemHash: creativeId,
