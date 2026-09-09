@@ -261,6 +261,8 @@ export interface NovosAnunciosInput {
  */
 export async function publicarNovosAnuncios(input: NovosAnunciosInput): Promise<{
   conjuntoId:      string;
+  /** true = o /copies do Meta foi recusado e o conjunto foi criado do zero. */
+  conjuntoRecriado: boolean;
   anuncioIds:      string[];
   linkGerenciador: string;
   copyUsada:       Copy;
@@ -280,7 +282,8 @@ export async function publicarNovosAnuncios(input: NovosAnunciosInput): Promise<
 
   // 1) Cópia SEM os anúncios antigos — só queremos a configuração herdada.
   let novoConjuntoId: string;
-  let configAplicada = false;   // o caminho de recriação já nasce com a config revisada
+  let configAplicada = false;     // o caminho de recriação já nasce com a config revisada
+  let conjuntoRecriado = false;   // false = veio do /copies do Meta
   try {
     const copia = await duplicarConjunto(accessToken, input.conjuntoId, {
       comAnuncios: false,
@@ -306,7 +309,10 @@ export async function publicarNovosAnuncios(input: NovosAnunciosInput): Promise<
     });
     novoConjuntoId = novo.conjuntoId;
     configAplicada = true;
-    avisos.push(`O Meta recusou a duplicação do conjunto (${msg}). Criamos um conjunto novo com a mesma configuração — confira no Ads Manager.`);
+    conjuntoRecriado = true;
+    // A mensagem crua do Meta fica no log — para o gestor o que importa é que
+    // deu certo por outro caminho e que o original não foi mexido.
+    avisos.push('O Meta não aceitou duplicar o conjunto original, então criamos um conjunto novo com a mesma configuração. O original não foi alterado.');
     if (novo.placementsAutomaticos) {
       avisos.push('Os posicionamentos do conjunto original não foram aceitos pelo Meta; o conjunto novo ficou com posicionamentos automáticos (Advantage+). Público, idade e localização seguem iguais.');
     }
@@ -352,6 +358,7 @@ export async function publicarNovosAnuncios(input: NovosAnunciosInput): Promise<
 
   return {
     conjuntoId: novoConjuntoId,
+    conjuntoRecriado,
     anuncioIds,
     linkGerenciador: `https://www.facebook.com/adsmanager/manage/adsets?act=${adAccountId.replace('act_', '')}&selected_adset_ids=${novoConjuntoId}`,
     copyUsada: copy,
