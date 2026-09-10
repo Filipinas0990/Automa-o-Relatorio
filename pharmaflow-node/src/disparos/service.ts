@@ -222,34 +222,30 @@ function montarEnvio(
 export const PRODUTOS_POR_ENVIO = 3;
 
 /**
- * Escolhe o lote de criativos desta ocorrência e diz onde a próxima começa.
+ * Escolhe o lote de criativos desta postagem e diz onde a próxima começa.
  *
  * Sequencial na ordem em que o gestor montou (não sorteia): sorteio
- * independente repetiria produto na mesma semana e deixaria outro sem sair
- * nenhuma vez — e ninguém consegue auditar no histórico o que já foi.
+ * independente repetiria produto e deixaria outro sem sair nenhuma vez — e
+ * ninguém consegue auditar no histórico o que já foi.
  *
- * O lote atravessa o fim da lista (18,19,0 numa lista de 20) em vez de sair
- * curto: toda postagem tem o mesmo peso, e a fronteira dos lotes anda a cada
- * volta, então as artes não saem sempre agrupadas do mesmo jeito.
+ * A lista NÃO dá a volta (regra do dono, 10/09/2026): acabaram os produtos,
+ * acabou a campanha. Por isso o último lote pode sair curto — 20 produtos de 3
+ * em 3 terminam com uma postagem de 2, e não com duas artes repetidas do começo.
  *
- * Lista menor ou igual ao lote → vai inteira e o cursor volta a zero; não há o
- * que rodiziar, e repetir a mesma arte dentro de uma postagem seria pior.
+ * `acabou` é o que encerra o disparo; sem isso ele continuaria agendado até a
+ * data de término, postando lote vazio.
  */
 export function fatiarRodizio(
   midias:   MidiaDisparo[],
   cursor:   number,
   porEnvio: number = PRODUTOS_POR_ENVIO,
-): { lote: MidiaDisparo[]; proximoCursor: number } {
-  const total = midias.length;
-  if (total === 0 || total <= porEnvio) return { lote: midias, proximoCursor: 0 };
+): { lote: MidiaDisparo[]; proximoCursor: number; acabou: boolean } {
+  // Tolera cursor sujo (negativo, ou além do fim se o disparo foi editado)
+  const inicio = Math.min(Math.max(0, Math.trunc(cursor)), midias.length);
+  const lote   = midias.slice(inicio, inicio + porEnvio);
 
-  // Tolera cursor sujo (negativo, ou maior que a lista se o gestor editou o disparo)
-  const inicio = ((Math.trunc(cursor) % total) + total) % total;
-
-  const lote: MidiaDisparo[] = [];
-  for (let i = 0; i < porEnvio; i += 1) lote.push(midias[(inicio + i) % total]);
-
-  return { lote, proximoCursor: (inicio + porEnvio) % total };
+  const proximoCursor = inicio + lote.length;
+  return { lote, proximoCursor, acabou: proximoCursor >= midias.length };
 }
 
 /**
@@ -260,9 +256,30 @@ export function fatiarRodizio(
 function loteDaVez(
   disparo: DisparoGrupo,
   midias:  MidiaDisparo[],
-): { lote: MidiaDisparo[]; proximoCursor: number } {
-  if (disparo.repetir === 'nunca') return { lote: midias, proximoCursor: 0 };
+): { lote: MidiaDisparo[]; proximoCursor: number; acabou: boolean } {
+  if (disparo.repetir === 'nunca') {
+    return { lote: midias, proximoCursor: midias.length, acabou: true };
+  }
   return fatiarRodizio(midias, disparo.cursorMidia ?? 0);
+}
+
+/**
+ * A lista deste disparo já foi inteira para o grupo?
+ *
+ * Lê o cursor JÁ GRAVADO no banco — serve para o callback do motor de
+ * campanhas, que finaliza o disparo num request separado e não tem em mãos o
+ * lote que foi enviado.
+ */
+export function listaAcabou(disparo: DisparoGrupo): boolean {
+  let total = 0;
+  try {
+    total = disparo.midiasJson ? (JSON.parse(disparo.midiasJson) as unknown[]).length : 0;
+  } catch {
+    total = 0;
+  }
+  // Sem criativo é disparo só de texto: não há lista para acabar
+  if (total === 0) return false;
+  return (disparo.cursorMidia ?? 0) >= total;
 }
 
 export const disparosService = {
@@ -630,8 +647,10 @@ export const disparosService = {
       });
     }
 
-    const agora   = new Date();
-    const proximo = calcularProximoEnvio(disparo, agora);
+    const agora = new Date();
+    // Acabaram os produtos, acabou a campanha — mesmo antes da data de término.
+    // Aqui o cursor já foi gravado por executarDisparo, então o banco sabe.
+    const proximo = listaAcabou(disparo) ? null : calcularProximoEnvio(disparo, agora);
 
     await disparosRepository.atualizarDisparo(disparoId, {
       status:       proximo ? 'agendado' : (falhas > 0 && enviados === 0 ? 'erro' : 'enviado'),
@@ -725,14 +744,15 @@ export const disparosService = {
     }
 
     const agora = new Date();
-    const proximo = calcularProximoEnvio(disparo, agora);
+    // Acabaram os produtos, acabou a campanha — mesmo antes da data de término
+    const proximo = rodizio.acabou ? null : calcularProximoEnvio(disparo, agora);
 
     await disparosRepository.atualizarDisparo(disparoId, {
       status:       proximo ? 'agendado' : (falhas > 0 && enviados === 0 ? 'erro' : 'enviado'),
       ultimoEnvio:  agora,
       proximoEnvio: proximo,
       // Avança mesmo com falha parcial: repetir o mesmo lote na próxima
-      // ocorrência atrasaria a lista inteira por causa de um grupo fora do ar.
+      // postagem atrasaria a lista inteira por causa de um grupo fora do ar.
       cursorMidia:  rodizio.proximoCursor,
     });
 

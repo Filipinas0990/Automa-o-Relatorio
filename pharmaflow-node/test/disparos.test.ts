@@ -330,49 +330,61 @@ describe('Rodízio de produtos', () => {
     const a = fatiarRodizio(lista, 0);
     expect(rotulos(a.lote)).toEqual(['p0', 'p1', 'p2']);
     expect(a.proximoCursor).toBe(3);
+    expect(a.acabou).toBe(false);
 
     const b = fatiarRodizio(lista, a.proximoCursor);
     expect(rotulos(b.lote)).toEqual(['p3', 'p4', 'p5']);
 
     const c = fatiarRodizio(lista, b.proximoCursor);
     expect(rotulos(c.lote)).toEqual(['p6', 'p7', 'p8']);
-    expect(c.proximoCursor).toBe(0);
+    expect(c.acabou).toBe(true);
   });
 
-  it('dá a volta na lista em vez de mandar lote curto', () => {
-    // 20 não é múltiplo de 3: o último lote da volta atravessa o fim
-    const { lote, proximoCursor } = fatiarRodizio(listaDe(20), 18);
+  it('acabou a lista, acabou a campanha — NÃO recomeça do início', () => {
+    // 20 não é múltiplo de 3: a última postagem sai curta, com 2
+    const fim = fatiarRodizio(listaDe(20), 18);
 
-    expect(rotulos(lote)).toEqual(['p18', 'p19', 'p0']);
-    expect(proximoCursor).toBe(1);
+    expect(rotulos(fim.lote)).toEqual(['p18', 'p19']);
+    expect(fim.proximoCursor).toBe(20);
+    expect(fim.acabou).toBe(true);
+
+    // Chamar de novo depois do fim não traz produto nenhum de volta
+    const depois = fatiarRodizio(listaDe(20), 20);
+    expect(depois.lote).toEqual([]);
+    expect(depois.acabou).toBe(true);
   });
 
-  it('cobre a lista inteira ao longo das voltas, sem pular ninguém', () => {
+  it('cobre a lista inteira, cada produto exatamente uma vez', () => {
     const lista = listaDe(20);
-    const vistos = new Set<string>();
+    const vistos: string[] = [];
     let cursor = 0;
+    let postagens = 0;
 
-    // 7 postagens já bastam para cobrir 20 produtos em lotes de 3
-    for (let i = 0; i < 7; i += 1) {
+    for (;;) {
       const r = fatiarRodizio(lista, cursor);
-      r.lote.forEach((m) => vistos.add(m.rotulo!));
+      r.lote.forEach((m) => vistos.push(m.rotulo!));
       cursor = r.proximoCursor;
+      postagens += 1;
+      if (r.acabou) break;
     }
 
-    expect(vistos.size).toBe(20);
+    expect(postagens).toBe(7);              // ceil(20 / 3)
+    expect(vistos).toEqual(rotulos(lista)); // ordem preservada, sem repetir
   });
 
-  it('lista curta vai inteira — não há o que rodiziar', () => {
-    const { lote, proximoCursor } = fatiarRodizio(listaDe(2), 0);
+  it('lista curta sai numa postagem só e encerra', () => {
+    const { lote, proximoCursor, acabou } = fatiarRodizio(listaDe(2), 0);
 
     expect(rotulos(lote)).toEqual(['p0', 'p1']);
-    expect(proximoCursor).toBe(0);
+    expect(proximoCursor).toBe(2);
+    expect(acabou).toBe(true);
   });
 
   it('cursor sujo não quebra o envio', () => {
     // Um disparo editado pode deixar cursor maior que a lista
-    expect(rotulos(fatiarRodizio(listaDe(5), 12).lote)).toEqual(['p2', 'p3', 'p4']);
-    expect(rotulos(fatiarRodizio(listaDe(5), -1).lote)).toEqual(['p4', 'p0', 'p1']);
+    expect(fatiarRodizio(listaDe(5), 12).lote).toEqual([]);
+    expect(fatiarRodizio(listaDe(5), 12).acabou).toBe(true);
+    expect(rotulos(fatiarRodizio(listaDe(5), -1).lote)).toEqual(['p0', 'p1', 'p2']);
     expect(fatiarRodizio([], 3).lote).toEqual([]);
   });
 
@@ -384,6 +396,12 @@ describe('Rodízio de produtos', () => {
     const midiasEnviadas = (chamadas: string[]) =>
       chamadas.filter((u) => u.includes('/message/sendMedia')).length;
 
+    /** O disparo como a listagem da tela o mostra. */
+    const buscarDisparo = async (token: string, id: number) => {
+      const lista = await api('GET', '/api/disparos', { token });
+      return lista.body.find((d: { id: number }) => d.id === id);
+    };
+
     it('campanha que se repete manda só 3 produtos por postagem', async () => {
       const g = await criarGestor();
       await conectarWhatsappFake(g.id);
@@ -394,12 +412,41 @@ describe('Rodízio de produtos', () => {
         token: g.token,
         body: {
           titulo: 'Ofertas', mensagem: 'Promoção', midias: listaDe(10),
-          grupos: [GRUPO], quando: 'agora', repetir: 'semanal',
+          grupos: [GRUPO], quando: 'agora', repetir: 'diario',
         },
       });
 
       expect(r.status).toBe(201);
       expect(midiasEnviadas(chamadas)).toBe(3);
+
+      // Sobraram 7 produtos: a campanha segue agendada para o próximo horário
+      const d = await buscarDisparo(g.token, r.body.id);
+      expect(d.status).toBe('agendado');
+      expect(d.proximo_envio).not.toBeNull();
+    });
+
+    it('quando a lista acaba, a campanha encerra — não espera a data de término', async () => {
+      const g = await criarGestor();
+      await conectarWhatsappFake(g.id);
+
+      simularEvolution();
+
+      // 3 produtos e lote de 3: a lista inteira sai na primeira postagem
+      const r = await api('POST', '/api/disparos', {
+        token: g.token,
+        body: {
+          titulo: 'Ofertas', mensagem: 'Promoção', midias: listaDe(3),
+          grupos: [GRUPO], quando: 'agora', repetir: 'diario',
+          // Término daqui a um mês: mesmo assim tem que encerrar agora
+          repetir_ate: new Date(Date.now() + 30 * 864e5).toISOString(),
+        },
+      });
+
+      expect(r.status).toBe(201);
+
+      const d = await buscarDisparo(g.token, r.body.id);
+      expect(d.status).toBe('enviado');
+      expect(d.proximo_envio).toBeNull();
     });
 
     it('envio único continua mandando tudo — não há segunda chance', async () => {
