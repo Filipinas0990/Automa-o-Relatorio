@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict W41zhTntdXrtZcACcLoVfWhyn4p2aH59kPwGqluaCtZWE2kMZwYCYiYcfGeT06T
+\restrict BZ0rR21trPbVlo9cCaArxCwpkd6ng126C8jy76hf1LOaQheXalb0YzpnhdYUdIa
 
 -- Dumped from database version 16.14
 -- Dumped by pg_dump version 16.14
@@ -110,6 +110,20 @@ CREATE TABLE public.catalogo_categorias (
 
 
 --
+-- Name: TABLE catalogo_categorias; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.catalogo_categorias IS 'Cadastro de categorias do banco de imagens. O vínculo com o produto é o TEXTO em catalogo_produtos.categoria, não um id.';
+
+
+--
+-- Name: COLUMN catalogo_categorias.nome_norm; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.catalogo_categorias.nome_norm IS 'Chave de comparação (sem acento, minúscula, espaços colapsados) — espelha normalizarCategoria() em src/catalogo/categorias.ts.';
+
+
+--
 -- Name: catalogo_categorias_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
@@ -139,11 +153,18 @@ CREATE TABLE public.catalogo_produtos (
     nome_norm character varying(200) NOT NULL,
     imagem_b64 text,
     mime character varying(40) DEFAULT 'image/png'::character varying,
-    ativo boolean DEFAULT true NOT NULL,
-    categoria character varying(60),
     criado_em timestamp with time zone DEFAULT now(),
-    atualizado_em timestamp with time zone DEFAULT now()
+    atualizado_em timestamp with time zone DEFAULT now(),
+    ativo boolean DEFAULT true NOT NULL,
+    categoria character varying(60)
 );
+
+
+--
+-- Name: COLUMN catalogo_produtos.categoria; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.catalogo_produtos.categoria IS 'Categoria digitada pelo gestor (texto livre). NULL = sem categoria.';
 
 
 --
@@ -252,6 +273,36 @@ ALTER SEQUENCE public.coletas_id_seq OWNED BY public.coletas.id;
 
 
 --
+-- Name: contas_anuncio_cache; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.contas_anuncio_cache (
+    id character varying(40) NOT NULL,
+    account_id character varying(40) NOT NULL,
+    nome character varying(255) NOT NULL,
+    cliente character varying(255) DEFAULT ''::character varying NOT NULL,
+    moeda character varying(10) DEFAULT ''::character varying NOT NULL,
+    status character varying(40) DEFAULT ''::character varying NOT NULL,
+    ativa boolean DEFAULT false NOT NULL,
+    tem_pagamento boolean DEFAULT false NOT NULL,
+    forma_pagamento text DEFAULT ''::text NOT NULL,
+    atualizado_em timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: contas_anuncio_cache_sync; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.contas_anuncio_cache_sync (
+    id integer DEFAULT 1 NOT NULL,
+    sincronizado_em timestamp with time zone DEFAULT now() NOT NULL,
+    erro text,
+    CONSTRAINT contas_anuncio_cache_sync_linha_unica CHECK ((id = 1))
+);
+
+
+--
 -- Name: disparos_grupo; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -271,10 +322,28 @@ CREATE TABLE public.disparos_grupo (
     criado_em timestamp with time zone DEFAULT now(),
     atualizado_em timestamp with time zone DEFAULT now(),
     midias_json text,
-    produtos_json text,
     farmacia_id integer,
-    solicitacao_id integer
+    solicitacao_id integer,
+    instance_name character varying(100),
+    horarios_json text,
+    repetir_ate timestamp with time zone,
+    produtos_json text,
+    cursor_midia integer DEFAULT 0 NOT NULL
 );
+
+
+--
+-- Name: COLUMN disparos_grupo.produtos_json; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.disparos_grupo.produtos_json IS 'JSON [{id, nome}] dos produtos do catálogo que geraram os criativos. NULL nos disparos anteriores à migration 0029.';
+
+
+--
+-- Name: COLUMN disparos_grupo.cursor_midia; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.disparos_grupo.cursor_midia IS 'Índice em midias_json de onde o PRÓXIMO envio começa. Avança de 3 em 3 e dá a volta. Sempre 0 quando repetir = nunca.';
 
 
 --
@@ -388,8 +457,23 @@ CREATE TABLE public.farmacias (
     telefone character varying(20),
     responsavel character varying(120),
     cidade character varying(100),
-    observacoes text
+    observacoes text,
+    nome_fachada character varying(120)
 );
+
+
+--
+-- Name: COLUMN farmacias.nome; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.farmacias.nome IS 'Razão social (nome jurídico) — uso interno';
+
+
+--
+-- Name: COLUMN farmacias.nome_fachada; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.farmacias.nome_fachada IS 'Nome de fachada — é o que aparece para o cliente final';
 
 
 --
@@ -487,6 +571,63 @@ ALTER SEQUENCE public.gestores_trafego_id_seq OWNED BY public.gestores_trafego.i
 
 
 --
+-- Name: grupos_cache; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.grupos_cache (
+    instance_name character varying(100) NOT NULL,
+    jid character varying(120) NOT NULL,
+    nome character varying(255) NOT NULL,
+    participantes integer,
+    atualizado_em timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: grupos_cache_sync; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.grupos_cache_sync (
+    instance_name character varying(100) NOT NULL,
+    sincronizado_em timestamp with time zone DEFAULT now() NOT NULL,
+    erro text
+);
+
+
+--
+-- Name: horarios_disparo; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.horarios_disparo (
+    id integer NOT NULL,
+    gestor_id integer NOT NULL,
+    horario character varying(5) NOT NULL,
+    rotulo character varying(40),
+    criado_em timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: horarios_disparo_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.horarios_disparo_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: horarios_disparo_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.horarios_disparo_id_seq OWNED BY public.horarios_disparo.id;
+
+
+--
 -- Name: links_oferta; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -496,7 +637,8 @@ CREATE TABLE public.links_oferta (
     token character varying(64) NOT NULL,
     ativo boolean DEFAULT true NOT NULL,
     criado_em timestamp with time zone DEFAULT now(),
-    atualizado_em timestamp with time zone DEFAULT now()
+    atualizado_em timestamp with time zone DEFAULT now(),
+    farmacia_id integer
 );
 
 
@@ -689,7 +831,8 @@ CREATE TABLE public.whatsapp_config (
     status character varying(20) DEFAULT 'close'::character varying NOT NULL,
     qr_code text,
     numero_conectado character varying(30),
-    atualizado_em timestamp with time zone DEFAULT now()
+    atualizado_em timestamp with time zone DEFAULT now(),
+    nome character varying(120)
 );
 
 
@@ -728,15 +871,15 @@ ALTER TABLE ONLY public.agenda_bloqueios ALTER COLUMN id SET DEFAULT nextval('pu
 
 
 --
--- Name: catalogo_produtos id; Type: DEFAULT; Schema: public; Owner: -
---
-
---
 -- Name: catalogo_categorias id; Type: DEFAULT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.catalogo_categorias ALTER COLUMN id SET DEFAULT nextval('public.catalogo_categorias_id_seq'::regclass);
 
+
+--
+-- Name: catalogo_produtos id; Type: DEFAULT; Schema: public; Owner: -
+--
 
 ALTER TABLE ONLY public.catalogo_produtos ALTER COLUMN id SET DEFAULT nextval('public.catalogo_produtos_id_seq'::regclass);
 
@@ -798,6 +941,13 @@ ALTER TABLE ONLY public.gestores_trafego ALTER COLUMN id SET DEFAULT nextval('pu
 
 
 --
+-- Name: horarios_disparo id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.horarios_disparo ALTER COLUMN id SET DEFAULT nextval('public.horarios_disparo_id_seq'::regclass);
+
+
+--
 -- Name: links_oferta id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -842,7 +992,7 @@ ALTER TABLE ONLY public.agenda_bloqueios
 
 
 --
--- Name: catalogo_produtos catalogo_produtos_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: catalogo_categorias catalogo_categorias_nome_norm_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.catalogo_categorias
@@ -879,6 +1029,22 @@ ALTER TABLE ONLY public.coleta_canais
 
 ALTER TABLE ONLY public.coletas
     ADD CONSTRAINT coletas_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: contas_anuncio_cache contas_anuncio_cache_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.contas_anuncio_cache
+    ADD CONSTRAINT contas_anuncio_cache_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: contas_anuncio_cache_sync contas_anuncio_cache_sync_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.contas_anuncio_cache_sync
+    ADD CONSTRAINT contas_anuncio_cache_sync_pkey PRIMARY KEY (id);
 
 
 --
@@ -970,11 +1136,27 @@ ALTER TABLE ONLY public.gestores_trafego
 
 
 --
--- Name: links_oferta links_oferta_gestor_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: grupos_cache grupos_cache_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.links_oferta
-    ADD CONSTRAINT links_oferta_gestor_id_key UNIQUE (gestor_id);
+ALTER TABLE ONLY public.grupos_cache
+    ADD CONSTRAINT grupos_cache_pkey PRIMARY KEY (instance_name, jid);
+
+
+--
+-- Name: grupos_cache_sync grupos_cache_sync_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.grupos_cache_sync
+    ADD CONSTRAINT grupos_cache_sync_pkey PRIMARY KEY (instance_name);
+
+
+--
+-- Name: horarios_disparo horarios_disparo_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.horarios_disparo
+    ADD CONSTRAINT horarios_disparo_pkey PRIMARY KEY (id);
 
 
 --
@@ -1022,6 +1204,13 @@ ALTER TABLE ONLY public.whatsapp_config
 --
 
 CREATE INDEX idx_canais_coleta_id ON public.coleta_canais USING btree (coleta_id);
+
+
+--
+-- Name: idx_catalogo_categoria; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_catalogo_categoria ON public.catalogo_produtos USING btree (categoria);
 
 
 --
@@ -1088,6 +1277,34 @@ CREATE INDEX idx_disparos_grupo_pendentes ON public.disparos_grupo USING btree (
 
 
 --
+-- Name: idx_horarios_disparo_gestor_hora; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX idx_horarios_disparo_gestor_hora ON public.horarios_disparo USING btree (gestor_id, horario);
+
+
+--
+-- Name: idx_links_oferta_farmacia; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_links_oferta_farmacia ON public.links_oferta USING btree (farmacia_id);
+
+
+--
+-- Name: idx_links_oferta_gestor_farmacia; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX idx_links_oferta_gestor_farmacia ON public.links_oferta USING btree (gestor_id, farmacia_id) WHERE (farmacia_id IS NOT NULL);
+
+
+--
+-- Name: idx_links_oferta_legado; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX idx_links_oferta_legado ON public.links_oferta USING btree (gestor_id) WHERE (farmacia_id IS NULL);
+
+
+--
 -- Name: idx_solicitacoes_oferta_farmacia; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -1099,6 +1316,13 @@ CREATE INDEX idx_solicitacoes_oferta_farmacia ON public.solicitacoes_oferta USIN
 --
 
 CREATE INDEX idx_solicitacoes_oferta_gestor_status ON public.solicitacoes_oferta USING btree (gestor_id, status);
+
+
+--
+-- Name: idx_whatsapp_config_instance; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX idx_whatsapp_config_instance ON public.whatsapp_config USING btree (instance_name);
 
 
 --
@@ -1206,6 +1430,22 @@ ALTER TABLE ONLY public.gestor_whatsapp
 
 
 --
+-- Name: horarios_disparo horarios_disparo_gestor_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.horarios_disparo
+    ADD CONSTRAINT horarios_disparo_gestor_id_fkey FOREIGN KEY (gestor_id) REFERENCES public.gestores_trafego(id);
+
+
+--
+-- Name: links_oferta links_oferta_farmacia_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.links_oferta
+    ADD CONSTRAINT links_oferta_farmacia_id_fkey FOREIGN KEY (farmacia_id) REFERENCES public.farmacias(id);
+
+
+--
 -- Name: links_oferta links_oferta_gestor_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1257,5 +1497,5 @@ ALTER TABLE ONLY public.solicitacoes_oferta
 -- PostgreSQL database dump complete
 --
 
-\unrestrict W41zhTntdXrtZcACcLoVfWhyn4p2aH59kPwGqluaCtZWE2kMZwYCYiYcfGeT06T
+\unrestrict BZ0rR21trPbVlo9cCaArxCwpkd6ng126C8jy76hf1LOaQheXalb0YzpnhdYUdIa
 

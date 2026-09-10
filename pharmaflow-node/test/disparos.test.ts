@@ -10,6 +10,8 @@ import {
   api, criarGestor, criarFarmacia, criarSolicitacao,
   conectarWhatsappFake, limparBanco,
 } from './helpers';
+import { fatiarRodizio } from '../src/disparos/service';
+import type { MidiaDisparo } from '../src/disparos/service';
 
 const GRUPO = { jid: '55119999@g.us', nome: 'Grupo de Ofertas' };
 const MIDIA = { b64: 'ZmFrZQ==', mime: 'image/png', rotulo: 'Dipirona — R$ 9,90' };
@@ -306,5 +308,116 @@ describe('Envio imediato (Evolution simulada)', () => {
 
     const logs = await api('GET', `/api/disparos/${r.body.id}/logs`, { token: g.token });
     expect(logs.body[0].status).toBe('erro');
+  });
+});
+
+/**
+ * Rodízio de produtos (migration 0033). Antes disso, campanha repetida mandava
+ * a lista inteira em toda ocorrência e em todo horário — o grupo do cliente
+ * recebia as mesmas artes dezenas de vezes.
+ */
+describe('Rodízio de produtos', () => {
+
+  /** Lista de N criativos fake, com rótulo numerado para conferir a ordem. */
+  const listaDe = (n: number): MidiaDisparo[] =>
+    Array.from({ length: n }, (_, i) => ({ ...MIDIA, rotulo: `p${i}` }));
+
+  const rotulos = (m: MidiaDisparo[]) => m.map((x) => x.rotulo);
+
+  it('anda de 3 em 3 na ordem em que o gestor montou', () => {
+    const lista = listaDe(9);
+
+    const a = fatiarRodizio(lista, 0);
+    expect(rotulos(a.lote)).toEqual(['p0', 'p1', 'p2']);
+    expect(a.proximoCursor).toBe(3);
+
+    const b = fatiarRodizio(lista, a.proximoCursor);
+    expect(rotulos(b.lote)).toEqual(['p3', 'p4', 'p5']);
+
+    const c = fatiarRodizio(lista, b.proximoCursor);
+    expect(rotulos(c.lote)).toEqual(['p6', 'p7', 'p8']);
+    expect(c.proximoCursor).toBe(0);
+  });
+
+  it('dá a volta na lista em vez de mandar lote curto', () => {
+    // 20 não é múltiplo de 3: o último lote da volta atravessa o fim
+    const { lote, proximoCursor } = fatiarRodizio(listaDe(20), 18);
+
+    expect(rotulos(lote)).toEqual(['p18', 'p19', 'p0']);
+    expect(proximoCursor).toBe(1);
+  });
+
+  it('cobre a lista inteira ao longo das voltas, sem pular ninguém', () => {
+    const lista = listaDe(20);
+    const vistos = new Set<string>();
+    let cursor = 0;
+
+    // 7 postagens já bastam para cobrir 20 produtos em lotes de 3
+    for (let i = 0; i < 7; i += 1) {
+      const r = fatiarRodizio(lista, cursor);
+      r.lote.forEach((m) => vistos.add(m.rotulo!));
+      cursor = r.proximoCursor;
+    }
+
+    expect(vistos.size).toBe(20);
+  });
+
+  it('lista curta vai inteira — não há o que rodiziar', () => {
+    const { lote, proximoCursor } = fatiarRodizio(listaDe(2), 0);
+
+    expect(rotulos(lote)).toEqual(['p0', 'p1']);
+    expect(proximoCursor).toBe(0);
+  });
+
+  it('cursor sujo não quebra o envio', () => {
+    // Um disparo editado pode deixar cursor maior que a lista
+    expect(rotulos(fatiarRodizio(listaDe(5), 12).lote)).toEqual(['p2', 'p3', 'p4']);
+    expect(rotulos(fatiarRodizio(listaDe(5), -1).lote)).toEqual(['p4', 'p0', 'p1']);
+    expect(fatiarRodizio([], 3).lote).toEqual([]);
+  });
+
+  describe('no envio de verdade', () => {
+    beforeEach(limparBanco);
+    afterEach(() => { vi.unstubAllGlobals(); });
+
+    /** Quantas imagens saíram de fato para o grupo. */
+    const midiasEnviadas = (chamadas: string[]) =>
+      chamadas.filter((u) => u.includes('/message/sendMedia')).length;
+
+    it('campanha que se repete manda só 3 produtos por postagem', async () => {
+      const g = await criarGestor();
+      await conectarWhatsappFake(g.id);
+
+      const chamadas = simularEvolution();
+
+      const r = await api('POST', '/api/disparos', {
+        token: g.token,
+        body: {
+          titulo: 'Ofertas', mensagem: 'Promoção', midias: listaDe(10),
+          grupos: [GRUPO], quando: 'agora', repetir: 'semanal',
+        },
+      });
+
+      expect(r.status).toBe(201);
+      expect(midiasEnviadas(chamadas)).toBe(3);
+    });
+
+    it('envio único continua mandando tudo — não há segunda chance', async () => {
+      const g = await criarGestor();
+      await conectarWhatsappFake(g.id);
+
+      const chamadas = simularEvolution();
+
+      const r = await api('POST', '/api/disparos', {
+        token: g.token,
+        body: {
+          titulo: 'Ofertas', mensagem: 'Promoção', midias: listaDe(10),
+          grupos: [GRUPO], quando: 'agora', repetir: 'nunca',
+        },
+      });
+
+      expect(r.status).toBe(201);
+      expect(midiasEnviadas(chamadas)).toBe(10);
+    });
   });
 });

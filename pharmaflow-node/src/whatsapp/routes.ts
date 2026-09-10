@@ -20,9 +20,20 @@ export async function whatsappRoutes(
   const { autenticar, apenasAdmin } = opts;
 
   /**
+   * GET /api/whatsapp/conexoes
+   * Lista TODAS as conexões cadastradas, cada uma com o status conferido na
+   * Evolution. É o que alimenta a tela "Conexões".
+   * Resposta: { conexoes: [{ id, instancia, nome, status, numero, conectado }], configurado }
+   */
+  app.get('/api/whatsapp/conexoes',
+    { preHandler: [autenticar] },
+    controller.listarConexoes,
+  );
+
+  /**
    * GET /api/whatsapp/status
-   * Retorna o estado atual da conexão WhatsApp.
-   * Resposta: { conectado, status, instancia, numero, configurado }
+   * Resumo "tem WhatsApp de pé?" — prioriza uma conexão conectada.
+   * Resposta: { conectado, status, instancia, numero, configurado, total }
    */
   app.get('/api/whatsapp/status',
     { preHandler: [autenticar] },
@@ -31,8 +42,10 @@ export async function whatsappRoutes(
 
   /**
    * POST /api/whatsapp/connect
-   * Cria (ou reconecta) a instância e devolve o QR code em base64.
-   * Body: { instance_name: string }
+   * Cria (ou reconecta) UMA instância e devolve o QR code em base64. Cada
+   * instance_name distinto é uma conexão nova; repetir um existente reconecta
+   * aquela conexão sem tocar nas demais.
+   * Body: { instance_name: string, nome?: string }
    * Resposta: { instancia, status: "connecting", qr_code: "data:image/png;base64,..." }
    */
   app.post('/api/whatsapp/connect',
@@ -41,9 +54,10 @@ export async function whatsappRoutes(
   );
 
   /**
-   * GET /api/whatsapp/qrcode
-   * Polling do frontend para verificar se o QR foi escaneado.
+   * GET /api/whatsapp/qrcode?instance=<nome>
+   * Polling do frontend para verificar se o QR daquela conexão foi escaneado.
    * Quando status = "open" o QR é nulo — mostra tela de sucesso.
+   * Sem `instance`, responde pela conexão default.
    * Resposta: { status, qr_code, instancia }
    */
   app.get('/api/whatsapp/qrcode',
@@ -52,8 +66,8 @@ export async function whatsappRoutes(
   );
 
   /**
-   * DELETE /api/whatsapp/disconnect
-   * Faz logout do WhatsApp (mantém a instância, apenas desconecta o número).
+   * DELETE /api/whatsapp/disconnect?instance=<nome>
+   * Faz logout de UMA conexão (mantém a instância, apenas desconecta o número).
    */
   app.delete('/api/whatsapp/disconnect',
     { preHandler: [autenticar, apenasAdmin] },
@@ -61,8 +75,8 @@ export async function whatsappRoutes(
   );
 
   /**
-   * DELETE /api/whatsapp/instance
-   * Remove completamente a instância da Evolution API e do banco.
+   * DELETE /api/whatsapp/instance?instance=<nome>
+   * Remove UMA conexão por completo — da Evolution API e do banco.
    */
   app.delete('/api/whatsapp/instance',
     { preHandler: [autenticar, apenasAdmin] },

@@ -212,6 +212,59 @@ function montarEnvio(
   };
 }
 
+/**
+ * Quantos produtos saem em CADA postagem de um disparo repetido.
+ *
+ * Número do dono (09/09/2026), de propósito sem campo na tela: é regra do
+ * sistema, não configuração por campanha. Mexer aqui muda todos os disparos
+ * repetidos a partir do próximo envio.
+ */
+export const PRODUTOS_POR_ENVIO = 3;
+
+/**
+ * Escolhe o lote de criativos desta ocorrência e diz onde a próxima começa.
+ *
+ * Sequencial na ordem em que o gestor montou (não sorteia): sorteio
+ * independente repetiria produto na mesma semana e deixaria outro sem sair
+ * nenhuma vez — e ninguém consegue auditar no histórico o que já foi.
+ *
+ * O lote atravessa o fim da lista (18,19,0 numa lista de 20) em vez de sair
+ * curto: toda postagem tem o mesmo peso, e a fronteira dos lotes anda a cada
+ * volta, então as artes não saem sempre agrupadas do mesmo jeito.
+ *
+ * Lista menor ou igual ao lote → vai inteira e o cursor volta a zero; não há o
+ * que rodiziar, e repetir a mesma arte dentro de uma postagem seria pior.
+ */
+export function fatiarRodizio(
+  midias:   MidiaDisparo[],
+  cursor:   number,
+  porEnvio: number = PRODUTOS_POR_ENVIO,
+): { lote: MidiaDisparo[]; proximoCursor: number } {
+  const total = midias.length;
+  if (total === 0 || total <= porEnvio) return { lote: midias, proximoCursor: 0 };
+
+  // Tolera cursor sujo (negativo, ou maior que a lista se o gestor editou o disparo)
+  const inicio = ((Math.trunc(cursor) % total) + total) % total;
+
+  const lote: MidiaDisparo[] = [];
+  for (let i = 0; i < porEnvio; i += 1) lote.push(midias[(inicio + i) % total]);
+
+  return { lote, proximoCursor: (inicio + porEnvio) % total };
+}
+
+/**
+ * Aplica o rodízio quando o disparo se repete. No envio único a lista vai
+ * inteira: só existe uma ocorrência, então fatiar deixaria a maior parte dos
+ * produtos que o cliente pediu sem sair nunca.
+ */
+function loteDaVez(
+  disparo: DisparoGrupo,
+  midias:  MidiaDisparo[],
+): { lote: MidiaDisparo[]; proximoCursor: number } {
+  if (disparo.repetir === 'nunca') return { lote: midias, proximoCursor: 0 };
+  return fatiarRodizio(midias, disparo.cursorMidia ?? 0);
+}
+
 export const disparosService = {
 
   configurado(): boolean {
@@ -514,8 +567,11 @@ export const disparosService = {
       midias = [];
     }
 
+    // Disparo repetido leva só o lote da vez — ver fatiarRodizio
+    const rodizio = loteDaVez(disparo, midias);
+
     // A mensagem vira legenda de cada criativo — ver montarEnvio
-    const envio = montarEnvio(disparo.mensagem, midias);
+    const envio = montarEnvio(disparo.mensagem, rodizio.lote);
 
     const { ok, status, data } = await enfileirarDisparoNoCampanhas({
       disparoId,
@@ -533,8 +589,14 @@ export const disparosService = {
       );
     }
 
+    // Só depois do aceite: recusa no motor não consome produto do rodízio
+    await disparosRepository.atualizarDisparo(disparoId, { cursorMidia: rodizio.proximoCursor });
+
     logger.info(
-      { disparoId, grupos: grupos.length, instancia: instanceName },
+      {
+        disparoId, grupos: grupos.length, instancia: instanceName,
+        produtos: `${rodizio.lote.length}/${midias.length}`, proximoCursor: rodizio.proximoCursor,
+      },
       'Disparo enfileirado no campanhas',
     );
     return { modo: 'campanhas', grupos: grupos.length };
@@ -609,8 +671,11 @@ export const disparosService = {
       midias = [];
     }
 
+    // Disparo repetido leva só o lote da vez — ver fatiarRodizio
+    const rodizio = loteDaVez(disparo, midias);
+
     // A mensagem vira legenda de cada criativo — ver montarEnvio
-    const envio = montarEnvio(disparo.mensagem, midias);
+    const envio = montarEnvio(disparo.mensagem, rodizio.lote);
 
     let enviados = 0;
     let falhas   = 0;
@@ -666,9 +731,18 @@ export const disparosService = {
       status:       proximo ? 'agendado' : (falhas > 0 && enviados === 0 ? 'erro' : 'enviado'),
       ultimoEnvio:  agora,
       proximoEnvio: proximo,
+      // Avança mesmo com falha parcial: repetir o mesmo lote na próxima
+      // ocorrência atrasaria a lista inteira por causa de um grupo fora do ar.
+      cursorMidia:  rodizio.proximoCursor,
     });
 
-    logger.info({ disparoId, enviados, falhas, proximo }, 'Disparo em grupos executado');
+    logger.info(
+      {
+        disparoId, enviados, falhas, proximo,
+        produtos: `${rodizio.lote.length}/${midias.length}`, proximoCursor: rodizio.proximoCursor,
+      },
+      'Disparo em grupos executado',
+    );
     return { enviados, falhas };
   },
 };

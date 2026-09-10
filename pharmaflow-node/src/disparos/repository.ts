@@ -165,7 +165,9 @@ export const disparosRepository = {
 
   async atualizarDisparo(
     id:     number,
-    campos: Partial<{ status: string; proximoEnvio: Date | null; ultimoEnvio: Date | null }>,
+    campos: Partial<{
+      status: string; proximoEnvio: Date | null; ultimoEnvio: Date | null; cursorMidia: number;
+    }>,
   ): Promise<void> {
     await db.update(disparosGrupo)
       .set({ ...campos, atualizadoEm: sql`NOW()` })

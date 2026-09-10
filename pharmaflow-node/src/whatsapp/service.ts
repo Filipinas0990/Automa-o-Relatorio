@@ -1,5 +1,6 @@
 import { whatsappRepository } from './repository';
 import type { WhatsAppStatus } from './repository';
+import type { WhatsAppConfig } from '../database/schema';
 import { logger } from '../logger';
 
 const EVOLUTION_URL = () => process.env.EVOLUTION_API_URL || '';
@@ -53,55 +54,108 @@ export async function evolutionReq<T = unknown>(
   return { ok: res.ok, status: res.status, data: data as T };
 }
 
+/** Uma conexão da tela "Conexões", já com o status conferido na Evolution. */
+export interface ConexaoWhatsApp {
+  id:        number;
+  instancia: string;
+  nome:      string;
+  status:    WhatsAppStatus;
+  numero:    string | null;
+  conectado: boolean;
+}
+
+/**
+ * Status ao vivo de UMA instância, com o banco sincronizado de quebra.
+ * Se a Evolution não responde, devolve o último status conhecido — melhor um
+ * dado velho do que a tela inteira falhar por causa de uma conexão morta.
+ */
+async function statusAoVivo(config: WhatsAppConfig): Promise<WhatsAppStatus> {
+  try {
+    const { data } = await evolutionReq<{ instance?: { state?: string }; state?: string }>(
+      'GET', `/instance/connectionState/${config.instanceName}`,
+    );
+    const live = (data?.instance?.state ?? data?.state ?? 'close') as WhatsAppStatus;
+    if (live !== config.status) {
+      await whatsappRepository.atualizarStatus(config.id, live);
+    }
+    return live;
+  } catch (err) {
+    logger.warn({ err, instancia: config.instanceName }, 'Não foi possível consultar status da Evolution API');
+    return config.status as WhatsAppStatus;
+  }
+}
+
+/**
+ * Resolve qual conexão uma operação deve atingir. Sem `instanceName` cai na
+ * "default" (a mais antiga) — é o que mantém de pé quem chama as rotas antigas,
+ * de quando existia uma conexão só.
+ */
+async function resolverConfig(instanceName?: string | null): Promise<WhatsAppConfig | null> {
+  const alvo = instanceName?.trim();
+  return alvo
+    ? whatsappRepository.getConfigByInstance(alvo)
+    : whatsappRepository.getConfig();
+}
+
 // ── Service ───────────────────────────────────────────────────────────────────
 
 export const whatsappService = {
 
-  /** Retorna o status atual (consulta a Evolution API em tempo real) */
+  /**
+   * Todas as conexões cadastradas, com status conferido na Evolution.
+   * As consultas saem em paralelo: uma instância lenta não segura as outras.
+   */
+  async listarConexoes(): Promise<{ conexoes: ConexaoWhatsApp[]; configurado: boolean }> {
+    if (!EVOLUTION_URL()) return { conexoes: [], configurado: false };
+
+    const configs = await whatsappRepository.listConfigs();
+    const conexoes = await Promise.all(configs.map(async (c): Promise<ConexaoWhatsApp> => {
+      const status = await statusAoVivo(c);
+      return {
+        id:        c.id,
+        instancia: c.instanceName,
+        nome:      c.nome ?? c.instanceName,
+        status,
+        numero:    c.numeroConectado ?? null,
+        conectado: status === 'open',
+      };
+    }));
+
+    return { conexoes, configurado: true };
+  },
+
+  /**
+   * Status resumido para quem só quer saber "tem WhatsApp de pé?" (o pontinho
+   * verde da sidebar, por exemplo). Com várias conexões, prioriza uma conectada.
+   */
   async getStatus() {
-    if (!EVOLUTION_URL()) {
+    const { conexoes, configurado } = await this.listarConexoes();
+    if (!configurado) {
       return { conectado: false, status: 'close' as WhatsAppStatus, instancia: null, numero: null, configurado: false };
     }
 
-    const config = await whatsappRepository.getConfig();
-    if (!config) {
+    const escolhida = conexoes.find((c) => c.conectado) ?? conexoes[0];
+    if (!escolhida) {
       return { conectado: false, status: 'close' as WhatsAppStatus, instancia: null, numero: null, configurado: true };
     }
 
-    try {
-      const { data } = await evolutionReq<{ instance?: { state?: string }; state?: string }>(
-        'GET', `/instance/connectionState/${config.instanceName}`,
-      );
-      const liveStatus = (data?.instance?.state ?? data?.state ?? 'close') as WhatsAppStatus;
-
-      if (liveStatus !== config.status) {
-        await whatsappRepository.atualizarStatus(config.id, liveStatus);
-      }
-
-      return {
-        conectado:    liveStatus === 'open',
-        status:       liveStatus,
-        instancia:    config.instanceName,
-        numero:       config.numeroConectado ?? null,
-        configurado:  true,
-      };
-    } catch (err) {
-      logger.warn({ err }, 'Não foi possível consultar status da Evolution API');
-      return {
-        conectado:   config.status === 'open',
-        status:      config.status as WhatsAppStatus,
-        instancia:   config.instanceName,
-        numero:      config.numeroConectado ?? null,
-        configurado: true,
-      };
-    }
+    return {
+      conectado:   escolhida.conectado,
+      status:      escolhida.status,
+      instancia:   escolhida.instancia,
+      numero:      escolhida.numero,
+      configurado: true,
+      /** Quantas conexões existem ao todo — a tela Conexões lista todas. */
+      total:       conexoes.length,
+    };
   },
 
   /**
    * Cria (ou reconecta) uma instância na Evolution API e retorna o QR code.
-   * Chame quando o usuário clicar em "Conectar WhatsApp" no frontend.
+   * Cada `instanceName` distinto é uma conexão à parte — chamar de novo com um
+   * nome já existente só reconecta aquela, sem mexer nas outras.
    */
-  async conectar(instanceName: string) {
+  async conectar(instanceName: string, nome?: string | null) {
     // Tenta criar a instância (se já existir a Evolution API retorna erro ignorável)
     await evolutionReq('POST', '/instance/create', {
       instanceName,
@@ -121,6 +175,8 @@ export const whatsappService = {
       status:          'connecting',
       qrCode,
       numeroConectado: null,
+      // `undefined` preserva o nome já salvo (caso de reconexão).
+      nome:            nome?.trim() ? nome.trim() : undefined,
     });
 
     return { instancia: instanceName, status: 'connecting', qr_code: qrCode };
@@ -130,8 +186,8 @@ export const whatsappService = {
    * Retorna QR code atualizado e verifica se já conectou.
    * O frontend deve chamar este endpoint a cada 3-5 segundos enquanto status = connecting.
    */
-  async getQrCode() {
-    const config = await whatsappRepository.getConfig();
+  async getQrCode(instanceName?: string | null) {
+    const config = await resolverConfig(instanceName);
     if (!config) return null;
 
     // Verifica status ao vivo
@@ -163,43 +219,50 @@ export const whatsappService = {
     }
   },
 
-  /** Desconecta o WhatsApp (logout) e atualiza o banco */
-  async desconectar() {
-    const config = await whatsappRepository.getConfig();
-    if (!config) return;
+  /** Desconecta UMA conexão (logout) e atualiza o banco. */
+  async desconectar(instanceName?: string | null): Promise<boolean> {
+    const config = await resolverConfig(instanceName);
+    if (!config) return false;
 
     try {
       await evolutionReq('DELETE', `/instance/logout/${config.instanceName}`);
     } catch (err) {
-      logger.warn({ err }, 'Erro ao fazer logout na Evolution API');
+      logger.warn({ err, instancia: config.instanceName }, 'Erro ao fazer logout na Evolution API');
     }
 
     await whatsappRepository.atualizarStatus(config.id, 'close', null, null);
+    return true;
   },
 
-  /** Remove completamente a instância da Evolution API e do banco */
-  async deletarInstancia() {
-    const config = await whatsappRepository.getConfig();
-    if (!config) return;
+  /** Remove UMA conexão por completo — da Evolution API e do banco. */
+  async deletarInstancia(instanceName?: string | null): Promise<boolean> {
+    const config = await resolverConfig(instanceName);
+    if (!config) return false;
 
     try {
       await evolutionReq('DELETE', `/instance/delete/${config.instanceName}`);
     } catch (err) {
-      logger.warn({ err }, 'Erro ao deletar instância na Evolution API');
+      logger.warn({ err, instancia: config.instanceName }, 'Erro ao deletar instância na Evolution API');
     }
 
     await whatsappRepository.deletarConfig(config.id);
+    return true;
   },
 
   /**
    * Envia mensagem de texto para um número via Evolution API.
-   * Só envia se o status estiver 'open'. Retorna true em caso de sucesso.
+   *
+   * Com várias conexões cadastradas, usa a primeira que estiver conectada — a
+   * notificação de reunião não pode morrer só porque a conexão mais antiga caiu.
+   * `instanceName` força uma conexão específica.
    */
-  async enviarMensagem(telefone: string, mensagem: string): Promise<boolean> {
-    const config = await whatsappRepository.getConfig();
+  async enviarMensagem(telefone: string, mensagem: string, instanceName?: string | null): Promise<boolean> {
+    const config = instanceName
+      ? await whatsappRepository.getConfigByInstance(instanceName)
+      : (await whatsappRepository.listConfigs()).find((c) => c.status === 'open') ?? null;
 
     if (!config || config.status !== 'open') {
-      logger.warn({ status: config?.status ?? 'sem config' }, 'WhatsApp não conectado — notificação ignorada');
+      logger.warn({ status: config?.status ?? 'sem conexão conectada' }, 'WhatsApp não conectado — notificação ignorada');
       return false;
     }
 
@@ -226,10 +289,16 @@ export const whatsappService = {
   /**
    * Processa eventos recebidos via webhook da Evolution API.
    * Atualiza status e QR code no banco automaticamente.
+   *
+   * `instanceName` vem do campo `instance` do payload da Evolution e diz de QUAL
+   * conexão é o evento. Sem ele, um QR da conexão B sobrescrevia a linha da A.
    */
-  async processarWebhook(evento: string, data: unknown): Promise<void> {
-    const config = await whatsappRepository.getConfig();
-    if (!config) return;
+  async processarWebhook(evento: string, data: unknown, instanceName?: string | null): Promise<void> {
+    const config = await resolverConfig(instanceName);
+    if (!config) {
+      logger.warn({ instancia: instanceName }, 'Webhook de instância desconhecida — ignorado');
+      return;
+    }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const payload = data as any;
