@@ -26,6 +26,8 @@ interface CriarDisparoBody {
   horarios?:       string[];
   /** ISO — fim da repetição. Ausente/null = repete até o gestor cancelar. */
   repetir_ate?:    string | null;
+  /** true = a lista de produtos dá a volta; só a data de término encerra. */
+  repetir_produtos?: boolean;
   timezone?:       string;
   farmacia_id?:    number | null;
   solicitacao_id?: number | null;
@@ -291,6 +293,22 @@ export async function disparosRoutes(
       }
 
       /*
+       * "Repetir os produtos": a lista dá a volta ao acabar (migration 0035).
+       *
+       * Só existe em disparo repetido — no envio único a lista vai inteira de
+       * uma vez e não há volta a dar. E ele TROCA a condição de parada: sem
+       * ele, a campanha acaba quando os produtos acabam; com ele, a data de
+       * término é a única coisa que a encerra, então ela vira obrigatória.
+       * Sem essa trava o gestor criaria uma campanha que não para nunca.
+       */
+      const repetirProdutos = repetir !== 'nunca' && b.repetir_produtos === true;
+      if (repetirProdutos && !repetirAte) {
+        return reply.code(400).send({
+          detail: 'Com "repetir os produtos" ligado, a data de término é obrigatória — é ela que encerra a campanha.',
+        });
+      }
+
+      /*
        * TRAVA DE SERVIDOR — grupo que pertence a outro cliente.
        *
        * INCIDENTE 29/08: disparos da farmácia 83 (Farma Fátima) foram gravados
@@ -351,6 +369,7 @@ export async function disparosRoutes(
         repetir,
         horariosJson: horarios.length > 1 ? JSON.stringify(horarios) : null,
         repetirAte,
+        repetirProdutos,
         timezone:     b.timezone ?? 'America/Sao_Paulo',
         status:       quando === 'agora' ? 'enviando' : 'agendado',
         proximoEnvio: quando === 'agora' ? null : agendadoPara,
@@ -476,6 +495,7 @@ export async function disparosRoutes(
           agendado_para: d.agendadoPara,
           proximo_envio: d.proximoEnvio,
           repetir_ate:   d.repetirAte,
+          repetir_produtos: d.repetirProdutos,
           ultimo_envio:  d.ultimoEnvio,
           criado_em:     d.criadoEm,
         };

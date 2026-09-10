@@ -328,8 +328,11 @@ export const disparosGrupo = pgTable('disparos_grupo', {
   // JSON: [{ b64, mime, rotulo }] — um disparo leva vários criativos
   midiasJson:   text('midias_json'),
   // Onde o PRÓXIMO envio começa dentro de midias_json (migration 0033).
-  // Disparo repetido manda 3 produtos por vez e dá a volta na lista.
+  // Disparo repetido manda 3 produtos por vez.
   cursorMidia:  integer('cursor_midia').default(0).notNull(),
+  // true = a lista dá a volta ao acabar, e só a data de término encerra a
+  // campanha. false = acabaram os produtos, acabou a campanha (migration 0035).
+  repetirProdutos: boolean('repetir_produtos').default(false).notNull(),
   // JSON: [{ id, nome }] — quais produtos do catálogo geraram esses criativos.
   // Alimenta o filtro "Recentes" do passo 3 (migration 0029). Null nos antigos.
   produtosJson: text('produtos_json'),

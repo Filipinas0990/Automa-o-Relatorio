@@ -228,24 +228,38 @@ export const PRODUTOS_POR_ENVIO = 3;
  * independente repetiria produto e deixaria outro sem sair nenhuma vez — e
  * ninguém consegue auditar no histórico o que já foi.
  *
- * A lista NÃO dá a volta (regra do dono, 10/09/2026): acabaram os produtos,
- * acabou a campanha. Por isso o último lote pode sair curto — 20 produtos de 3
- * em 3 terminam com uma postagem de 2, e não com duas artes repetidas do começo.
+ * Por padrão a lista NÃO dá a volta: acabaram os produtos, acabou a campanha.
+ * Por isso o último lote pode sair curto — 20 produtos de 3 em 3 terminam com
+ * uma postagem de 2, e não com duas artes repetidas do começo.
+ *
+ * `daVolta` (toggle "Repetir os produtos", migration 0035) inverte isso: ao
+ * alcançar o fim o cursor volta para zero e a campanha continua, porque nesse
+ * modo a ÚNICA coisa que a encerra é a data de término. O lote curto do fim
+ * continua saindo curto de propósito: emendar o começo da lista dentro da mesma
+ * postagem faria um produto aparecer duas vezes com poucos dias de diferença.
  *
  * `acabou` é o que encerra o disparo; sem isso ele continuaria agendado até a
- * data de término, postando lote vazio.
+ * data de término, postando lote vazio. Lista vazia acaba sempre — nem o
+ * `daVolta` segura, senão a campanha ficaria eternamente postando nada.
  */
 export function fatiarRodizio(
   midias:   MidiaDisparo[],
   cursor:   number,
   porEnvio: number = PRODUTOS_POR_ENVIO,
+  daVolta:  boolean = false,
 ): { lote: MidiaDisparo[]; proximoCursor: number; acabou: boolean } {
+  if (midias.length === 0) return { lote: [], proximoCursor: 0, acabou: true };
+
   // Tolera cursor sujo (negativo, ou além do fim se o disparo foi editado)
-  const inicio = Math.min(Math.max(0, Math.trunc(cursor)), midias.length);
+  const bruto  = Math.min(Math.max(0, Math.trunc(cursor)), midias.length);
+  // Cursor parado no fim + volta = recomeça a lista nesta mesma postagem
+  const inicio = daVolta && bruto >= midias.length ? 0 : bruto;
   const lote   = midias.slice(inicio, inicio + porEnvio);
 
-  const proximoCursor = inicio + lote.length;
-  return { lote, proximoCursor, acabou: proximoCursor >= midias.length };
+  const fimDaLista    = inicio + lote.length >= midias.length;
+  const proximoCursor = daVolta && fimDaLista ? 0 : inicio + lote.length;
+
+  return { lote, proximoCursor, acabou: daVolta ? false : fimDaLista };
 }
 
 /**
@@ -260,7 +274,7 @@ function loteDaVez(
   if (disparo.repetir === 'nunca') {
     return { lote: midias, proximoCursor: midias.length, acabou: true };
   }
-  return fatiarRodizio(midias, disparo.cursorMidia ?? 0);
+  return fatiarRodizio(midias, disparo.cursorMidia ?? 0, PRODUTOS_POR_ENVIO, disparo.repetirProdutos);
 }
 
 /**
@@ -271,6 +285,10 @@ function loteDaVez(
  * lote que foi enviado.
  */
 export function listaAcabou(disparo: DisparoGrupo): boolean {
+  // Com "repetir os produtos" a lista nunca acaba: quem encerra é a data de
+  // término, e ela é aplicada por calcularProximoEnvio.
+  if (disparo.repetirProdutos) return false;
+
   let total = 0;
   try {
     total = disparo.midiasJson ? (JSON.parse(disparo.midiasJson) as unknown[]).length : 0;

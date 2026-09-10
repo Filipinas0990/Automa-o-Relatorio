@@ -10,7 +10,7 @@ import {
   api, criarGestor, criarFarmacia, criarSolicitacao,
   conectarWhatsappFake, limparBanco,
 } from './helpers';
-import { fatiarRodizio } from '../src/disparos/service';
+import { fatiarRodizio, PRODUTOS_POR_ENVIO } from '../src/disparos/service';
 import type { MidiaDisparo } from '../src/disparos/service';
 
 const GRUPO = { jid: '55119999@g.us', nome: 'Grupo de Ofertas' };
@@ -378,6 +378,56 @@ describe('Rodízio de produtos', () => {
     expect(rotulos(lote)).toEqual(['p0', 'p1']);
     expect(proximoCursor).toBe(2);
     expect(acabou).toBe(true);
+  });
+
+  // ── Toggle "Repetir os produtos" (migration 0035) ─────────────────────────
+  // Ligado, a lista dá a volta e a campanha NUNCA acaba por falta de produto:
+  // quem encerra é só a data de término, aplicada por calcularProximoEnvio.
+
+  it('com a volta ligada, o fim da lista volta para o começo', () => {
+    const lista = listaDe(20);
+
+    // Última postagem da volta: sai curta (2), e o cursor zera em vez de travar
+    const fim = fatiarRodizio(lista, 18, PRODUTOS_POR_ENVIO, true);
+    expect(rotulos(fim.lote)).toEqual(['p18', 'p19']);
+    expect(fim.proximoCursor).toBe(0);
+    expect(fim.acabou).toBe(false);
+
+    // E a volta seguinte recomeça do primeiro produto
+    const nova = fatiarRodizio(lista, fim.proximoCursor, PRODUTOS_POR_ENVIO, true);
+    expect(rotulos(nova.lote)).toEqual(['p0', 'p1', 'p2']);
+    expect(nova.acabou).toBe(false);
+  });
+
+  it('com a volta ligada, cursor parado no fim recomeça a lista', () => {
+    // Disparo criado antes do toggle, ou editado: cursor pode estar no fim
+    const r = fatiarRodizio(listaDe(5), 5, PRODUTOS_POR_ENVIO, true);
+    expect(rotulos(r.lote)).toEqual(['p0', 'p1', 'p2']);
+    expect(r.acabou).toBe(false);
+  });
+
+  it('com a volta ligada, duas voltas cobrem a lista duas vezes na mesma ordem', () => {
+    const lista = listaDe(7);
+    const vistos: string[] = [];
+    let cursor = 0;
+
+    // ceil(7/3) = 3 postagens por volta; 6 postagens = 2 voltas exatas
+    for (let i = 0; i < 6; i++) {
+      const r = fatiarRodizio(lista, cursor, PRODUTOS_POR_ENVIO, true);
+      r.lote.forEach((m) => vistos.push(m.rotulo!));
+      cursor = r.proximoCursor;
+      expect(r.acabou).toBe(false);   // nunca encerra por falta de produto
+    }
+
+    expect(vistos).toEqual([...rotulos(lista), ...rotulos(lista)]);
+    expect(cursor).toBe(0);           // fechou a segunda volta redondo
+  });
+
+  it('lista VAZIA acaba mesmo com a volta ligada', () => {
+    // Sem esta guarda a campanha ficaria eternamente postando nada
+    const r = fatiarRodizio([], 0, PRODUTOS_POR_ENVIO, true);
+    expect(r.lote).toEqual([]);
+    expect(r.acabou).toBe(true);
   });
 
   it('cursor sujo não quebra o envio', () => {
