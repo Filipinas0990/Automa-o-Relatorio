@@ -9,6 +9,25 @@ import { logger } from '../logger';
 /** Normaliza "123" ou "act_123" para o formato que a Graph API espera. */
 const normalizarConta = (id: string): string => (id.startsWith('act_') ? id : `act_${id}`);
 
+/** Faixa de orçamento diário permitida, em centavos. Mínimo do Meta, teto da agência. */
+const ORCAMENTO_MINIMO_CENTAVOS = 500;    // R$ 5,00
+const ORCAMENTO_MAXIMO_CENTAVOS = 5000;   // R$ 50,00
+
+/**
+ * Valida o orçamento diário do corpo da requisição.
+ * Retorna a mensagem de erro, ou null quando está dentro da faixa.
+ * O frontend já bloqueia o botão, mas a regra tem que valer para qualquer
+ * cliente da API — inclusive chamada direta.
+ */
+function erroOrcamento(centavos: unknown): string | null {
+  if (typeof centavos !== 'number' || !Number.isFinite(centavos) || centavos <= 0) {
+    return 'Orçamento diário não informado.';
+  }
+  if (centavos < ORCAMENTO_MINIMO_CENTAVOS) return 'Orçamento diário mínimo é R$ 5,00.';
+  if (centavos > ORCAMENTO_MAXIMO_CENTAVOS) return 'Orçamento diário máximo é R$ 50,00.';
+  return null;
+}
+
 /** Erro do Meta → resposta HTTP. 502 (não 401) para não deslogar o gestor. */
 function responderErroMeta(reply: FastifyReply, err: unknown, contexto: string) {
   const msg = (err as Error).message;
@@ -46,8 +65,10 @@ export async function campanhasRoutes(
       const body = req.body;
       if (!body?.conta?.id)        return reply.code(400).send({ detail: 'Conta de anúncios não informada.' });
       if (!body?.objetivo?.codigo) return reply.code(400).send({ detail: 'Objetivo não informado.' });
-      if (!body?.orcamento?.diarioCentavos || body.orcamento.diarioCentavos < 500) {
-        return reply.code(400).send({ detail: 'Orçamento diário mínimo é R$ 5,00.' });
+      const erroOrc = erroOrcamento(body?.orcamento?.diarioCentavos);
+      if (erroOrc) {
+        logger.warn({ conta: body?.conta?.id, centavos: body?.orcamento?.diarioCentavos }, erroOrc);
+        return reply.code(400).send({ detail: erroOrc });
       }
 
       try {
@@ -79,8 +100,10 @@ export async function campanhasRoutes(
     async (req, reply) => {
       const body = req.body;
       if (!body?.conta?.id) return reply.code(400).send({ detail: 'Conta de anúncios não informada.' });
-      if (!body?.orcamento?.diarioCentavos || body.orcamento.diarioCentavos < 500) {
-        return reply.code(400).send({ detail: 'Orçamento diário mínimo é R$ 5,00.' });
+      const erroOrc = erroOrcamento(body?.orcamento?.diarioCentavos);
+      if (erroOrc) {
+        logger.warn({ conta: body?.conta?.id, centavos: body?.orcamento?.diarioCentavos }, erroOrc);
+        return reply.code(400).send({ detail: erroOrc });
       }
       if (!body?.criativos?.itens?.length) {
         return reply.code(400).send({ detail: 'Nenhum criativo foi enviado.' });
