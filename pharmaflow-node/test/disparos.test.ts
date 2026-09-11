@@ -10,7 +10,9 @@ import {
   api, criarGestor, criarFarmacia, criarSolicitacao,
   conectarWhatsappFake, limparBanco,
 } from './helpers';
-import { fatiarRodizio, PRODUTOS_POR_ENVIO } from '../src/disparos/service';
+import {
+  fatiarRodizio, PRODUTOS_POR_ENVIO, calcularProximoEnvio, ehFimDeSemana,
+} from '../src/disparos/service';
 import type { MidiaDisparo } from '../src/disparos/service';
 
 const GRUPO = { jid: '55119999@g.us', nome: 'Grupo de Ofertas' };
@@ -316,6 +318,76 @@ describe('Envio imediato (Evolution simulada)', () => {
  * a lista inteira em toda ocorrência e em todo horário — o grupo do cliente
  * recebia as mesmas artes dezenas de vezes.
  */
+describe('Nada sai no fim de semana', () => {
+  /** Data em Brasília, escrita como o gestor pensa. */
+  const BRT = (s: string) => new Date(`${s}-03:00`);
+
+  /** Como o dia cai no fuso do disparo — é o que o gestor vê. */
+  const diaBR = (d: Date | null) =>
+    d ? new Intl.DateTimeFormat('pt-BR', {
+      timeZone: 'America/Sao_Paulo', weekday: 'short', hour: '2-digit', minute: '2-digit',
+    }).format(d) : 'null';
+
+  const disparo = (over: Record<string, unknown> = {}) => ({
+    id: 1, repetir: 'diario', timezone: 'America/Sao_Paulo',
+    horariosJson: null, repetirAte: null, proximoEnvio: null, ...over,
+  } as never);
+
+  // 11/09/2026 = sexta · 12 = sábado · 13 = domingo · 14 = segunda
+  const SEXTA_08 = BRT('2026-09-11T08:00:00');
+  const SEXTA_18 = BRT('2026-09-11T18:00:00');
+  const QUINTA_08 = BRT('2026-09-10T08:00:00');
+
+  it('diário na sexta pula o fim de semana e cai na segunda', () => {
+    const p = calcularProximoEnvio(disparo({ proximoEnvio: SEXTA_08 }), SEXTA_08);
+    expect(diaBR(p)).toContain('seg.');
+  });
+
+  it('dia útil no meio da semana não é adiado', () => {
+    const p = calcularProximoEnvio(disparo({ proximoEnvio: QUINTA_08 }), QUINTA_08);
+    expect(diaBR(p)).toContain('sex.');
+  });
+
+  it('com vários horários, o último da sexta vai para o primeiro da segunda', () => {
+    const d = disparo({ proximoEnvio: SEXTA_18, horariosJson: JSON.stringify(['08:00', '18:00']) });
+    const p = calcularProximoEnvio(d, SEXTA_18);
+    expect(diaBR(p)).toContain('seg.');
+    expect(diaBR(p)).toContain('08:00');
+  });
+
+  /*
+   * A ARMADILHA: a VPS roda em UTC e o horário é de Brasília. Sexta 21:00 BRT
+   * é sábado 00:00 em UTC — com getDay() o disparo seria adiado sem motivo.
+   */
+  it('sexta 21:00 de Brasília NÃO conta como fim de semana (a VPS roda em UTC)', () => {
+    expect(ehFimDeSemana(BRT('2026-09-11T21:00:00'))).toBe(false);
+    expect(ehFimDeSemana(BRT('2026-09-12T10:00:00'))).toBe(true);   // sábado
+    expect(ehFimDeSemana(BRT('2026-09-13T10:00:00'))).toBe(true);   // domingo
+    expect(ehFimDeSemana(BRT('2026-09-14T10:00:00'))).toBe(false);  // segunda
+  });
+
+  it('envio único marcado no sábado encerra em vez de ser empurrado', () => {
+    // Foi o gestor que escolheu aquele dia: adiar postaria num dia que ele não pediu
+    const d = disparo({
+      repetir: 'nunca',
+      proximoEnvio: BRT('2026-09-12T08:00:00'),
+      horariosJson: JSON.stringify(['08:00', '18:00']),
+    });
+    expect(calcularProximoEnvio(d, BRT('2026-09-12T08:00:00'))).toBeNull();
+  });
+
+  it('a data de término continua mandando — não vira segunda para poder sair', () => {
+    const d = disparo({ proximoEnvio: SEXTA_08, repetirAte: BRT('2026-09-11T23:59:59') });
+    expect(calcularProximoEnvio(d, SEXTA_08)).toBeNull();
+  });
+
+  it('recuperação de servidor parado não dispara no domingo', () => {
+    const domingo = BRT('2026-09-13T10:00:00');
+    const p = calcularProximoEnvio(disparo({ proximoEnvio: QUINTA_08 }), domingo);
+    expect(diaBR(p)).toContain('seg.');
+  });
+});
+
 describe('Rodízio de produtos', () => {
 
   /** Lista de N criativos fake, com rótulo numerado para conferir a ordem. */

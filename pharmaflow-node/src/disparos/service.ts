@@ -816,6 +816,26 @@ function minutosNoFuso(data: Date, timezone: string): number {
   return h * 60 + m;
 }
 
+const DIAS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+/**
+ * Dia da semana (0 = domingo … 6 = sábado) **no fuso do disparo**.
+ *
+ * Mesmo motivo do `minutosNoFuso`: a VPS roda em UTC. Um envio de sexta às
+ * 21:00 de Brasília é sábado 00:00 em UTC — `getDay()` diria "sábado" e o
+ * disparo seria adiado sem necessidade.
+ */
+function diaDaSemanaNoFuso(data: Date, timezone: string): number {
+  const dia = new Intl.DateTimeFormat('en-US', { timeZone: timezone, weekday: 'short' }).format(data);
+  return DIAS.indexOf(dia);
+}
+
+/** Sábado ou domingo no fuso do disparo — dias em que nada pode sair. */
+export function ehFimDeSemana(data: Date, timezone = 'America/Sao_Paulo'): boolean {
+  const dia = diaDaSemanaNoFuso(data, timezone);
+  return dia === 0 || dia === 6;
+}
+
 /**
  * Próxima data de envio: passa por todos os horários fixos do dia e só então
  * avança conforme a repetição. Retorna null quando não há mais envio (o
@@ -859,16 +879,38 @@ export function calcularProximoEnvio(disparo: DisparoGrupo, base: Date): Date | 
 
   const avancar = (): boolean => proximoNoMesmoDia() || avancarOcorrencia();
 
+  /**
+   * Nada sai em sábado ou domingo (regra do dono, 11/09/2026): cai no fim de
+   * semana, empurra para o próximo dia útil, no primeiro horário da lista.
+   *
+   * Disparo que NÃO se repete não é empurrado — ele foi marcado para um dia
+   * específico, e adiar para segunda seria postar num dia que o gestor não
+   * escolheu. Nesse caso a campanha simplesmente encerra.
+   */
+  const pularFimDeSemana = (): boolean => {
+    if (!ehFimDeSemana(proximo, timezone)) return true;
+    if (disparo.repetir === 'nunca') return false;
+
+    // No máximo 3 saltos (sáb → dom → seg); a trava é contra fuso maluco.
+    for (let i = 0; i < 3 && ehFimDeSemana(proximo, timezone); i++) {
+      proximo.setDate(proximo.getDate() + 1);
+      if (horarios.length > 0) irPara(horarios[0]);
+    }
+    return !ehFimDeSemana(proximo, timezone);
+  };
+
   /** Passou da data de término escolhida pelo gestor (null = sem término). */
   const passouDoFim = (): boolean =>
     disparo.repetirAte !== null && proximo.getTime() > new Date(disparo.repetirAte).getTime();
 
   if (!avancar()) return null;
+  if (!pularFimDeSemana()) return null;
   if (passouDoFim()) return null;
 
   // Se a referência ficou no passado (ex.: serviço parado), avança até o futuro
   while (proximo.getTime() <= base.getTime()) {
     if (!avancar()) return null;
+    if (!pularFimDeSemana()) return null;
     if (passouDoFim()) return null;
   }
 

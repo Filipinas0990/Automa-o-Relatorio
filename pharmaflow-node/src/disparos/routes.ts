@@ -1,6 +1,8 @@
 import type { FastifyInstance, FastifyPluginOptions, FastifyRequest, FastifyReply } from 'fastify';
 import { disparosRepository } from './repository';
-import { disparosService, motivoEvolutionIndisponivel, horarioValido } from './service';
+import {
+  disparosService, motivoEvolutionIndisponivel, horarioValido, ehFimDeSemana,
+} from './service';
 import type { GrupoSelecionado, MidiaDisparo, ResultadoGrupo } from './service';
 import { ofertasRepository } from '../ofertas/repository';
 import { logger } from '../logger';
@@ -245,6 +247,23 @@ export async function disparosRoutes(
         if (Number.isNaN(agendadoPara.getTime())) {
           return reply.code(400).send({ detail: 'Data de agendamento inválida.' });
         }
+      }
+
+      /*
+       * Nada sai em sábado ou domingo (regra do dono, 11/09/2026).
+       *
+       * `calcularProximoEnvio` já pula o fim de semana nas repetições, mas o
+       * PRIMEIRO envio é a data que o gestor digitou — sem esta trava, uma
+       * campanha marcada para sábado postaria no sábado e só então passaria a
+       * pular. O dia é medido no fuso do disparo, não no do servidor (a VPS
+       * roda em UTC).
+       */
+      const fuso = b.timezone ?? 'America/Sao_Paulo';
+      const quandoSai = agendadoPara ?? new Date();
+      if (ehFimDeSemana(quandoSai, fuso)) {
+        return reply.code(400).send({
+          detail: 'Disparos não saem em sábado nem domingo. Escolha um dia útil.',
+        });
       }
 
       // Conexão escolhida no passo 1 (opção b: a do gestor ou uma global).
