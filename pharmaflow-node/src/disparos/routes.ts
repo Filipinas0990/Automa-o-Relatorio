@@ -503,6 +503,57 @@ export async function disparosRoutes(
     );
   });
 
+  /**
+   * GET /api/disparos/:id — detalhe de UM disparo, para o gestor acompanhar.
+   *
+   * Devolve os RÓTULOS dos criativos, nunca o base64: `midias_json` guarda as
+   * imagens inteiras, e um disparo com 43 produtos pesa dezenas de MB — isso
+   * não pode atravessar a rede só para montar uma tela de acompanhamento.
+   *
+   * `cursor_midia` vem junto porque é ele que responde "quantos produtos ainda
+   * faltam": tudo antes do cursor já foi postado nesta volta da lista.
+   */
+  app.get<{ Params: { id: string } }>(
+    '/api/disparos/:id',
+    { preHandler: [autenticar] },
+    async (req, reply) => {
+      const d = await disparosRepository.getDisparo(parseInt(req.params.id, 10));
+      if (!d) return reply.code(404).send({ detail: 'Disparo não encontrado' });
+      if (d.gestorId !== req.user.id) {
+        return reply.code(403).send({ detail: 'Este disparo não pertence a você' });
+      }
+
+      const jsonOu = <T>(texto: string | null, padrao: T): T => {
+        if (!texto) return padrao;
+        try { return JSON.parse(texto) as T; } catch { return padrao; }
+      };
+
+      const midias = jsonOu<Array<{ rotulo?: string | null }>>(d.midiasJson, []);
+
+      return reply.send({
+        id:            d.id,
+        titulo:        d.titulo,
+        mensagem:      d.mensagem,
+        farmacia_id:   d.farmaciaId,
+        quando:        d.quando,
+        status:        d.status,
+        repetir:       d.repetir,
+        repetir_ate:   d.repetirAte,
+        repetir_produtos: d.repetirProdutos,
+        agendado_para: d.agendadoPara,
+        proximo_envio: d.proximoEnvio,
+        ultimo_envio:  d.ultimoEnvio,
+        criado_em:     d.criadoEm,
+        horarios:      jsonOu<string[]>(d.horariosJson, []),
+        grupos:        jsonOu<Array<{ jid: string; nome?: string }>>(d.gruposJson, []),
+        // Índice do PRÓXIMO produto a sair; o de antes já foi.
+        cursor_midia:  d.cursorMidia ?? 0,
+        // Só o rótulo ("Produto — R$ 9,99"). Arte pronta não tem rótulo.
+        produtos:      midias.map((m) => m.rotulo ?? null),
+      });
+    },
+  );
+
   /** GET /api/disparos/:id/logs — resultado por grupo. */
   app.get<{ Params: { id: string } }>(
     '/api/disparos/:id/logs',
