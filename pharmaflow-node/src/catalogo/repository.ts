@@ -381,6 +381,12 @@ export async function excluirCategoria(id: number): Promise<{ ok: boolean; produ
 export interface ProdutoEntrada {
   nome: string;
   preco?: string;
+  /**
+   * Id do catálogo, quando o gestor escolheu o produto na grade em vez de
+   * digitar o nome. Com ele não há palpite: casa direto, sem passar pelo
+   * casamento por texto (dois produtos de nome parecido não se confundem).
+   */
+  catalogoId?: number | null;
 }
 
 export interface ProdutoIdentificado {
@@ -401,11 +407,13 @@ export async function identificarProdutos(entradas: ProdutoEntrada[]): Promise<P
   return entradas.map((entrada) => {
     const alvo = normalizar(entrada.nome);
 
+    // 0) veio da grade do catálogo: o id manda, sem adivinhação por texto
     // 1) match exato pelo nome normalizado
     // 2) match por conteúdo (um contém o outro) — cobre variações de escrita
-    const achado =
-      catalogo.find((c) => c.nomeNorm === alvo) ??
-      catalogo.find((c) => c.nomeNorm.includes(alvo) || alvo.includes(c.nomeNorm));
+    const achado = entrada.catalogoId
+      ? catalogo.find((c) => c.id === entrada.catalogoId)
+      : catalogo.find((c) => c.nomeNorm === alvo) ??
+        catalogo.find((c) => c.nomeNorm.includes(alvo) || alvo.includes(c.nomeNorm));
 
     if (achado) {
       return {
