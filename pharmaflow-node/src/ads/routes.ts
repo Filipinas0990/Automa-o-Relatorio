@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyPluginOptions, FastifyRequest, FastifyRepl
 import { upsertToken } from './repository';
 import { adsService } from './service';
 import { verificarTokenMeta, buscarLocalizacoes } from '../meta/client';
+import { coordenadasDaCidade } from './geocode';
 
 type Middleware = (req: FastifyRequest, reply: FastifyReply) => Promise<void>;
 
@@ -102,6 +103,22 @@ export async function adsRoutes(
       } catch (err) {
         return reply.code(502).send({ detail: `Erro ao buscar localização na Meta: ${(err as Error).message}` });
       }
+    },
+  );
+
+  /**
+   * GET /api/ads/geo-coordenadas?nome=Fortaleza&regiao=Ceará
+   * Centro da cidade (lat/lon) para desenhar o mapa do raio no wizard.
+   * Só visual: o targeting do Meta usa a "key" da cidade, não a coordenada.
+   * Responde 200 com coordenada null quando não encontra — o mapa some, a etapa segue.
+   */
+  app.get<{ Querystring: { nome?: string; regiao?: string } }>(
+    '/api/ads/geo-coordenadas',
+    { preHandler: [autenticar] },
+    async (req, reply) => {
+      const nome = (req.query.nome ?? '').trim();
+      if (!nome) return reply.code(400).send({ detail: 'Cidade não informada.' });
+      return reply.send({ coordenada: await coordenadasDaCidade(nome, req.query.regiao ?? '') });
     },
   );
 

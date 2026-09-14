@@ -46,8 +46,7 @@ Após esse comando, a pasta `pharmaflow-node/dist/` será criada/atualizada com 
 ### 4. Reconstruir e reiniciar o container da API
 
 ```bash
-cd /opt/pharmaflow
-docker compose up -d --build api
+  docker compose up -d --build api
 ```
 
 > O `--build` força o Docker a reconstruir a imagem copiando o novo `dist/` para dentro.  
