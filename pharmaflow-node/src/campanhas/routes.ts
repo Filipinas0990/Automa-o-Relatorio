@@ -4,6 +4,8 @@ import {
   type PublicarCampanhaInput, type NovosAnunciosInput,
 } from './service';
 import { listarConjuntosDaConta, duplicarConjunto } from '../meta/gerenciador';
+import { uploadImagem } from '../meta/criativo';
+import type { MetaToken } from '../meta/types';
 import { logger } from '../logger';
 
 /** Normaliza "123" ou "act_123" para o formato que a Graph API espera. */
@@ -50,6 +52,48 @@ export async function campanhasRoutes(
   opts: CampanhasRouteOptions,
 ): Promise<void> {
   const { autenticar } = opts;
+
+  /**
+   * POST /api/campanhas/midias
+   * Sobe UMA imagem para a biblioteca da conta de anúncios e devolve o hash.
+   *
+   * Existe por causa do teto de payload: o proxy da Vercel recusa corpo acima de
+   * ~4,2 MB, e publicar mandava todos os PNGs juntos (cada um de 1 a 2,5 MB) —
+   * passava de três criativos e morria com 413. Subindo uma imagem por
+   * requisição, cada corpo fica pequeno e a publicação leva só os hashes.
+   *
+   * O Meta deduplica por conteúdo: subir o mesmo PNG duas vezes devolve o mesmo
+   * hash e não polui a biblioteca da conta.
+   */
+  app.post<{ Body: { conta?: { id?: string }; nome?: string; pngBase64?: string } }>(
+    '/api/campanhas/midias',
+    { preHandler: [autenticar], bodyLimit: 16 * 1024 * 1024 },
+    async (req, reply) => {
+      const contaId = req.body?.conta?.id;
+      const png     = req.body?.pngBase64;
+      if (!contaId) return reply.code(400).send({ detail: 'Conta de anúncios não informada.' });
+      if (!png)     return reply.code(400).send({ detail: 'Imagem não informada.' });
+
+      const accessToken = process.env.META_ACCESS_TOKEN ?? '';
+      if (!accessToken) {
+        return reply.code(400).send({ detail: 'META_ACCESS_TOKEN não configurado no servidor.' });
+      }
+
+      const token: MetaToken = {
+        farmaciaId:  0,
+        adAccountId: normalizarConta(contaId),
+        pageId:      '',
+        accessToken,
+      };
+
+      try {
+        const img = await uploadImagem(token, png, req.body?.nome ?? 'criativo');
+        return reply.send({ hash: img.hash });
+      } catch (err) {
+        return responderErroMeta(reply, err, 'Erro ao subir a imagem do criativo');
+      }
+    },
+  );
 
   /**
    * POST /api/campanhas/criar
