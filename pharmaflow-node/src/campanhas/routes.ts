@@ -5,6 +5,7 @@ import {
 } from './service';
 import { listarConjuntosDaConta, duplicarConjunto } from '../meta/gerenciador';
 import { uploadImagem } from '../meta/criativo';
+import { listarPaginasDaConta } from '../meta/paginas';
 import type { MetaToken } from '../meta/types';
 import { logger } from '../logger';
 
@@ -52,6 +53,29 @@ export async function campanhasRoutes(
   opts: CampanhasRouteOptions,
 ): Promise<void> {
   const { autenticar } = opts;
+
+  /**
+   * GET /api/campanhas/paginas?conta=act_123
+   * Páginas do Facebook que essa conta pode usar no criativo, com a conta do
+   * Instagram de cada uma. O gestor escolhe na etapa 1 do wizard.
+   *
+   * Existe porque o criativo usava a PRIMEIRA página do Business Manager: num BM
+   * com uma página por farmácia, dava "As Páginas não correspondem" (#1885029).
+   */
+  app.get<{ Querystring: { conta?: string } }>(
+    '/api/campanhas/paginas',
+    { preHandler: [autenticar] },
+    async (req, reply) => {
+      const conta = req.query.conta;
+      if (!conta) return reply.code(400).send({ detail: 'Conta de anúncios não informada.' });
+      try {
+        const paginas = await listarPaginasDaConta(tokenMeta(), normalizarConta(conta));
+        return reply.send({ paginas });
+      } catch (err) {
+        return responderErroMeta(reply, err, 'Erro ao listar as páginas');
+      }
+    },
+  );
 
   /**
    * POST /api/campanhas/midias

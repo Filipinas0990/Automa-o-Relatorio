@@ -36,7 +36,18 @@ export async function criarAdCreative(
   imagemHash:  string,
   copy:        string,
   linkDestino: string,
-  extras?:     { titulo?: string; descricao?: string; whatsapp?: boolean },
+  extras?: {
+    titulo?:    string;
+    descricao?: string;
+    whatsapp?:  boolean;
+    /**
+     * Conta do Instagram que representa a empresa no anúncio. Sem ela, qualquer
+     * posicionamento no Instagram é recusado com "selecione uma conta do
+     * Instagram para representar sua empresa" (#1772103) — e o anúncio fica
+     * criado mas bloqueado no Gerenciador.
+     */
+    instagramActorId?: string | null;
+  },
 ): Promise<{ id: string }> {
   const link_data: Record<string, unknown> = {
     image_hash: imagemHash,
@@ -55,16 +66,21 @@ export async function criarAdCreative(
     };
   }
 
+  const object_story_spec: Record<string, unknown> = {
+    page_id: token.pageId,
+    link_data,
+  };
+  // Omitido quando a página não tem Instagram vinculado: mandar o campo vazio
+  // faz a Meta recusar o criativo inteiro, e sem ele o anúncio ao menos roda
+  // nos posicionamentos do Facebook.
+  if (extras?.instagramActorId) {
+    object_story_spec.instagram_actor_id = extras.instagramActorId;
+  }
+
   return metaReq<{ id: string }>(
     'POST',
     `/${token.adAccountId}/adcreatives`,
     token.accessToken,
-    {
-      name: 'Criativo via Automação',
-      object_story_spec: {
-        page_id: token.pageId,
-        link_data,
-      },
-    },
+    { name: 'Criativo via Automação', object_story_spec },
   );
 }

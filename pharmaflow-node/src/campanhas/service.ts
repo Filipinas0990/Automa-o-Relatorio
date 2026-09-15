@@ -15,6 +15,13 @@ export interface PublicarCampanhaInput {
     nome?: string;
     cliente?: string;
   };
+  /**
+   * Página do Facebook escolhida pelo gestor na etapa 1, com o Instagram dela.
+   * Antes a página era adivinhada (a primeira do Business Manager), o que num BM
+   * com várias farmácias dava "As Páginas não correspondem" (#1885029).
+   * Ausente = cai no palpite antigo, para não quebrar chamadas velhas.
+   */
+  pagina?: { id: string; nome?: string; instagramId?: string | null } | null;
   objetivo: {
     codigo: string;      // OUTCOME_*
     nome?: string;
@@ -116,6 +123,7 @@ async function subirCriativos(
   copy:         Copy,
   usarWhatsapp: boolean,
   avisos:       string[],
+  instagramId?: string | null,
 ): Promise<Array<{ creativeId: string; rotulo: string }>> {
   const criativos: Array<{ creativeId: string; rotulo: string }> = [];
   // Serve tanto quem já subiu a imagem antes (hash) quanto quem manda o PNG aqui.
@@ -142,6 +150,7 @@ async function subirCriativos(
       const descricaoItem = item.descricao?.trim()      || copy.descricao;
       const creative = await criarAdCreative(token, hash, textoItem, linkDestino, {
         titulo: tituloItem, descricao: descricaoItem, whatsapp: usarWhatsapp,
+        instagramActorId: instagramId,
       });
       criativos.push({ creativeId: creative.id, rotulo: item.nome });
     } catch (e) {
@@ -198,8 +207,9 @@ export async function publicarCampanha(input: PublicarCampanhaInput): Promise<{
 
   const adAccountId = input.conta.id.startsWith('act_') ? input.conta.id : `act_${input.conta.id}`;
 
-  // Página do Facebook (necessária para criar o criativo)
-  const pageId = await descobrirPageId({ farmaciaId: 0, adAccountId, pageId: '', accessToken });
+  // Página do Facebook: a que o gestor escolheu; só adivinha se não veio.
+  const pageId = input.pagina?.id
+    ?? await descobrirPageId({ farmaciaId: 0, adAccountId, pageId: '', accessToken });
 
   const token: MetaToken = { farmaciaId: 0, adAccountId, pageId: pageId ?? '', accessToken };
 
@@ -223,6 +233,7 @@ export async function publicarCampanha(input: PublicarCampanhaInput): Promise<{
   // ── 2) Criativos: sobe TODOS os PNGs, um AdCreative por imagem ──────────────
   const criativosMeta = await subirCriativos(
     token, pageId, input.criativos.itens, copy, usarWhatsapp, avisos,
+    input.pagina?.instagramId,
   );
 
   // ── 3) Campanha ATIVA ───────────────────────────────────────────────────────
@@ -255,6 +266,8 @@ export async function publicarCampanha(input: PublicarCampanhaInput): Promise<{
 
 export interface NovosAnunciosInput {
   conta:      { id: string; nome?: string; cliente?: string };
+  /** Página escolhida na etapa 1 (com o Instagram dela). Ver PublicarCampanhaInput. */
+  pagina?:    { id: string; nome?: string; instagramId?: string | null } | null;
   conjuntoId: string;                 // conjunto de origem, que fica INTACTO
   nomeConjunto?: string;              // nome da cópia
   destinoWhatsapp?: boolean;          // herdado do conjunto de origem
@@ -283,7 +296,9 @@ export async function publicarNovosAnuncios(input: NovosAnunciosInput): Promise<
   if (!accessToken) throw new Error('META_ACCESS_TOKEN não configurado no servidor.');
 
   const adAccountId = input.conta.id.startsWith('act_') ? input.conta.id : `act_${input.conta.id}`;
-  const pageId = await descobrirPageId({ farmaciaId: 0, adAccountId, pageId: '', accessToken });
+  // Página do Facebook: a que o gestor escolheu; só adivinha se não veio.
+  const pageId = input.pagina?.id
+    ?? await descobrirPageId({ farmaciaId: 0, adAccountId, pageId: '', accessToken });
   const token: MetaToken = { farmaciaId: 0, adAccountId, pageId: pageId ?? '', accessToken };
 
   const status: 'ACTIVE' | 'PAUSED' = input.ativar ? 'ACTIVE' : 'PAUSED';
@@ -320,9 +335,11 @@ export async function publicarNovosAnuncios(input: NovosAnunciosInput): Promise<
     novoConjuntoId = novo.conjuntoId;
     configAplicada = true;
     conjuntoRecriado = true;
-    // A mensagem crua do Meta fica no log — para o gestor o que importa é que
-    // deu certo por outro caminho e que o original não foi mexido.
-    avisos.push('O Meta não aceitou duplicar o conjunto original, então criamos um conjunto novo com a mesma configuração. O original não foi alterado.');
+    // Começa pelo que deu certo. A frase antiga abria com "O Meta não aceitou
+    // duplicar..." e o gestor lia como falha — sendo que a publicação funcionou
+    // e o conjunto foi duplicado, só que por outro caminho. A mensagem crua do
+    // Meta fica no log; aqui interessa o resultado.
+    avisos.push('Conjunto duplicado. O Meta recusou a cópia direta, então criamos um conjunto novo com a mesma configuração e publicamos os anúncios nele. O conjunto original não foi alterado e segue rodando.');
     if (novo.placementsAutomaticos) {
       avisos.push('Os posicionamentos do conjunto original não foram aceitos pelo Meta; o conjunto novo ficou com posicionamentos automáticos (Advantage+). Público, idade e localização seguem iguais.');
     }
@@ -355,6 +372,7 @@ export async function publicarNovosAnuncios(input: NovosAnunciosInput): Promise<
   );
   const criativosMeta = await subirCriativos(
     token, pageId, input.criativos.itens, copy, !!input.destinoWhatsapp, avisos,
+    input.pagina?.instagramId,
   );
 
   const nomeBase = (input.nomeConjunto?.trim() || 'Novos criativos').slice(0, 80);
