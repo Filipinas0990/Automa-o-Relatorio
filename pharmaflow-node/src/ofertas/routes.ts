@@ -13,16 +13,29 @@ interface OfertasRouteOptions extends FastifyPluginOptions {
 }
 
 /**
- * O dono manda `[{ id, preco }]`. Ainda aceitamos `number[]` (o formato antigo)
- * porque um celular com a página em cache continua postando assim.
+ * O dono manda `[{ id, preco, preco_de }]`. Ainda aceitamos `number[]` (o
+ * formato antigo) porque um celular com a página em cache continua postando
+ * assim — e `preco_de` também falta nos envios anteriores ao de/por.
  */
-type ProdutoEnviado = number | { id: number; preco?: string | null };
+type ProdutoEnviado = number | { id: number; preco?: string | null; preco_de?: string | null };
 
 interface EnviarOfertaBody {
   farmacia_id:      number;
   produtos:         ProdutoEnviado[];
   /** Obrigatório: o gestor precisa saber com quem falar sobre a lista. */
   enviado_por:      string;
+}
+
+/**
+ * Produto dentro do JSON da solicitação. Nome e preços viajam junto do id
+ * porque o catálogo pode mudar depois do envio.
+ */
+interface ProdutoSolicitado {
+  id:        number;
+  nome:      string;
+  preco?:    string | null;
+  /** Preço antigo (riscado na arte) quando o dono ligou o "de/por". */
+  preco_de?: string | null;
 }
 
 
@@ -145,9 +158,12 @@ export async function ofertasRoutes(
 
       const escolhidos = (Array.isArray(b.produtos) ? b.produtos : [])
         .map((p) => (typeof p === 'object' && p !== null
-          ? { id: Number(p.id), preco: limparPreco(p.preco) }
-          : { id: Number(p), preco: null }))
-        .filter((p) => Number.isFinite(p.id));
+          ? { id: Number(p.id), preco: limparPreco(p.preco), precoDe: limparPreco(p.preco_de) }
+          : { id: Number(p), preco: null, precoDe: null }))
+        .filter((p) => Number.isFinite(p.id))
+        // "de" sem "por" não vira arte nenhuma: o riscado só existe em relação
+        // ao preço da oferta. Cai fora aqui para não chegar quebrado no gestor.
+        .map((p) => (p.preco ? p : { ...p, precoDe: null }));
 
       if (escolhidos.length === 0) {
         return reply.code(400).send({ detail: 'Escolha ao menos um produto.' });
@@ -163,9 +179,14 @@ export async function ofertasRoutes(
       // Guarda nome e preço junto do id: o catálogo pode mudar depois do envio
       const catalogo = await listarProdutos();
       const porId = new Map(catalogo.map((p) => [p.id, p.nome]));
-      const produtos = escolhidos
+      const produtos: ProdutoSolicitado[] = escolhidos
         .filter((p) => porId.has(p.id))
-        .map((p) => ({ id: p.id, nome: porId.get(p.id) as string, preco: p.preco }));
+        .map((p) => ({
+          id:       p.id,
+          nome:     porId.get(p.id) as string,
+          preco:    p.preco,
+          preco_de: p.precoDe,
+        }));
 
       const solicitacao = await ofertasRepository.criarSolicitacao({
         gestorId:       gestor.id,
@@ -211,7 +232,7 @@ export async function ofertasRoutes(
 
     return reply.send(
       lista.map((s) => {
-        let produtos: { id: number; nome: string }[] = [];
+        let produtos: ProdutoSolicitado[] = [];
         try { produtos = JSON.parse(s.produtosJson); } catch { /* ignore */ }
         return {
           id:              s.id,
@@ -246,7 +267,7 @@ export async function ofertasRoutes(
 
     return reply.send(
       carteira.map(({ farmacia, pendente, ultimoEnvioEm }) => {
-        let produtos: { id: number; nome: string }[] = [];
+        let produtos: ProdutoSolicitado[] = [];
         if (pendente) {
           try { produtos = JSON.parse(pendente.produtosJson); } catch { /* ignore */ }
         }
@@ -294,7 +315,7 @@ export async function ofertasRoutes(
       const ultima = await ofertasRepository.ultimaSolicitacao(req.user.id, farmaciaId);
       if (!ultima) return reply.send(null);
 
-      let produtos: { id: number; nome: string }[] = [];
+      let produtos: ProdutoSolicitado[] = [];
       try { produtos = JSON.parse(ultima.produtosJson); } catch { /* ignore */ }
 
       return reply.send({
