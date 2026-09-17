@@ -153,11 +153,16 @@ export const ofertasRepository = {
     return lista.map((f) => {
       const daFarmacia = solicitacoes.filter((s) => s.farmaciaId === f.id);
       const pendente   = daFarmacia.find((s) => s.status === 'pendente') ?? null;
-      const ultimo     = daFarmacia[0] ?? null;   // listarSolicitacoes já vem por data desc
+      // Descartada é lista que o gestor mandou excluir: some da carteira e não
+      // volta como "última". listarSolicitacoes já vem por data desc.
+      const ultimo     = daFarmacia.find((s) => s.status !== 'descartada') ?? null;
 
       return {
         farmacia:    f,
         pendente,
+        // A última lista em qualquer status: é ela que a carteira mostra
+        // depois que o pedido vira campanha, para a linha não ficar vazia.
+        ultima:      ultimo,
         ultimoEnvioEm: ultimo?.criadoEm ?? null,
       };
     });
@@ -176,6 +181,8 @@ export const ofertasRepository = {
       .where(and(
         eq(solicitacoesOferta.gestorId, gestorId),
         eq(solicitacoesOferta.farmaciaId, farmaciaId),
+        // Lista excluída pelo gestor não volta a pré-marcar o passo 3.
+        sql`${solicitacoesOferta.status} <> 'descartada'`,
       ))
       .orderBy(desc(solicitacoesOferta.criadoEm))
       .limit(1);

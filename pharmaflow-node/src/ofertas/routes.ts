@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyPluginOptions, FastifyRequest, FastifyReply } from 'fastify';
 import { ofertasRepository } from './repository';
 import { ofertasService, limparPreco } from './service';
+import { disparosRepository } from '../disparos/repository';
 import { listarProdutos, getImagem } from '../catalogo/repository';
 import { logger } from '../logger';
 import { nomeVisivel } from '../database/schema';
@@ -260,17 +261,24 @@ export async function ofertasRoutes(
 
     // Cada cliente tem o SEU link (migration 0021) — vem junto para o gestor
     // copiar direto na linha, sem um request por farmácia.
-    const links = await ofertasService.linksDaCarteira(
-      req.user.id,
-      carteira.map(({ farmacia }) => farmacia.id),
-    );
+    const [links, campanhas] = await Promise.all([
+      ofertasService.linksDaCarteira(
+        req.user.id,
+        carteira.map(({ farmacia }) => farmacia.id),
+      ),
+      // A última campanha de cada cliente: é o que a linha mostra no lugar do
+      // verde depois que o pedido foi montado.
+      disparosRepository.ultimaCampanhaPorFarmacia(req.user.id),
+    ]);
 
     return reply.send(
-      carteira.map(({ farmacia, pendente, ultimoEnvioEm }) => {
-        let produtos: ProdutoSolicitado[] = [];
-        if (pendente) {
-          try { produtos = JSON.parse(pendente.produtosJson); } catch { /* ignore */ }
-        }
+      carteira.map(({ farmacia, pendente, ultima, ultimoEnvioEm }) => {
+        const listaDe = (json: string | null | undefined): ProdutoSolicitado[] => {
+          if (!json) return [];
+          try { return JSON.parse(json); } catch { return []; }
+        };
+        const produtos = listaDe(pendente?.produtosJson);
+        const campanha = campanhas.get(farmacia.id) ?? null;
 
         return {
           farmacia_id:  farmacia.id,
@@ -290,6 +298,26 @@ export async function ofertasRoutes(
             produtos,
             enviado_por:     pendente.enviadoPor,
             criado_em:       pendente.criadoEm,
+          } : null,
+          // A última lista em QUALQUER status. Depois que o pedido vira
+          // campanha ele sai de `solicitacao`, e é daqui que a linha tira o
+          // que mostrar: quantos produtos, quem mandou e quando foi atendida.
+          ultima_solicitacao: ultima ? {
+            id:              ultima.id,
+            produtos:        listaDe(ultima.produtosJson),
+            enviado_por:     ultima.enviadoPor,
+            status:          ultima.status,
+            criado_em:       ultima.criadoEm,
+            atendida_em:     ultima.atendidaEm,
+          } : null,
+          // A campanha mais recente deste cliente (cancelada não conta).
+          campanha: campanha ? {
+            id:            campanha.id,
+            status:        campanha.status,
+            agendado_para: campanha.agendadoPara,
+            proximo_envio: campanha.proximoEnvio,
+            ultimo_envio:  campanha.ultimoEnvio,
+            criado_em:     campanha.criadoEm,
           } : null,
           ultimo_envio_em: ultimoEnvioEm,
         };
@@ -335,7 +363,9 @@ export async function ofertasRoutes(
     async (req, reply) => {
       const solicitacao = await ofertasRepository.getSolicitacao(parseInt(req.params.id, 10));
       if (!solicitacao) return reply.code(404).send({ detail: 'Solicitação não encontrada' });
-      if (solicitacao.gestorId !== req.user.id) {
+      // Admin alcança todas — a carteira dele também lista todas as farmácias,
+      // e sem isto o botão de excluir da carteira responderia 403 para ele.
+      if (!req.user.isAdmin && solicitacao.gestorId !== req.user.id) {
         return reply.code(403).send({ detail: 'Esta solicitação não pertence a você' });
       }
 

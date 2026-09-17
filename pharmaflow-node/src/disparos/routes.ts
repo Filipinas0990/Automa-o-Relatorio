@@ -421,6 +421,19 @@ export async function disparosRoutes(
         }
       }
 
+      /*
+       * Campanha programada já fecha o pedido do cliente.
+       *
+       * Antes só o disparo imediato marcava 'atendida', e o caminho normal do
+       * gestor é AGENDAR — então o cliente ficava verde na carteira para
+       * sempre, como se a lista dele nunca tivesse sido montada. Quem foi
+       * agendado sai do "aguardando" na hora; se a campanha for cancelada, o
+       * DELETE abaixo devolve o pedido para pendente.
+       */
+      if (solicitacaoId) {
+        await ofertasRepository.atualizarStatus(solicitacaoId, 'atendida');
+      }
+
       return reply.code(201).send({
         id: disparo.id, status: 'agendado', agendado_para: agendadoPara, repetir,
       });
@@ -602,6 +615,19 @@ export async function disparosRoutes(
       await disparosRepository.atualizarDisparo(disparo.id, {
         status: 'cancelado', proximoEnvio: null,
       });
+
+      // Campanha cancelada devolve o pedido para a fila: a lista do cliente
+      // continua de pé e ele tem de voltar a aparecer como "respondeu". Só
+      // quando não sobrou nenhuma outra campanha viva daquele mesmo pedido.
+      if (disparo.solicitacaoId) {
+        const aindaTemCampanha = await disparosRepository.temDisparoAtivoDaSolicitacao(
+          disparo.solicitacaoId,
+        );
+        if (!aindaTemCampanha) {
+          await ofertasRepository.atualizarStatus(disparo.solicitacaoId, 'pendente');
+        }
+      }
+
       return reply.code(204).send();
     },
   );

@@ -95,6 +95,69 @@ export const disparosRepository = {
   },
 
   /**
+   * A última campanha de CADA cliente do gestor, em uma consulta só.
+   *
+   * É o que a carteira mostra na linha de quem já teve a lista montada: sem
+   * isto o gestor vê o cliente sair do verde e não sabe o que aconteceu com o
+   * pedido dele. Cancelada não conta — não vai ao ar, e o pedido volta para a
+   * fila. `DISTINCT ON` para não trazer o histórico inteiro e reduzir no Node.
+   */
+  async ultimaCampanhaPorFarmacia(gestorId: number): Promise<Map<number, {
+    id:           number;
+    status:       string;
+    agendadoPara: Date | null;
+    proximoEnvio: Date | null;
+    ultimoEnvio:  Date | null;
+    criadoEm:     Date | null;
+  }>> {
+    const resultado = await db.execute<{
+      farmacia_id:   number;
+      id:            number;
+      status:        string;
+      agendado_para: string | null;
+      proximo_envio: string | null;
+      ultimo_envio:  string | null;
+      criado_em:     string | null;
+    }>(sql`
+      SELECT DISTINCT ON (d.farmacia_id)
+             d.farmacia_id, d.id, d.status,
+             d.agendado_para, d.proximo_envio, d.ultimo_envio, d.criado_em
+      FROM ${disparosGrupo} d
+      WHERE d.gestor_id = ${gestorId}
+        AND d.farmacia_id IS NOT NULL
+        AND d.status <> 'cancelado'
+      ORDER BY d.farmacia_id, d.criado_em DESC
+    `);
+
+    const data = (v: string | null): Date | null => (v ? new Date(v) : null);
+
+    return new Map(resultado.rows.map((r) => [Number(r.farmacia_id), {
+      id:           Number(r.id),
+      status:       r.status,
+      agendadoPara: data(r.agendado_para),
+      proximoEnvio: data(r.proximo_envio),
+      ultimoEnvio:  data(r.ultimo_envio),
+      criadoEm:     data(r.criado_em),
+    }]));
+  },
+
+  /**
+   * Sobrou alguma campanha viva deste pedido? Usado no cancelamento: só o
+   * último cancelamento devolve a solicitação para "pendente".
+   */
+  async temDisparoAtivoDaSolicitacao(solicitacaoId: number): Promise<boolean> {
+    const [row] = await db
+      .select({ id: disparosGrupo.id })
+      .from(disparosGrupo)
+      .where(and(
+        eq(disparosGrupo.solicitacaoId, solicitacaoId),
+        sql`${disparosGrupo.status} <> 'cancelado'`,
+      ))
+      .limit(1);
+    return Boolean(row);
+  },
+
+  /**
    * A quem cada um destes grupos JÁ pertenceu, segundo o histórico de disparos
    * do próprio gestor.
    *
