@@ -77,10 +77,50 @@ export async function criarAdCreative(
     object_story_spec.instagram_actor_id = extras.instagramActorId;
   }
 
-  return metaReq<{ id: string }>(
-    'POST',
-    `/${token.adAccountId}/adcreatives`,
-    token.accessToken,
-    { name: 'Criativo via Automação', object_story_spec },
-  );
+  const corpo = { name: 'Criativo via Automação', object_story_spec };
+
+  // Tenta do opt-out mais completo ao nenhum: chave que a versão da API ou a
+  // conta não conhece volta erro 100 (parâmetro inválido), e aí o criativo
+  // sobe como sempre subiu — nunca fica pior do que sem o opt-out.
+  const tentativas = [RECURSOS_QUE_CORTAM, ['standard_enhancements'], []];
+  for (const [i, recursos] of tentativas.entries()) {
+    try {
+      return await metaReq<{ id: string }>(
+        'POST',
+        `/${token.adAccountId}/adcreatives`,
+        token.accessToken,
+        recursos.length ? { ...corpo, degrees_of_freedom_spec: optOut(recursos) } : corpo,
+      );
+    } catch (err) {
+      const ultima = i === tentativas.length - 1;
+      if (ultima || !String((err as Error).message).includes('[100]')) throw err;
+      console.warn(`[Meta] opt-out de aprimoramentos recusado (${recursos.join(', ')}), tentando o próximo`);
+    }
+  }
+  throw new Error('inalcançável');
+}
+
+/**
+ * Aprimoramentos do "Advantage+ criativo" que o Meta liga por conta própria e
+ * que mexem no enquadramento da arte: adaptar ao posicionamento (recorta o
+ * 4:5 para 9:16 nos stories/reels), expansão de imagem, retoques (recorte
+ * automático) e modelos/sobreposições. A arte já sai pronta do app — com
+ * título no topo, preço e farmácia nas bordas —, e qualquer recorte do Meta
+ * come justamente essas faixas.
+ */
+const RECURSOS_QUE_CORTAM = [
+  'standard_enhancements',
+  'adapt_to_placement',
+  'image_uncrop',
+  'image_touchups',
+  'image_templates',
+  'image_brightness_and_contrast',
+];
+
+function optOut(recursos: string[]): Record<string, unknown> {
+  return {
+    creative_features_spec: Object.fromEntries(
+      recursos.map((r) => [r, { enroll_status: 'OPT_OUT' }]),
+    ),
+  };
 }
