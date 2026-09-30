@@ -79,10 +79,11 @@ export async function criarAdCreative(
 
   const corpo = { name: 'Criativo via Automação', object_story_spec };
 
-  // Tenta do opt-out mais completo ao nenhum: chave que a versão da API ou a
-  // conta não conhece volta erro 100 (parâmetro inválido), e aí o criativo
-  // sobe como sempre subiu — nunca fica pior do que sem o opt-out.
-  const tentativas = [RECURSOS_QUE_CORTAM, ['standard_enhancements'], []];
+  // Tenta do opt-out mais completo ao menor: chave que a versão da API ou a
+  // conta não conhece volta erro 100 (parâmetro inválido). Sem spec nenhum é o
+  // último recurso — e nem sempre serve: conjunto de "múltiplos destinos"
+  // recusa o ANÚNCIO de criativo sem degrees_of_freedom_spec (#2446493).
+  const tentativas = [RECURSOS_QUE_CORTAM, ['image_touchups', 'image_uncrop'], []];
   for (const [i, recursos] of tentativas.entries()) {
     try {
       return await metaReq<{ id: string }>(
@@ -107,9 +108,11 @@ export async function criarAdCreative(
  * automático) e modelos/sobreposições. A arte já sai pronta do app — com
  * título no topo, preço e farmácia nas bordas —, e qualquer recorte do Meta
  * come justamente essas faixas.
+ *
+ * NÃO incluir `standard_enhancements`: o Meta descontinuou o pacote e recusa o
+ * criativo inteiro com ele (#3858504, "defina recursos individuais").
  */
 const RECURSOS_QUE_CORTAM = [
-  'standard_enhancements',
   'adapt_to_placement',
   'image_uncrop',
   'image_touchups',

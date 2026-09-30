@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyPluginOptions, FastifyRequest, FastifyReply } from 'fastify';
 import {
-  publicarCampanha, publicarNovosAnuncios,
-  type PublicarCampanhaInput, type NovosAnunciosInput,
+  publicarCampanha, publicarNovosAnuncios, publicarAnunciosNoConjunto,
+  type PublicarCampanhaInput, type NovosAnunciosInput, type AnunciosNoConjuntoInput,
 } from './service';
 import { listarConjuntosDaConta, duplicarConjunto } from '../meta/gerenciador';
 import { uploadImagem } from '../meta/criativo';
@@ -183,6 +183,32 @@ export async function campanhasRoutes(
         return reply.code(201).send(r);
       } catch (err) {
         return responderErroMeta(reply, err, 'Erro ao subir os novos anúncios');
+      }
+    },
+  );
+
+  /**
+   * POST /api/campanhas/conjuntos/:conjuntoId/anuncios
+   * Sobe os criativos novos DENTRO do conjunto escolhido, sem cópia. Não mexe
+   * em orçamento — por isso não passa pelo `erroOrcamento`: o gasto é o que o
+   * conjunto já tem.
+   */
+  app.post<{ Params: { conjuntoId: string }; Body: Omit<AnunciosNoConjuntoInput, 'conjuntoId'> }>(
+    '/api/campanhas/conjuntos/:conjuntoId/anuncios',
+    { preHandler: [autenticar], bodyLimit: 80 * 1024 * 1024 },
+    async (req, reply) => {
+      const body = req.body;
+      if (!body?.conta?.id) return reply.code(400).send({ detail: 'Conta de anúncios não informada.' });
+      if (!body?.criativos?.itens?.length) {
+        return reply.code(400).send({ detail: 'Nenhum criativo foi enviado.' });
+      }
+
+      try {
+        const r = await publicarAnunciosNoConjunto({ ...body, conjuntoId: req.params.conjuntoId });
+        logger.info({ conjuntoId: r.conjuntoId, anuncios: r.anuncioIds.length }, 'Anúncios adicionados ao conjunto');
+        return reply.code(201).send(r);
+      } catch (err) {
+        return responderErroMeta(reply, err, 'Erro ao adicionar os anúncios ao conjunto');
       }
     },
   );

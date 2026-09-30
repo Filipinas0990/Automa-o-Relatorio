@@ -277,6 +277,62 @@ export interface NovosAnunciosInput {
   ativar?:    boolean;                // false = cópia nasce pausada
 }
 
+export interface AnunciosNoConjuntoInput {
+  conta:      { id: string; nome?: string; cliente?: string };
+  pagina?:    { id: string; nome?: string; instagramId?: string | null } | null;
+  conjuntoId: string;                 // conjunto que RECEBE os anúncios
+  nomeConjunto?: string;              // só para nomear os anúncios
+  destinoWhatsapp?: boolean;          // o do próprio conjunto
+  criativos:  { itens: ItemCriativo[]; copy: { textoPrincipal?: string; titulo?: string; descricao?: string } };
+}
+
+/**
+ * Sobe os criativos novos como anúncios DENTRO do conjunto escolhido — sem
+ * cópia, sem mexer em público nem orçamento. Nascem ATIVOS (decisão do dono):
+ * dividem o orçamento que o conjunto já tem, então o gasto não aumenta.
+ */
+export async function publicarAnunciosNoConjunto(input: AnunciosNoConjuntoInput): Promise<{
+  conjuntoId:      string;
+  anuncioIds:      string[];
+  linkGerenciador: string;
+  copyUsada:       Copy;
+  avisos:          string[];
+}> {
+  const avisos: string[] = [];
+  const accessToken = process.env.META_ACCESS_TOKEN ?? '';
+  if (!accessToken) throw new Error('META_ACCESS_TOKEN não configurado no servidor.');
+
+  const adAccountId = input.conta.id.startsWith('act_') ? input.conta.id : `act_${input.conta.id}`;
+  const pageId = input.pagina?.id
+    ?? await descobrirPageId({ farmaciaId: 0, adAccountId, pageId: '', accessToken });
+  const token: MetaToken = { farmaciaId: 0, adAccountId, pageId: pageId ?? '', accessToken };
+
+  const copy = resolverCopy(
+    input.criativos.copy,
+    input.criativos.itens.map((i) => i.nome),
+    input.conta.cliente ?? input.conta.nome,
+  );
+  const criativosMeta = await subirCriativos(
+    token, pageId, input.criativos.itens, copy, !!input.destinoWhatsapp, avisos,
+    input.pagina?.instagramId,
+  );
+
+  const nomeBase = (input.nomeConjunto?.trim() || 'Novos criativos').slice(0, 80);
+  const anuncioIds = criativosMeta.length
+    ? await criarAnuncios(token, input.conjuntoId, nomeBase, criativosMeta, 'ACTIVE')
+    : [];
+
+  if (!anuncioIds.length) avisos.push('Nenhum anúncio foi criado no conjunto.');
+
+  return {
+    conjuntoId: input.conjuntoId,
+    anuncioIds,
+    linkGerenciador: `https://www.facebook.com/adsmanager/manage/ads?act=${adAccountId.replace('act_', '')}&selected_adset_ids=${input.conjuntoId}`,
+    copyUsada: copy,
+    avisos,
+  };
+}
+
 /**
  * Cria uma CÓPIA do conjunto escolhido (sem os anúncios antigos), aplica as
  * configurações que o gestor revisou e sobe os criativos novos dentro dela.
