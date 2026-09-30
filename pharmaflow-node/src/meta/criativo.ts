@@ -41,6 +41,13 @@ export async function criarAdCreative(
     descricao?: string;
     whatsapp?:  boolean;
     /**
+     * Conjunto de mensagens com vários destinos (Messenger + WhatsApp + Direct,
+     * `MESSAGING_INSTAGRAM_DIRECT_MESSENGER_WHATSAPP`). O Meta recusa o ANÚNCIO
+     * nesse conjunto se o criativo não trouxer os três botões de mensagem
+     * (#2446493, "especificação degrees_of_freedom ausente").
+     */
+    mensagens?: boolean;
+    /**
      * Conta do Instagram que representa a empresa no anúncio. Sem ela, qualquer
      * posicionamento no Instagram é recusado com "selecione uma conta do
      * Instagram para representar sua empresa" (#1772103) — e o anúncio fica
@@ -77,7 +84,29 @@ export async function criarAdCreative(
     object_story_spec.instagram_actor_id = extras.instagramActorId;
   }
 
-  const corpo = { name: 'Criativo via Automação', object_story_spec };
+  // Formato copiado de um anúncio que roda num conjunto desses (criado pelo
+  // Gerenciador): link do Messenger + asset_feed_spec com os três destinos, e
+  // o Meta escolhe para qual mandar cada pessoa.
+  if (extras?.mensagens) {
+    link_data.link = 'https://fb.com/messenger_doc/';
+    link_data.call_to_action = {
+      type:  'MESSAGE_PAGE',
+      value: { app_destination: 'MESSENGER' },
+    };
+  }
+
+  const corpo: Record<string, unknown> = { name: 'Criativo via Automação', object_story_spec };
+  if (extras?.mensagens) {
+    corpo.asset_feed_spec = {
+      optimization_type: 'DOF_MESSAGING_DESTINATION',
+      call_to_actions: [
+        { type: 'MESSAGE_PAGE',      value: { app_destination: 'MESSENGER',        link: 'https://fb.com/messenger_doc/' } },
+        { type: 'WHATSAPP_MESSAGE',  value: { app_destination: 'WHATSAPP',         link: 'https://api.whatsapp.com/send' } },
+        { type: 'INSTAGRAM_MESSAGE', value: { app_destination: 'INSTAGRAM_DIRECT', link: 'https://www.instagram.com/' } },
+      ],
+      additional_data: { multi_share_end_card: false, is_click_to_message: true },
+    };
+  }
 
   // Tenta do opt-out mais completo ao menor: chave que a versão da API ou a
   // conta não conhece volta erro 100 (parâmetro inválido). Sem spec nenhum é o
@@ -99,6 +128,28 @@ export async function criarAdCreative(
     }
   }
   throw new Error('inalcançável');
+}
+
+/** Para onde o clique do anúncio leva — decide o formato do criativo. */
+export type DestinoCriativo = 'pagina' | 'whatsapp' | 'mensagens';
+
+/**
+ * Lê o destino de um conjunto que já existe no Meta. É a fonte da verdade para
+ * anúncios que entram num conjunto (ou numa cópia dele): o front só sabe dizer
+ * "é WhatsApp ou não", e conjunto de vários destinos caía no "não" — subia
+ * como link para a página e o Meta recusava o anúncio.
+ * `null` = destino que não pede formato especial (o chamador decide).
+ */
+export async function destinoDoConjunto(accessToken: string, conjuntoId: string): Promise<DestinoCriativo | null> {
+  const r = await metaReq<{ destination_type?: string }>(
+    'GET', `/${conjuntoId}?fields=destination_type`, accessToken,
+  );
+  const tipo = r.destination_type ?? '';
+  if (tipo === 'WHATSAPP') return 'whatsapp';
+  // Mais de um canal de mensagem no mesmo conjunto (ex.: MESSAGING_INSTAGRAM_DIRECT_MESSENGER_WHATSAPP).
+  const canais = ['MESSENGER', 'WHATSAPP', 'INSTAGRAM_DIRECT'].filter((c) => tipo.includes(c));
+  if (tipo.startsWith('MESSAGING_') && canais.length > 1) return 'mensagens';
+  return null;
 }
 
 /**

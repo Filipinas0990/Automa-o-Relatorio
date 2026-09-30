@@ -1,5 +1,5 @@
 import { metaReq } from '../meta/client';
-import { uploadImagem, criarAdCreative } from '../meta/criativo';
+import { uploadImagem, criarAdCreative, destinoDoConjunto, type DestinoCriativo } from '../meta/criativo';
 import { criarCampanhaCompleta, criarAnuncios } from '../meta/campanha';
 import { duplicarConjunto, atualizarConjunto, recriarConjunto } from '../meta/gerenciador';
 import { gerarCopyPadrao } from './copy-ia';
@@ -121,7 +121,7 @@ async function subirCriativos(
   pageId:       string | null,
   itens:        ItemCriativo[],
   copy:         Copy,
-  usarWhatsapp: boolean,
+  destino:      DestinoCriativo,
   avisos:       string[],
   instagramId?: string | null,
 ): Promise<Array<{ creativeId: string; rotulo: string }>> {
@@ -149,7 +149,8 @@ async function subirCriativos(
       const tituloItem    = item.titulo?.trim()         || copy.titulo;
       const descricaoItem = item.descricao?.trim()      || copy.descricao;
       const creative = await criarAdCreative(token, hash, textoItem, linkDestino, {
-        titulo: tituloItem, descricao: descricaoItem, whatsapp: usarWhatsapp,
+        titulo: tituloItem, descricao: descricaoItem,
+        whatsapp: destino === 'whatsapp', mensagens: destino === 'mensagens',
         instagramActorId: instagramId,
       });
       criativos.push({ creativeId: creative.id, rotulo: item.nome });
@@ -164,6 +165,25 @@ async function subirCriativos(
     avisos.push('Nenhum criativo pôde ser enviado ao Meta.');
   }
   return criativos;
+}
+
+/**
+ * Destino dos criativos que vão para um conjunto existente (ou cópia dele,
+ * que herda o mesmo destino). Pergunta ao Meta; se a leitura falhar, fica com
+ * o que o front informou, que era o comportamento de antes.
+ */
+async function resolverDestino(
+  accessToken:     string,
+  conjuntoId:      string,
+  destinoWhatsapp: boolean | undefined,
+): Promise<DestinoCriativo> {
+  try {
+    const destino = await destinoDoConjunto(accessToken, conjuntoId);
+    if (destino) return destino;
+  } catch (e) {
+    logger.warn({ err: (e as Error).message, conjuntoId }, 'Não consegui ler o destino do conjunto');
+  }
+  return destinoWhatsapp ? 'whatsapp' : 'pagina';
 }
 
 /** Monta a copy final: usa a do gestor e completa o que faltar com o template. */
@@ -232,7 +252,7 @@ export async function publicarCampanha(input: PublicarCampanhaInput): Promise<{
 
   // ── 2) Criativos: sobe TODOS os PNGs, um AdCreative por imagem ──────────────
   const criativosMeta = await subirCriativos(
-    token, pageId, input.criativos.itens, copy, usarWhatsapp, avisos,
+    token, pageId, input.criativos.itens, copy, usarWhatsapp ? 'whatsapp' : 'pagina', avisos,
     input.pagina?.instagramId,
   );
 
@@ -313,7 +333,8 @@ export async function publicarAnunciosNoConjunto(input: AnunciosNoConjuntoInput)
     input.conta.cliente ?? input.conta.nome,
   );
   const criativosMeta = await subirCriativos(
-    token, pageId, input.criativos.itens, copy, !!input.destinoWhatsapp, avisos,
+    token, pageId, input.criativos.itens, copy,
+    await resolverDestino(accessToken, input.conjuntoId, input.destinoWhatsapp), avisos,
     input.pagina?.instagramId,
   );
 
@@ -427,7 +448,8 @@ export async function publicarNovosAnuncios(input: NovosAnunciosInput): Promise<
     input.conta.cliente ?? input.conta.nome,
   );
   const criativosMeta = await subirCriativos(
-    token, pageId, input.criativos.itens, copy, !!input.destinoWhatsapp, avisos,
+    token, pageId, input.criativos.itens, copy,
+    await resolverDestino(accessToken, input.conjuntoId, input.destinoWhatsapp), avisos,
     input.pagina?.instagramId,
   );
 

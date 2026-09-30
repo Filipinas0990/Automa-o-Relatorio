@@ -128,6 +128,11 @@ function semPlacements(targeting: Record<string, unknown>): Record<string, unkno
   return limpo;
 }
 
+/** Data de hoje no fuso de Brasília, em YYYY-MM-DD (o formato das datas do wizard). */
+function hojeSaoPaulo(): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
+}
+
 /**
  * Atualiza um conjunto existente. O targeting é MESCLADO com o atual — o Meta
  * substitui o objeto inteiro, então enviar só idade/gênero apagaria a
@@ -148,7 +153,12 @@ export async function atualizarConjunto(
 
   if (dados.nome)                    body.name         = dados.nome.slice(0, 100);
   if (dados.orcamentoDiarioCentavos) body.daily_budget = dados.orcamentoDiarioCentavos;
-  if (dados.dataInicio)              body.start_time   = `${dados.dataInicio}T00:00:00-0300`;
+  // Só manda o início se ele ainda não passou: a cópia herda a data do original,
+  // e o Meta recusa a atualização INTEIRA (público e orçamento juntos) com "o
+  // horário de início não poderá ser editado se o conjunto já tiver sido iniciado".
+  if (dados.dataInicio && dados.dataInicio >= hojeSaoPaulo()) {
+    body.start_time = `${dados.dataInicio}T00:00:00-0300`;
+  }
   if (dados.dataFim)                 body.end_time     = `${dados.dataFim}T23:59:59-0300`;
 
   if (dados.publico) {
