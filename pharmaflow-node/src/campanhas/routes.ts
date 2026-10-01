@@ -8,6 +8,7 @@ import { uploadImagem } from '../meta/criativo';
 import { listarPaginasDaConta } from '../meta/paginas';
 import type { MetaToken } from '../meta/types';
 import { logger } from '../logger';
+import { iniciarPublicacao, consultarPublicacao, type Resposta } from './publicacoes';
 
 /** Normaliza "123" ou "act_123" para o formato que a Graph API espera. */
 const normalizarConta = (id: string): string => (id.startsWith('act_') ? id : `act_${id}`);
@@ -39,6 +40,34 @@ function responderErroMeta(reply: FastifyReply, err: unknown, contexto: string) 
     return reply.code(502).send({ detail: 'Token do Meta expirado ou inválido. Gere um novo e atualize o servidor.' });
   }
   return reply.code(502).send({ detail: `${contexto}: ${msg}` });
+}
+
+/** O mesmo que `responderErroMeta`, mas devolvendo a resposta em vez de enviar. */
+function erroMeta(err: unknown, contexto: string): Resposta {
+  const msg = (err as Error).message;
+  logger.error({ err: msg }, contexto);
+  if (msg === 'META_TOKEN_EXPIRADO') {
+    return { codigo: 502, corpo: { detail: 'Token do Meta expirado ou inválido. Gere um novo e atualize o servidor.' } };
+  }
+  return { codigo: 502, corpo: { detail: `${contexto}: ${msg}` } };
+}
+
+/**
+ * Publicação no Meta: com `?assincrono=1` responde 202 na hora e roda em
+ * segundo plano (ver publicacoes.ts — o proxy da Vercel corta em ~25 s); sem
+ * ele, espera e responde como sempre.
+ */
+async function responderPublicacao(
+  req:      FastifyRequest,
+  reply:    FastifyReply,
+  executar: () => Promise<Resposta>,
+) {
+  const query = req.query as { assincrono?: string; publicacao?: string } | undefined;
+  if (query?.assincrono === '1') {
+    return reply.code(202).send({ publicacaoId: iniciarPublicacao(executar, query.publicacao) });
+  }
+  const r = await executar();
+  return reply.code(r.codigo).send(r.corpo);
 }
 
 type Middleware = (req: FastifyRequest, reply: FastifyReply) => Promise<void>;
@@ -139,20 +168,17 @@ export async function campanhasRoutes(
         return reply.code(400).send({ detail: erroOrc });
       }
 
-      try {
-        const r = await publicarCampanha(body);
-        logger.info({ campanhaId: r.campanhaId, conta: body.conta.id }, 'Campanha criada via wizard');
-        return reply.code(201).send(r);
-      } catch (err) {
-        const msg = (err as Error).message;
-        logger.error({ err: msg }, 'Falha ao publicar campanha');
-        // 502 (não 401): problema é o token do META, não a sessão do usuário.
-        // 401 faria o frontend deslogar o gestor indevidamente.
-        if (msg === 'META_TOKEN_EXPIRADO') {
-          return reply.code(502).send({ detail: 'Token do Meta expirado ou inválido. Gere um novo e atualize o servidor.' });
+      return responderPublicacao(req, reply, async () => {
+        try {
+          const r = await publicarCampanha(body);
+          logger.info({ campanhaId: r.campanhaId, conta: body.conta.id }, 'Campanha criada via wizard');
+          return { codigo: 201, corpo: r };
+        } catch (err) {
+          // 502 (não 401): problema é o token do META, não a sessão do usuário.
+          // 401 faria o frontend deslogar o gestor indevidamente.
+          return erroMeta(err, 'Erro ao criar campanha no Meta');
         }
-        return reply.code(502).send({ detail: `Erro ao criar campanha no Meta: ${msg}` });
-      }
+      });
     },
   );
 
@@ -177,13 +203,16 @@ export async function campanhasRoutes(
         return reply.code(400).send({ detail: 'Nenhum criativo foi enviado.' });
       }
 
-      try {
-        const r = await publicarNovosAnuncios({ ...body, conjuntoId: req.params.conjuntoId });
-        logger.info({ conjuntoId: r.conjuntoId, anuncios: r.anuncioIds.length }, 'Novos anúncios publicados');
-        return reply.code(201).send(r);
-      } catch (err) {
-        return responderErroMeta(reply, err, 'Erro ao subir os novos anúncios');
-      }
+      const conjuntoId = req.params.conjuntoId;
+      return responderPublicacao(req, reply, async () => {
+        try {
+          const r = await publicarNovosAnuncios({ ...body, conjuntoId });
+          logger.info({ conjuntoId: r.conjuntoId, anuncios: r.anuncioIds.length }, 'Novos anúncios publicados');
+          return { codigo: 201, corpo: r };
+        } catch (err) {
+          return erroMeta(err, 'Erro ao subir os novos anúncios');
+        }
+      });
     },
   );
 
@@ -203,13 +232,32 @@ export async function campanhasRoutes(
         return reply.code(400).send({ detail: 'Nenhum criativo foi enviado.' });
       }
 
-      try {
-        const r = await publicarAnunciosNoConjunto({ ...body, conjuntoId: req.params.conjuntoId });
-        logger.info({ conjuntoId: r.conjuntoId, anuncios: r.anuncioIds.length }, 'Anúncios adicionados ao conjunto');
-        return reply.code(201).send(r);
-      } catch (err) {
-        return responderErroMeta(reply, err, 'Erro ao adicionar os anúncios ao conjunto');
-      }
+      const conjuntoId = req.params.conjuntoId;
+      return responderPublicacao(req, reply, async () => {
+        try {
+          const r = await publicarAnunciosNoConjunto({ ...body, conjuntoId });
+          logger.info({ conjuntoId: r.conjuntoId, anuncios: r.anuncioIds.length }, 'Anúncios adicionados ao conjunto');
+          return { codigo: 201, corpo: r };
+        } catch (err) {
+          return erroMeta(err, 'Erro ao adicionar os anúncios ao conjunto');
+        }
+      });
+    },
+  );
+
+  /**
+   * GET /api/campanhas/publicacoes/:id
+   * Andamento de uma publicação iniciada com `?assincrono=1`.
+   * 404 = id desconhecido (o servidor reiniciou ou passou de 1 h).
+   */
+  app.get<{ Params: { id: string } }>(
+    '/api/campanhas/publicacoes/:id',
+    { preHandler: [autenticar] },
+    async (req, reply) => {
+      const pub = consultarPublicacao(req.params.id);
+      if (!pub) return reply.code(404).send({ detail: 'Publicação não encontrada.' });
+      if (pub.status === 'rodando') return reply.send({ status: 'rodando' });
+      return reply.send({ status: 'concluida', codigo: pub.resposta!.codigo, corpo: pub.resposta!.corpo });
     },
   );
 

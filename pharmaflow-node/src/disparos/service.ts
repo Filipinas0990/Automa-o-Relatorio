@@ -66,6 +66,15 @@ export interface OpcoesListagem {
 /** Depois disso o cache é servido, mas já pede refresh em background. */
 const TTL_GRUPOS_MS = 15 * 60 * 1000;
 
+/**
+ * Quanto o request espera um sync antes de responder com o que tem. O proxy
+ * da Vercel derruba resposta que passa de ~25s, e o fetchAllGroups de uma
+ * conta com ~200 grupos leva quase 1 min (conexão "bruuno", 01/10): esperar
+ * até o fim fazia a tela mostrar "Erro no servidor" mesmo com o sync dando
+ * certo por trás.
+ */
+const ESPERA_MAX_SYNC_MS = 20 * 1000;
+
 /** Sugestões iniciais de horário — o gestor edita a lista depois. */
 export const HORARIOS_PADRAO = ['08:00', '09:00', '12:00', '15:00', '18:00'];
 
@@ -493,7 +502,9 @@ export const disparosService = {
    *
    * O fetchAllGroups da Evolution leva dezenas de segundos numa conta com
    * muitos grupos, então só esperamos por ele quando não há alternativa:
-   *   • cache ausente (primeira vez nesta conexão) ou `forcar` → sincroniza e espera;
+   *   • cache ausente (primeira vez nesta conexão) ou `forcar` → sincroniza e
+   *     espera até ESPERA_MAX_SYNC_MS; passou disso, devolve o cache que houver
+   *     com `sincronizando: true` e o sync termina em background;
    *   • cache velho  → devolve o que tem AGORA e atualiza em background;
    *   • cache fresco → devolve direto.
    */
@@ -504,8 +515,32 @@ export const disparosService = {
     const sync = await disparosRepository.getSyncGrupos(instanceName);
 
     if (!sync || opts?.forcar) {
-      const { grupos, atualizadoEm } = await sincronizarGrupos(instanceName);
-      return { grupos, atualizadoEm, sincronizando: false, aviso: null };
+      const emVoo = sincronizarGrupos(instanceName);
+      let timer: NodeJS.Timeout | undefined;
+      const estourou = new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), ESPERA_MAX_SYNC_MS);
+      });
+      try {
+        const pronto = await Promise.race([emVoo, estourou]);
+        if (pronto) {
+          return { grupos: pronto.grupos, atualizadoEm: pronto.atualizadoEm, sincronizando: false, aviso: null };
+        }
+      } finally {
+        clearTimeout(timer);
+      }
+      // Demorou: o sync segue sozinho (e grava o cache quando terminar).
+      emVoo.catch((err) => {
+        logger.warn({ err, instanceName }, 'Sync de grupos em background falhou');
+      });
+      const cache = await disparosRepository.listarGruposCache(instanceName);
+      return {
+        grupos: cache
+          .map((g) => ({ jid: g.jid, nome: g.nome, participantes: g.participantes }))
+          .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR')),
+        atualizadoEm:  sync?.sincronizadoEm ?? null,
+        sincronizando: true,
+        aviso:         null,
+      };
     }
 
     const cache = await disparosRepository.listarGruposCache(instanceName);
