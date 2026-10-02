@@ -2,6 +2,9 @@
 
 const GRAPH_URL = 'https://graph.facebook.com/v20.0';
 
+export const ERRO_ANUNCIANTE_VERIFICADO =
+  'Esta conta exige anunciante verificado para criar conjuntos novos, e o Meta só permite informá-lo pelo Gerenciador de Anúncios.';
+
 export async function metaReq<T = unknown>(
   method:      string,
   path:        string,
@@ -38,6 +41,14 @@ export async function metaReq<T = unknown>(
 
   if (json.error) {
     if (json.error.code === 190) throw new Error('META_TOKEN_EXPIRADO');
+    // Conta com verificação de anunciante: conjunto NOVO exige o id do
+    // anunciante verificado (regional_regulation_identities), e o Meta não tem
+    // endpoint público para obtê-lo — só o Gerenciador tem. Não há o que mandar
+    // diferente daqui; o gestor precisa saber o caminho que funciona.
+    if (json.error.error_subcode === 3858634) {
+      console.error('[Meta API]', JSON.stringify({ path, error: json.error }));
+      throw new Error(ERRO_ANUNCIANTE_VERIFICADO);
+    }
     const detail = json.error.error_user_msg ?? json.error.error_user_title ?? '';
     const msg = `Meta API error [${json.error.code}]: ${json.error.message}${detail ? ` — ${detail}` : ''}`;
     // Log completo para debug

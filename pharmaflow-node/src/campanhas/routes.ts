@@ -194,7 +194,10 @@ export async function campanhasRoutes(
     async (req, reply) => {
       const body = req.body;
       if (!body?.conta?.id) return reply.code(400).send({ detail: 'Conta de anúncios não informada.' });
-      const erroOrc = erroOrcamento(body?.orcamento?.diarioCentavos);
+      // Campanha CBO manda `diarioCentavos: null`: o orçamento é o da campanha e
+      // não é alterado, então não há teto a checar — nenhum gasto novo é definido.
+      const centavos = body?.orcamento?.diarioCentavos;
+      const erroOrc = centavos === null ? null : erroOrcamento(centavos);
       if (erroOrc) {
         logger.warn({ conta: body?.conta?.id, centavos: body?.orcamento?.diarioCentavos }, erroOrc);
         return reply.code(400).send({ detail: erroOrc });

@@ -1,4 +1,4 @@
-import { metaReq } from '../meta/client';
+import { metaReq, ERRO_ANUNCIANTE_VERIFICADO } from '../meta/client';
 import { uploadImagem, criarAdCreative, destinoDoConjunto, type DestinoCriativo } from '../meta/criativo';
 import { criarCampanhaCompleta, criarAnuncios } from '../meta/campanha';
 import { duplicarConjunto, atualizarConjunto, recriarConjunto } from '../meta/gerenciador';
@@ -292,7 +292,8 @@ export interface NovosAnunciosInput {
   nomeConjunto?: string;              // nome da cópia
   destinoWhatsapp?: boolean;          // herdado do conjunto de origem
   publico:    { genero: 'todos' | 'homens' | 'mulheres'; idadeMin: number; idadeMax: number };
-  orcamento:  { diarioCentavos: number; dataInicio: string; dataFim: string | null };
+  /** `diarioCentavos` null = campanha CBO: o orçamento é o da campanha, não se mexe. */
+  orcamento:  { diarioCentavos: number | null; dataInicio: string; dataFim: string | null };
   criativos:  { itens: ItemCriativo[]; copy: { textoPrincipal?: string; titulo?: string; descricao?: string } };
   ativar?:    boolean;                // false = cópia nasce pausada
 }
@@ -401,14 +402,31 @@ export async function publicarNovosAnuncios(input: NovosAnunciosInput): Promise<
     // com os mesmos campos contorna isso — e não custa histórico, porque cópia
     // do Meta também nasce em aprendizado novo.
     logger.warn({ err: msg, conjunto: input.conjuntoId }, 'POST /copies recusado — recriando o conjunto do zero');
-    const novo = await recriarConjunto(accessToken, adAccountId, input.conjuntoId, {
-      status,
-      sufixo:                  SUFIXO,
-      orcamentoDiarioCentavos: input.orcamento.diarioCentavos,
-      dataInicio:              input.orcamento.dataInicio,
-      dataFim:                 input.orcamento.dataFim,
-      publico:                 input.publico,
-    });
+    let novo: Awaited<ReturnType<typeof recriarConjunto>>;
+    try {
+      novo = await recriarConjunto(accessToken, adAccountId, input.conjuntoId, {
+        status,
+        sufixo:                  SUFIXO,
+        orcamentoDiarioCentavos: input.orcamento.diarioCentavos ?? undefined,
+        dataInicio:              input.orcamento.dataInicio,
+        dataFim:                 input.orcamento.dataFim,
+        publico:                 input.publico,
+      });
+    } catch (e2) {
+      // Beco sem saída do Meta (medido em 02/10/2026): a cópia é recusada pela
+      // janela de atribuição antiga — que não pode mais ser editada depois de
+      // criado o conjunto — e o conjunto novo exige anunciante verificado, que
+      // só o Gerenciador informa. Colocar anúncios no conjunto existente funciona.
+      if ((e2 as Error).message === ERRO_ANUNCIANTE_VERIFICADO) {
+        throw new Error(
+          'Este conjunto não pode ser duplicado pelo app. O Meta recusa a cópia por causa da janela de atribuição antiga '
+          + 'do conjunto (que não pode mais ser alterada) e, nesta conta, conjunto novo exige anunciante verificado, que só '
+          + 'o Gerenciador informa. Use "Novos anúncios" para colocar os criativos neste conjunto, ou duplique o conjunto '
+          + 'pelo Gerenciador de Anúncios. Nada foi publicado.',
+        );
+      }
+      throw e2;
+    }
     novoConjuntoId = novo.conjuntoId;
     configAplicada = true;
     conjuntoRecriado = true;
@@ -428,7 +446,7 @@ export async function publicarNovosAnuncios(input: NovosAnunciosInput): Promise<
       // O nome não vai aqui: o sufixo " — Novos criativos" já foi aplicado pelo
       // rename_options do /copies.
       await atualizarConjunto(accessToken, novoConjuntoId, {
-        orcamentoDiarioCentavos: input.orcamento.diarioCentavos,
+        orcamentoDiarioCentavos: input.orcamento.diarioCentavos ?? undefined,
         dataInicio:              input.orcamento.dataInicio,
         dataFim:                 input.orcamento.dataFim,
         publico:                 input.publico,

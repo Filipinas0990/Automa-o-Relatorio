@@ -27,7 +27,18 @@ export interface ConjuntoMeta {
   campanhaNome:    string;
   status:          string;   // rótulo legível
   ativa:           boolean;
-  orcamentoDiario: number;   // em reais (o Meta devolve centavos como string)
+  orcamentoDiario: number;   // em reais (o Meta devolve centavos como string); 0 em campanha CBO
+  /**
+   * Campanha com orçamento de CAMPANHA (CBO / Advantage+ campaign budget): o
+   * conjunto não tem orçamento próprio, e mandar `daily_budget` para ele é
+   * recusado pelo Meta. O orçamento que vale é o da campanha, dividido entre
+   * os conjuntos dela.
+   */
+  cbo:               boolean;
+  /** Orçamento diário da campanha, em reais (só em CBO; 0 se o dela for vitalício). */
+  orcamentoCampanha: number;
+  /** Orçamento TOTAL da campanha, em reais (CBO com orçamento vitalício). */
+  orcamentoCampanhaTotal: number;
   otimizacao:      string;
   idadeMin:        number | null;
   idadeMax:        number | null;
@@ -62,14 +73,14 @@ export async function listarConjuntosDaConta(
   adAccountId: string,
 ): Promise<ConjuntoMeta[]> {
   const FIELDS = 'name,effective_status,daily_budget,optimization_goal,targeting,'
-    + 'destination_type,start_time,end_time,campaign{name}';
+    + 'destination_type,start_time,end_time,campaign{name,daily_budget,lifetime_budget}';
   const res = await metaReq<{
     data?: Array<{
       id: string; name?: string; effective_status?: string;
       daily_budget?: string; optimization_goal?: string; destination_type?: string;
       start_time?: string; end_time?: string;
       targeting?: { age_min?: number; age_max?: number; genders?: number[] };
-      campaign?: { id?: string; name?: string };
+      campaign?: { id?: string; name?: string; daily_budget?: string; lifetime_budget?: string };
     }>;
   }>('GET', `/${adAccountId}/adsets?fields=${FIELDS}&limit=100`, accessToken);
 
@@ -86,6 +97,10 @@ export async function listarConjuntosDaConta(
         ativa:           a.effective_status === 'ACTIVE',
         // A Graph API devolve daily_budget em centavos, como string.
         orcamentoDiario: Number(a.daily_budget ?? 0) / 100,
+        // Orçamento na campanha = CBO. Os dois lados nunca têm orçamento ao mesmo tempo.
+        cbo:               Number(a.campaign?.daily_budget ?? 0) > 0 || Number(a.campaign?.lifetime_budget ?? 0) > 0,
+        orcamentoCampanha:      Number(a.campaign?.daily_budget ?? 0) / 100,
+        orcamentoCampanhaTotal: Number(a.campaign?.lifetime_budget ?? 0) / 100,
         otimizacao:      a.optimization_goal ?? '',
         idadeMin:        a.targeting?.age_min ?? null,
         idadeMax:        a.targeting?.age_max ?? null,
@@ -152,7 +167,7 @@ export async function atualizarConjunto(
   const body: Record<string, unknown> = {};
 
   if (dados.nome)                    body.name         = dados.nome.slice(0, 100);
-  if (dados.orcamentoDiarioCentavos) body.daily_budget = dados.orcamentoDiarioCentavos;
+  // Orçamento só vai se o conjunto TEM orçamento próprio — ver mais abaixo.
   // Só manda o início se ele ainda não passou: a cópia herda a data do original,
   // e o Meta recusa a atualização INTEIRA (público e orçamento juntos) com "o
   // horário de início não poderá ser editado se o conjunto já tiver sido iniciado".
@@ -161,10 +176,21 @@ export async function atualizarConjunto(
   }
   if (dados.dataFim)                 body.end_time     = `${dados.dataFim}T23:59:59-0300`;
 
+  const precisaLer = !!dados.publico || !!dados.orcamentoDiarioCentavos;
+  const atual = precisaLer
+    ? await metaReq<{ targeting?: Record<string, unknown>; daily_budget?: string }>(
+        'GET', `/${conjuntoId}?fields=targeting,daily_budget`, accessToken,
+      )
+    : {};
+
+  // Em campanha CBO o conjunto não tem daily_budget, e mandar um faz o Meta
+  // recusar a atualização INTEIRA — o público revisado se perdia junto. O
+  // orçamento ali é o da campanha; aqui só se ignora.
+  if (dados.orcamentoDiarioCentavos && atual.daily_budget) {
+    body.daily_budget = dados.orcamentoDiarioCentavos;
+  }
+
   if (dados.publico) {
-    const atual = await metaReq<{ targeting?: Record<string, unknown> }>(
-      'GET', `/${conjuntoId}?fields=targeting`, accessToken,
-    );
     const GENEROS_META: Record<string, number[]> = {
       todos: [1, 2], homens: [1], mulheres: [2],
     };
