@@ -1,6 +1,6 @@
 import { metaReq, ERRO_ANUNCIANTE_VERIFICADO } from '../meta/client';
 import { uploadImagem, criarAdCreative, destinoDoConjunto, type DestinoCriativo } from '../meta/criativo';
-import { criarCampanhaCompleta, criarAnuncios } from '../meta/campanha';
+import { criarCampanhaCompleta, criarAnuncios, dataDeInicioDoAnuncio, proximoNumeroDeAnuncio } from '../meta/campanha';
 import { duplicarConjunto, atualizarConjunto, recriarConjunto } from '../meta/gerenciador';
 import { gerarCopyPadrao } from './copy-ia';
 import { logger } from '../logger';
@@ -341,9 +341,9 @@ export async function publicarAnunciosNoConjunto(input: AnunciosNoConjuntoInput)
     input.pagina?.instagramId,
   );
 
-  const nomeBase = (input.nomeConjunto?.trim() || 'Novos criativos').slice(0, 80);
   const anuncioIds = criativosMeta.length
-    ? await criarAnuncios(token, input.conjuntoId, nomeBase, criativosMeta, 'ACTIVE')
+    ? await criarAnuncios(token, input.conjuntoId, criativosMeta, 'ACTIVE', dataDeInicioDoAnuncio(),
+        await proximoNumeroDeAnuncio(token, input.conjuntoId).catch(() => 1))
     : [];
 
   if (!anuncioIds.length) avisos.push('Nenhum anúncio foi criado no conjunto.');
@@ -482,9 +482,8 @@ export async function publicarNovosAnuncios(input: NovosAnunciosInput): Promise<
     input.pagina?.instagramId,
   );
 
-  const nomeBase = (input.nomeConjunto?.trim() || 'Novos criativos').slice(0, 80);
   const anuncioIds = criativosMeta.length
-    ? await criarAnuncios(token, novoConjuntoId, nomeBase, criativosMeta, status)
+    ? await criarAnuncios(token, novoConjuntoId, criativosMeta, status, dataDeInicioDoAnuncio(input.orcamento.dataInicio))
     : [];
 
   if (!anuncioIds.length) {

@@ -85,24 +85,60 @@ function montarPlacements(
   };
 }
 
+/** Hoje em Brasília, YYYY-MM-DD. */
+function hojeSaoPaulo(): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
+}
+
 /**
- * Cria os anúncios de um conjunto — um por criativo. Com mais de um, o rótulo
- * vai numerado, porque no Ads Manager o gestor precisa distinguir os anúncios
- * entre si para comparar performance.
+ * Data em que o anúncio começa a rodar, em D/M sem zero à esquerda ("2/10",
+ * "15/9") — padrão de nome da agência: o início do conjunto,
+ * ou hoje se esse início já passou (anúncio novo em conjunto que já roda
+ * começa no dia em que é publicado).
+ */
+export function dataDeInicioDoAnuncio(dataInicio?: string | null): string {
+  const hoje = hojeSaoPaulo();
+  const data = dataInicio && dataInicio > hoje ? dataInicio : hoje;
+  const [, m, d] = data.slice(0, 10).split('-');
+  return `${Number(d)}/${Number(m)}`;
+}
+
+/**
+ * Próximo número livre de AD num conjunto que já tem anúncios: com AD01..AD04
+ * lá dentro, o próximo é 5. Lê só os nomes; conjunto vazio (ou nome fora do
+ * padrão) começa no 1.
+ */
+export async function proximoNumeroDeAnuncio(token: MetaToken, conjuntoId: string): Promise<number> {
+  const r = await metaReq<{ data?: Array<{ name?: string }> }>(
+    'GET', `/${conjuntoId}/ads?fields=name&limit=500`, token.accessToken,
+  );
+  let maior = 0;
+  for (const a of r.data ?? []) {
+    const m = /^AD(\d+)\b/i.exec(a.name?.trim() ?? '');
+    if (m) maior = Math.max(maior, Number(m[1]));
+  }
+  return maior + 1;
+}
+
+/**
+ * Cria os anúncios de um conjunto — um por criativo — com o nome no padrão da
+ * agência: "AD01 - Nome do produto - 2/10" (data em que começa a rodar).
+ * `numeroInicial` > 1 quando o conjunto já tem anúncios (ver proximoNumeroDeAnuncio).
  */
 export async function criarAnuncios(
-  token:      MetaToken,
-  conjuntoId: string,
-  nomeBase:   string,
-  criativos:  Array<{ creativeId: string; rotulo: string }>,
-  status:     'ACTIVE' | 'PAUSED',
+  token:         MetaToken,
+  conjuntoId:    string,
+  criativos:     Array<{ creativeId: string; rotulo: string }>,
+  status:        'ACTIVE' | 'PAUSED',
+  dataInicio:    string,
+  numeroInicial = 1,
 ): Promise<string[]> {
   const ids: string[] = [];
   for (const [i, c] of criativos.entries()) {
-    const nome = (criativos.length > 1
-      ? `${nomeBase} — ${i + 1}. ${c.rotulo}`
-      : `${nomeBase} — ${c.rotulo}`
-    ).slice(0, 100);
+    const numero = String(numeroInicial + i).padStart(2, '0');
+    // Corta o produto, e não a data, quando passa do limite de 100 do Meta.
+    const sufixo = ` - ${dataInicio}`;
+    const nome = `AD${numero} - ${c.rotulo.trim()}`.slice(0, 100 - sufixo.length) + sufixo;
 
     const anuncio = await metaReq<{ id: string }>(
       'POST',
@@ -213,7 +249,7 @@ export async function criarCampanhaCompleta(
       ? [{ creativeId: imagemHash, rotulo: 'Anúncio' }]
       : [];
 
-  const anuncioIds = await criarAnuncios(token, conjunto.id, nome, criativos, status);
+  const anuncioIds = await criarAnuncios(token, conjunto.id, criativos, status, dataDeInicioDoAnuncio(dataInicio));
 
   return {
     campanhaId:      campanha.id,
