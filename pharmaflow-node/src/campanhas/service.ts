@@ -289,7 +289,9 @@ export interface NovosAnunciosInput {
   /** Página escolhida na etapa 1 (com o Instagram dela). Ver PublicarCampanhaInput. */
   pagina?:    { id: string; nome?: string; instagramId?: string | null } | null;
   conjuntoId: string;                 // conjunto de origem, que fica INTACTO
-  nomeConjunto?: string;              // nome da cópia
+  nomeConjunto?: string;              // nome do conjunto de ORIGEM (base do nome dos anúncios)
+  /** Nome que o gestor deu ao conjunto novo. Vazio = "<original> — Novos criativos". */
+  nomeNovoConjunto?: string;
   destinoWhatsapp?: boolean;          // herdado do conjunto de origem
   publico:    { genero: 'todos' | 'homens' | 'mulheres'; idadeMin: number; idadeMax: number };
   /** `diarioCentavos` null = campanha CBO: o orçamento é o da campanha, não se mexe. */
@@ -382,6 +384,9 @@ export async function publicarNovosAnuncios(input: NovosAnunciosInput): Promise<
   const status: 'ACTIVE' | 'PAUSED' = input.ativar ? 'ACTIVE' : 'PAUSED';
 
   const SUFIXO = ' — Novos criativos';
+  // Nome escolhido pelo gestor. O /copies só sabe acrescentar sufixo, então
+  // ele é aplicado depois (passo 2); na recriação já nasce com ele.
+  const nomeNovo = input.nomeNovoConjunto?.trim().slice(0, 100) || undefined;
 
   // 1) Cópia SEM os anúncios antigos — só queremos a configuração herdada.
   let novoConjuntoId: string;
@@ -407,6 +412,7 @@ export async function publicarNovosAnuncios(input: NovosAnunciosInput): Promise<
       novo = await recriarConjunto(accessToken, adAccountId, input.conjuntoId, {
         status,
         sufixo:                  SUFIXO,
+        nome:                    nomeNovo,
         orcamentoDiarioCentavos: input.orcamento.diarioCentavos ?? undefined,
         dataInicio:              input.orcamento.dataInicio,
         dataFim:                 input.orcamento.dataFim,
@@ -443,9 +449,8 @@ export async function publicarNovosAnuncios(input: NovosAnunciosInput): Promise<
   // 2) Aplica o que o gestor revisou na etapa de público/orçamento.
   if (!configAplicada) {
     try {
-      // O nome não vai aqui: o sufixo " — Novos criativos" já foi aplicado pelo
-      // rename_options do /copies.
       await atualizarConjunto(accessToken, novoConjuntoId, {
+        nome:                    nomeNovo,
         orcamentoDiarioCentavos: input.orcamento.diarioCentavos ?? undefined,
         dataInicio:              input.orcamento.dataInicio,
         dataFim:                 input.orcamento.dataFim,
@@ -456,6 +461,12 @@ export async function publicarNovosAnuncios(input: NovosAnunciosInput): Promise<
       const msg = (e as Error).message;
       logger.warn({ err: msg, conjunto: novoConjuntoId }, 'Falha ao aplicar configs na cópia');
       avisos.push(`As configurações revisadas não puderam ser aplicadas (${msg}). A cópia ficou com a configuração do conjunto original.`);
+      // O nome não depende do resto: tenta sozinho, para não perder o que o gestor digitou.
+      if (nomeNovo) {
+        await atualizarConjunto(accessToken, novoConjuntoId, { nome: nomeNovo }).catch((e2) => {
+          avisos.push(`O nome "${nomeNovo}" não pôde ser aplicado (${(e2 as Error).message}); renomeie no Gerenciador.`);
+        });
+      }
     }
   }
 

@@ -210,6 +210,8 @@ export interface RecriarConjuntoOpcoes {
   status:                   'ACTIVE' | 'PAUSED';
   /** Sufixo no nome, para diferenciar do original no Ads Manager. */
   sufixo?:                  string;
+  /** Nome completo do conjunto novo; tem prioridade sobre `sufixo`. */
+  nome?:                    string;
   orcamentoDiarioCentavos?: number;
   dataInicio?:              string;
   dataFim?:                 string | null;
@@ -262,7 +264,7 @@ export async function recriarConjunto(
   const targetingFiel = normalizarTargeting(targeting);
 
   const body: Record<string, unknown> = {
-    name:              `${origem.name ?? 'Conjunto'}${opcoes.sufixo ?? ''}`.slice(0, 100),
+    name:              (opcoes.nome || `${origem.name ?? 'Conjunto'}${opcoes.sufixo ?? ''}`).slice(0, 100),
     campaign_id:       origem.campaign_id,
     optimization_goal: origem.optimization_goal,
     billing_event:     origem.billing_event,

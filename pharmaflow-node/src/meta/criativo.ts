@@ -80,8 +80,12 @@ export async function criarAdCreative(
   // Omitido quando a página não tem Instagram vinculado: mandar o campo vazio
   // faz a Meta recusar o criativo inteiro, e sem ele o anúncio ao menos roda
   // nos posicionamentos do Facebook.
+  //
+  // O campo é `instagram_user_id`: o Meta aposentou o `instagram_actor_id` e
+  // passou a recusá-lo com "must be a valid Instagram account id" mesmo com o
+  // id certo (02/10/2026 — os anúncios do Gerenciador já vêm com o novo).
   if (extras?.instagramActorId) {
-    object_story_spec.instagram_actor_id = extras.instagramActorId;
+    object_story_spec.instagram_user_id = extras.instagramActorId;
   }
 
   // Formato copiado de um anúncio que roda num conjunto desses (criado pelo
