@@ -59,6 +59,17 @@ export async function metaReq<T = unknown>(
         + `precisa abrir ${linkTermos}, aceitar os termos e depois publicar de novo.`,
       );
     }
+    // Página com WhatsApp PESSOAL ligado: anúncio para WhatsApp exige número do
+    // WhatsApp Business. O conjunto não guarda número — usa o da página —, então
+    // só se resolve na página (Configurações → Contas vinculadas → WhatsApp).
+    if (json.error.error_subcode === 2446885) {
+      console.error('[Meta API]', JSON.stringify({ path, error: json.error }));
+      throw new Error(
+        'O WhatsApp ligado à página deste cliente é uma conta pessoal, e o Meta só aceita anúncio para WhatsApp Business. '
+        + 'Na página do Facebook, vá em Configurações → Contas vinculadas → WhatsApp e conecte um número do WhatsApp Business '
+        + '(pode ser o mesmo número, migrado para o app WhatsApp Business). Depois publique de novo.',
+      );
+    }
     if (json.error.error_subcode === 3858634) {
       console.error('[Meta API]', JSON.stringify({ path, error: json.error }));
       throw new Error(ERRO_ANUNCIANTE_VERIFICADO);
