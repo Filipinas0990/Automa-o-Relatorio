@@ -14,7 +14,7 @@ import {
   disparosGrupo, disparosGrupoLog, gestorWhatsapp,
 } from '../src/database/schema';
 
-const JWT_SECRET = process.env.JWT_SECRET_KEY || 'segredo-de-teste';
+const JWT_SECRET = process.env.JWT_SECRET_KEY || 'segredo-de-teste-com-pelo-menos-32-caracteres';
 
 /** Token igual ao que o /api/auth/login emite (mesmo payload e segredo). */
 export function tokenDe(gestorId: number, nome = 'Teste', isAdmin = false): string {

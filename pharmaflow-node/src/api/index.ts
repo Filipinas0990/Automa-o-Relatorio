@@ -3,7 +3,6 @@ import Fastify, { FastifyRequest, FastifyReply } from 'fastify';
 import cors     from '@fastify/cors';
 import formbody from '@fastify/formbody';
 import bcrypt   from 'bcrypt';
-import jwt      from 'jsonwebtoken';
 import { eq, and, sql } from 'drizzle-orm';
 import { google } from 'googleapis';
 import { db } from '../database/db';
@@ -24,6 +23,12 @@ import { campanhasRoutes } from '../campanhas/routes';
 import { relatoriosRoutes } from '../relatorios/routes';
 import { disparosRoutes } from '../disparos/routes';
 import { ofertasRoutes } from '../ofertas/routes';
+import {
+  criarToken, verificarToken, tokenDoPedido, renovarSeNecessario,
+  gravarCookieSessao, apagarCookieSessao,
+  loginBloqueado, registrarFalhaLogin, limparFalhasLogin,
+  criarStateGoogle, lerStateGoogle,
+} from './sessao';
 
 // ── Module augmentation — adiciona `user` ao FastifyRequest ───────────────────
 
@@ -62,28 +67,21 @@ app.addContentTypeParser('application/json', { parseAs: 'string' }, (_req, body,
   catch (e) { done(e as Error, undefined); }
 });
 
-const JWT_SECRET   = process.env.JWT_SECRET_KEY || 'troque-no-env-do-servidor';
-const TOKEN_EXPIRE = '8h';
 const ADMIN_SECRET = process.env.ADMIN_SECRET || '';
 
-// ── JWT helpers ───────────────────────────────────────────────────────────────
-
-function criarToken(gestorId: number, nome: string, isAdmin: boolean): string {
-  return jwt.sign({ sub: String(gestorId), nome, is_admin: isAdmin }, JWT_SECRET, { expiresIn: TOKEN_EXPIRE });
-}
+// ── Sessão (JWT em cookie httpOnly — ver ./sessao.ts) ─────────────────────────
 
 async function autenticar(request: FastifyRequest, reply: FastifyReply): Promise<void> {
-  const auth  = request.headers.authorization || '';
-  const q     = request.query as Record<string, string>;
-  const token = auth.startsWith('Bearer ') ? auth.slice(7) : (q.token || null);
+  const token = tokenDoPedido(request);
   if (!token) { reply.code(401).send({ detail: 'Token não fornecido' }); return; }
   try {
-    const payload = jwt.verify(token, JWT_SECRET) as { sub: string; nome: string; is_admin: boolean };
+    const payload = verificarToken(token);
     const [gestor] = await db.select().from(gestoresTrafego).where(
       and(eq(gestoresTrafego.id, parseInt(payload.sub, 10)), eq(gestoresTrafego.ativo, true))
     );
     if (!gestor) { reply.code(401).send({ detail: 'Usuário não encontrado' }); return; }
     request.user = gestor;
+    renovarSeNecessario(request, reply, payload);
   } catch {
     reply.code(401).send({ detail: 'Token inválido ou expirado' });
   }
@@ -131,21 +129,36 @@ app.post('/api/auth/login', async (request, reply) => {
   const body     = request.body as Record<string, string>;
   const username = body.username || body.email;
   const password = body.password || body.senha;
+  if (!username || !password) return reply.code(400).send({ detail: 'Informe email e senha' });
+
+  const espera = loginBloqueado(username);
+  if (espera) {
+    return reply.code(429).header('Retry-After', String(espera)).send({
+      detail: `Muitas tentativas erradas. Tente de novo em ${Math.ceil(espera / 60)} min.`,
+    });
+  }
 
   const [gestor] = await db.select().from(gestoresTrafego).where(eq(gestoresTrafego.email, username));
   if (!gestor || !await bcrypt.compare(password, gestor.senhaHash)) {
+    registrarFalhaLogin(username);
     return reply.code(401).send({ detail: 'Email ou senha incorretos' });
   }
   if (!gestor.ativo) return reply.code(403).send({ detail: 'Usuário inativo' });
 
+  limparFalhasLogin(username);
+  // O token vai só no cookie httpOnly — fora do corpo, o JavaScript da página nunca o vê
+  gravarCookieSessao(reply, criarToken(gestor.id, gestor.nome, gestor.isAdmin));
   return {
-    access_token: criarToken(gestor.id, gestor.nome, gestor.isAdmin),
-    token_type:   'bearer',
-    id:           gestor.id,
-    nome:         gestor.nome,
-    email:        gestor.email,
-    is_admin:     gestor.isAdmin,
+    id:       gestor.id,
+    nome:     gestor.nome,
+    email:    gestor.email,
+    is_admin: gestor.isAdmin,
   };
+});
+
+app.post('/api/auth/logout', async (_request, reply) => {
+  apagarCookieSessao(reply);
+  return { mensagem: 'Sessão encerrada' };
 });
 
 app.get('/api/auth/me', { preHandler: autenticar }, async (request) => {
@@ -155,12 +168,15 @@ app.get('/api/auth/me', { preHandler: autenticar }, async (request) => {
 
 // ── Gestores CRUD ─────────────────────────────────────────────────────────────
 
-app.get('/api/gestores', { preHandler: autenticar }, async () => {
+// Admin vê todos; gestor comum vê só a si mesmo (as telas que listam gestores
+// continuam funcionando, sem expor nome e email dos colegas)
+app.get('/api/gestores', { preHandler: autenticar }, async (request) => {
+  const soEle = request.user.isAdmin ? sql`` : sql`AND g.id = ${request.user.id}`;
   const rows = await db.execute(sql`
     SELECT g.*, COUNT(f.id) FILTER (WHERE f.ativa = TRUE) AS farmacias
     FROM gestores_trafego g
     LEFT JOIN farmacias f ON f.gestor_id = g.id
-    WHERE g.ativo = TRUE
+    WHERE g.ativo = TRUE ${soEle}
     GROUP BY g.id
     ORDER BY g.nome
   `);
@@ -926,8 +942,8 @@ async function deleteGoogleEvent(gestorId: number, reuniaoId: number): Promise<v
 // ── Google OAuth — connect / callback / status / disconnect ──────────────────
 
 /** Inicia o fluxo OAuth2 — dois modos:
- *  1. GET /api/auth/google/url  (fetch com Bearer header) → retorna { url }
- *  2. GET /api/auth/google?token=JWT  (window.location.href) → redireciona direto
+ *  1. GET /api/auth/google/url  (fetch autenticado) → retorna { url }
+ *  2. GET /api/auth/google      (window.location.href, sessão pelo cookie) → redireciona direto
  */
 
 // Modo 1 — retorna a URL como JSON (frontend faz window.location.href = url)
@@ -935,7 +951,7 @@ app.get('/api/auth/google/url', { preHandler: autenticar }, async (request, repl
   if (!GOOGLE_CLIENT_ID) {
     return reply.code(503).send({ detail: 'Google Calendar não configurado no servidor.' });
   }
-  const state = Buffer.from(String(request.user.id)).toString('base64url');
+  const state = criarStateGoogle(request.user.id);
   const url   = makeOAuth2().generateAuthUrl({
     access_type: 'offline',
     prompt:      'consent',
@@ -945,28 +961,13 @@ app.get('/api/auth/google/url', { preHandler: autenticar }, async (request, repl
   return { url };
 });
 
-// Modo 2 — redirect direto (usado via window.location.href com ?token=)
-app.get('/api/auth/google', async (request, reply) => {
+// Modo 2 — redirect direto
+app.get('/api/auth/google', { preHandler: autenticar }, async (request, reply) => {
   if (!GOOGLE_CLIENT_ID) {
     return reply.code(503).send({ detail: 'Google Calendar não configurado no servidor.' });
   }
 
-  // Aceita token via query param (necessário para window.location.href)
-  const q     = request.query as Record<string, string>;
-  const token = q.token || (request.headers.authorization?.replace('Bearer ', '') ?? '');
-
-  if (!token) return reply.code(401).send({ detail: 'Token não fornecido.' });
-
-  let gestorId: number;
-  try {
-    const payload = jwt.verify(token, JWT_SECRET) as { sub: string };
-    gestorId = parseInt(payload.sub, 10);
-    if (!gestorId) throw new Error('id inválido');
-  } catch {
-    return reply.code(401).send({ detail: 'Token inválido.' });
-  }
-
-  const state = Buffer.from(String(gestorId)).toString('base64url');
+  const state = criarStateGoogle(request.user.id);
   const url   = makeOAuth2().generateAuthUrl({
     access_type: 'offline',
     prompt:      'consent',
@@ -991,13 +992,8 @@ app.get('/api/auth/google/callback', async (request, reply) => {
     return reply.redirect(`${frontendUrl}/reunioes?google=error`);
   }
 
-  let gestorId: number;
-  try {
-    gestorId = parseInt(Buffer.from(state, 'base64url').toString(), 10);
-    if (!gestorId || isNaN(gestorId)) throw new Error('state inválido');
-  } catch {
-    return reply.redirect(`${frontendUrl}/reunioes?google=error`);
-  }
+  const gestorId = lerStateGoogle(state);
+  if (!gestorId) return reply.redirect(`${frontendUrl}/reunioes?google=error`);
 
   try {
     const auth = makeOAuth2();

@@ -15,7 +15,7 @@ export default defineConfig({
       // é lá que a conexão é criada, na carga do módulo.
       DATABASE_URL: process.env.TEST_DATABASE_URL
         || `postgresql://farmacia:farmacia123@localhost:5432/${TEST_DB}`,
-      JWT_SECRET_KEY: 'segredo-de-teste',
+      JWT_SECRET_KEY: 'segredo-de-teste-com-pelo-menos-32-caracteres',
       NODE_ENV: 'test',
       // Sem isso o log de cada request afoga o resultado da suíte
       LOG_LEVEL: 'silent',
