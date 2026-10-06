@@ -4,6 +4,7 @@ import {
   type PublicarCampanhaInput, type NovosAnunciosInput, type AnunciosNoConjuntoInput,
 } from './service';
 import { listarConjuntosDaConta, duplicarConjunto } from '../meta/gerenciador';
+import { proximoNumeroDeAnuncio } from '../meta/campanha';
 import { uploadImagem } from '../meta/criativo';
 import { listarPaginasDaConta } from '../meta/paginas';
 import type { MetaToken } from '../meta/types';
@@ -245,6 +246,24 @@ export async function campanhasRoutes(
           return erroMeta(err, 'Erro ao adicionar os anúncios ao conjunto');
         }
       });
+    },
+  );
+
+  /**
+   * GET /api/campanhas/conjuntos/:conjuntoId/proximo-anuncio
+   * Número do próximo "ADnn" do conjunto (o maior que já existe + 1), para a
+   * revisão sugerir os nomes certos em "Novos anúncios".
+   */
+  app.get<{ Params: { conjuntoId: string }; Querystring: { conta?: string } }>(
+    '/api/campanhas/conjuntos/:conjuntoId/proximo-anuncio',
+    { preHandler: [autenticar] },
+    async (req, reply) => {
+      try {
+        const token: MetaToken = { farmaciaId: 0, adAccountId: normalizarConta(req.query.conta ?? ''), pageId: '', accessToken: tokenMeta() };
+        return reply.send({ numero: await proximoNumeroDeAnuncio(token, req.params.conjuntoId) });
+      } catch (err) {
+        return responderErroMeta(reply, err, 'Erro ao ler os anúncios do conjunto');
+      }
     },
   );
 

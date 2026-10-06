@@ -33,7 +33,7 @@ export interface CriarCampanhaInput {
   imagemHash?:    string;        // legado: 1 criativo só → 1 anúncio
   // Novo: N criativos → N anúncios no MESMO conjunto (o Meta rotaciona e
   // entrega mais o que performa melhor). Tem prioridade sobre imagemHash.
-  criativos?:     Array<{ creativeId: string; rotulo: string }>;
+  criativos?:     Array<{ creativeId: string; rotulo: string; nomeAnuncio?: string | null }>;
 }
 
 export interface CampanhaCriada {

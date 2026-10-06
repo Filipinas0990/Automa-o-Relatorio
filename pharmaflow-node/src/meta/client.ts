@@ -45,6 +45,20 @@ export async function metaReq<T = unknown>(
     // anunciante verificado (regional_regulation_identities), e o Meta não tem
     // endpoint público para obtê-lo — só o Gerenciador tem. Não há o que mandar
     // diferente daqui; o gestor precisa saber o caminho que funciona.
+    // Conjunto com lista de clientes (público personalizado) exige os termos de
+    // Público Personalizado aceitos NA CONTA para quem chama a API — o usuário
+    // de sistema do token, não o gestor que aceitou no Gerenciador. Não existe
+    // endpoint para aceitar: é um clique de um admin no link que o Meta manda.
+    const linkTermos = /https:\/\/business\.facebook\.com\/ads\/manage\/customaudiences\/tos\/\?act=\d+/
+      .exec(`${json.error.error_user_msg ?? ''} ${json.error.message ?? ''}`)?.[0];
+    if (linkTermos) {
+      console.error('[Meta API]', JSON.stringify({ path, error: json.error }));
+      throw new Error(
+        'Esta conta de anúncios ainda não aceitou os Termos de Público Personalizado para o acesso do sistema, '
+        + 'e o conjunto usa lista de clientes (ex.: "Contatos Salvos"). Um administrador da conta no Business Manager '
+        + `precisa abrir ${linkTermos}, aceitar os termos e depois publicar de novo.`,
+      );
+    }
     if (json.error.error_subcode === 3858634) {
       console.error('[Meta API]', JSON.stringify({ path, error: json.error }));
       throw new Error(ERRO_ANUNCIANTE_VERIFICADO);

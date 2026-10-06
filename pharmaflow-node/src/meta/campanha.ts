@@ -128,7 +128,7 @@ export async function proximoNumeroDeAnuncio(token: MetaToken, conjuntoId: strin
 export async function criarAnuncios(
   token:         MetaToken,
   conjuntoId:    string,
-  criativos:     Array<{ creativeId: string; rotulo: string }>,
+  criativos:     Array<{ creativeId: string; rotulo: string; nomeAnuncio?: string | null }>,
   status:        'ACTIVE' | 'PAUSED',
   dataInicio:    string,
   numeroInicial = 1,
@@ -138,7 +138,10 @@ export async function criarAnuncios(
     const numero = String(numeroInicial + i).padStart(2, '0');
     // Corta o produto, e não a data, quando passa do limite de 100 do Meta.
     const sufixo = ` - ${dataInicio}`;
-    const nome = `AD${numero} - ${c.rotulo.trim()}`.slice(0, 100 - sufixo.length) + sufixo;
+    // Nome que o gestor digitou na revisão manda; sem ele, o padrão.
+    const nome = c.nomeAnuncio?.trim()
+      ? c.nomeAnuncio.trim().slice(0, 100)
+      : `AD${numero} - ${c.rotulo.trim()}`.slice(0, 100 - sufixo.length) + sufixo;
 
     const anuncio = await metaReq<{ id: string }>(
       'POST',

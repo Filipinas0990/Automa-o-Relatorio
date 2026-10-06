@@ -91,6 +91,8 @@ async function descobrirPageId(token: MetaToken): Promise<string | null> {
 
 type ItemCriativo = {
   nome: string;
+  /** Nome do anúncio digitado na revisão. Vazio = padrão "AD01 - produto - 2/10". */
+  nomeAnuncio?: string | null;
   preco?: string | null;
   pngBase64?: string | null;
   /**
@@ -124,8 +126,8 @@ async function subirCriativos(
   destino:      DestinoCriativo,
   avisos:       string[],
   instagramId?: string | null,
-): Promise<Array<{ creativeId: string; rotulo: string }>> {
-  const criativos: Array<{ creativeId: string; rotulo: string }> = [];
+): Promise<Array<{ creativeId: string; rotulo: string; nomeAnuncio?: string | null }>> {
+  const criativos: Array<{ creativeId: string; rotulo: string; nomeAnuncio?: string | null }> = [];
   // Serve tanto quem já subiu a imagem antes (hash) quanto quem manda o PNG aqui.
   const comImagem = itens.filter((i) => i.imagemHash || i.pngBase64);
 
@@ -153,7 +155,7 @@ async function subirCriativos(
         whatsapp: destino === 'whatsapp', mensagens: destino === 'mensagens',
         instagramActorId: instagramId,
       });
-      criativos.push({ creativeId: creative.id, rotulo: item.nome });
+      criativos.push({ creativeId: creative.id, rotulo: item.nome, nomeAnuncio: item.nomeAnuncio });
     } catch (e) {
       const msg = (e as Error).message;
       logger.warn({ err: msg, criativo: item.nome }, 'Falha ao subir criativo');
