@@ -48,6 +48,8 @@ export async function criarAdCreative(
      */
     titulos?:    string[];
     descricoes?: string[];
+    /** Idem para o Texto Principal (até 5). O 1º continua no link_data.message. */
+    textos?:     string[];
     whatsapp?:  boolean;
     /**
      * Conjunto de mensagens com vários destinos (Messenger + WhatsApp + Direct,
@@ -72,7 +74,8 @@ export async function criarAdCreative(
   };
   const titulos    = limparOpcoes(extras?.titulos);
   const descricoes = limparOpcoes(extras?.descricoes);
-  const variasOpcoes = titulos.length > 1 || descricoes.length > 1;
+  const textos     = limparOpcoes(extras?.textos);
+  const variasOpcoes = titulos.length > 1 || descricoes.length > 1 || textos.length > 1;
   // Com várias opções os textos vão todos no asset_feed_spec (mais abaixo).
   if (!variasOpcoes && extras?.titulo)    link_data.name        = extras.titulo;     // headline
   if (!variasOpcoes && extras?.descricao) link_data.description = extras.descricao;
@@ -128,12 +131,14 @@ export async function criarAdCreative(
   // Várias opções de texto: entram no asset_feed_spec — junto do de mensagens,
   // quando ele existe, ou num próprio (DEGREES_OF_FREEDOM).
   if (variasOpcoes) {
-    const textos: Record<string, unknown> = {};
-    if (titulos.length)    textos.titles       = titulos.map((text) => ({ text }));
-    if (descricoes.length) textos.descriptions = descricoes.map((text) => ({ text }));
+    const opcoes: Record<string, unknown> = {};
+    if (titulos.length)    opcoes.titles       = titulos.map((text) => ({ text }));
+    if (descricoes.length) opcoes.descriptions = descricoes.map((text) => ({ text }));
+    // Textos principais (bodies): validado no Meta em 07/10/2026 junto do link_data.message.
+    if (textos.length > 1) opcoes.bodies = textos.map((text) => ({ text }));
     corpo.asset_feed_spec = corpo.asset_feed_spec
-      ? { ...(corpo.asset_feed_spec as Record<string, unknown>), ...textos }
-      : { ...textos, optimization_type: 'DEGREES_OF_FREEDOM' };
+      ? { ...(corpo.asset_feed_spec as Record<string, unknown>), ...opcoes }
+      : { ...opcoes, optimization_type: 'DEGREES_OF_FREEDOM' };
   }
 
   // Tenta do opt-out mais completo ao menor: chave que a versão da API ou a
