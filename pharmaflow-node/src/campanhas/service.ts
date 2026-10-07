@@ -196,6 +196,17 @@ async function resolverDestino(
   return destinoWhatsapp ? 'whatsapp' : 'pagina';
 }
 
+/**
+ * Sem nenhum criativo aceito não há anúncio — e criar a campanha/conjunto assim
+ * só deixa lixo vazio no Gerenciador. Interrompe ANTES, com o motivo do Meta
+ * (o 1º aviso específico) na mensagem.
+ */
+function exigirCriativos(criativos: unknown[], avisos: string[], oQue: string): void {
+  if (criativos.length) return;
+  const motivo = avisos.find((a) => !/^Nenhum (criativo|anúncio)/.test(a)) ?? 'O Meta recusou os criativos.';
+  throw new Error(`${oQue} não foi criado, porque nenhum criativo foi aceito pelo Meta. ${motivo} Nada foi publicado.`);
+}
+
 /** Monta a copy final: usa a do gestor e completa o que faltar com o template. */
 function resolverCopy(
   manual:   { textoPrincipal?: string; titulo?: string; descricao?: string } | undefined,
@@ -265,6 +276,8 @@ export async function publicarCampanha(input: PublicarCampanhaInput): Promise<{
     token, pageId, input.criativos.itens, copy, usarWhatsapp ? 'whatsapp' : 'pagina', avisos,
     input.pagina?.instagramId,
   );
+
+  exigirCriativos(criativosMeta, avisos, 'A campanha');
 
   // ── 3) Campanha ATIVA ───────────────────────────────────────────────────────
   const resultado = await criarCampanhaCompleta({
@@ -402,6 +415,22 @@ export async function publicarNovosAnuncios(input: NovosAnunciosInput): Promise<
   // ele é aplicado depois (passo 2); na recriação já nasce com ele.
   const nomeNovo = input.nomeNovoConjunto?.trim().slice(0, 100) || undefined;
 
+  // 0) Criativos PRIMEIRO. Eles ficam na conta, não no conjunto — então dá para
+  // subir antes de copiar. Se nenhum passar (app do Meta em desenvolvimento,
+  // página sem WhatsApp Business...), nada é criado: antes sobrava um conjunto
+  // vazio no Gerenciador.
+  const copy = resolverCopy(
+    input.criativos.copy,
+    input.criativos.itens.map((i) => i.nome),
+    input.conta.cliente ?? input.conta.nome,
+  );
+  const criativosMeta = await subirCriativos(
+    token, pageId, input.criativos.itens, copy,
+    await resolverDestino(accessToken, input.conjuntoId, input.destinoWhatsapp), avisos,
+    input.pagina?.instagramId,
+  );
+  exigirCriativos(criativosMeta, avisos, 'O conjunto');
+
   // 1) Cópia SEM os anúncios antigos — só queremos a configuração herdada.
   let novoConjuntoId: string;
   let configAplicada = false;     // o caminho de recriação já nasce com a config revisada
@@ -484,17 +513,7 @@ export async function publicarNovosAnuncios(input: NovosAnunciosInput): Promise<
     }
   }
 
-  // 3) Criativos novos → anúncios dentro da cópia.
-  const copy = resolverCopy(
-    input.criativos.copy,
-    input.criativos.itens.map((i) => i.nome),
-    input.conta.cliente ?? input.conta.nome,
-  );
-  const criativosMeta = await subirCriativos(
-    token, pageId, input.criativos.itens, copy,
-    await resolverDestino(accessToken, input.conjuntoId, input.destinoWhatsapp), avisos,
-    input.pagina?.instagramId,
-  );
+  // 3) Anúncios dentro da cópia (os criativos já subiram no passo 0).
 
   const anuncioIds = criativosMeta.length
     ? await criarAnuncios(token, novoConjuntoId, criativosMeta, status, dataDeInicioDoAnuncio(input.orcamento.dataInicio))

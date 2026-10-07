@@ -168,10 +168,11 @@ export async function atualizarConjunto(
 
   if (dados.nome)                    body.name         = dados.nome.slice(0, 100);
   // Orçamento só vai se o conjunto TEM orçamento próprio — ver mais abaixo.
-  // Só manda o início se ele ainda não passou: a cópia herda a data do original,
-  // e o Meta recusa a atualização INTEIRA (público e orçamento juntos) com "o
-  // horário de início não poderá ser editado se o conjunto já tiver sido iniciado".
-  if (dados.dataInicio && dados.dataInicio >= hojeSaoPaulo()) {
+  // Só manda o início se ele é FUTURO: a cópia herda a data do original (já
+  // passada), e o Meta recusa a atualização INTEIRA (público e orçamento juntos)
+  // com "o horário de início não poderá ser editado se o conjunto já tiver sido
+  // iniciado" — inclusive quando se manda a data de HOJE (visto em 07/10/2026).
+  if (dados.dataInicio && dados.dataInicio > hojeSaoPaulo()) {
     body.start_time = `${dados.dataInicio}T00:00:00-0300`;
   }
   if (dados.dataFim)                 body.end_time     = `${dados.dataFim}T23:59:59-0300`;

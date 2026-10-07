@@ -62,6 +62,16 @@ export async function metaReq<T = unknown>(
     // Página com WhatsApp PESSOAL ligado: anúncio para WhatsApp exige número do
     // WhatsApp Business. O conjunto não guarda número — usa o da página —, então
     // só se resolve na página (Configurações → Contas vinculadas → WhatsApp).
+    // Token emitido por app do Meta em MODO DE DESENVOLVIMENTO: o Meta cria o
+    // criativo mas recusa publicar o anúncio. Só se resolve no app (modo Ao vivo).
+    const textoErro = `${json.error.error_user_msg ?? ''} ${json.error.message ?? ''}`;
+    if (/modo de desenvolvimento|development mode/i.test(textoErro)) {
+      console.error('[Meta API]', JSON.stringify({ path, error: json.error }));
+      throw new Error(
+        'O app do Facebook que gerou este token está em modo de desenvolvimento, e o Meta não publica anúncios feitos por ele. '
+        + 'Em developers.facebook.com, abra o app e mude o modo para "Ao vivo" (Live). Depois publique de novo.',
+      );
+    }
     if (json.error.error_subcode === 2446885) {
       console.error('[Meta API]', JSON.stringify({ path, error: json.error }));
       throw new Error(
