@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict BZ0rR21trPbVlo9cCaArxCwpkd6ng126C8jy76hf1LOaQheXalb0YzpnhdYUdIa
+\restrict 27LJIeJrFfOQkM6jSWK28auRAmqVa6zPbbDtUc4a6sB2UqePSyuqTqd8P06GRhh
 
 -- Dumped from database version 16.14
 -- Dumped by pg_dump version 16.14
@@ -546,7 +546,11 @@ CREATE TABLE public.gestores_trafego (
     criado_em timestamp with time zone DEFAULT now(),
     google_refresh_token text,
     google_calendar_id character varying(255) DEFAULT 'primary'::character varying,
-    telefone_whatsapp character varying(20)
+    telefone_whatsapp character varying(20),
+    meta_access_token text,
+    meta_token_expira_em timestamp with time zone,
+    meta_usuario_id character varying(40),
+    meta_usuario_nome character varying(120)
 );
 
 
@@ -1497,5 +1501,5 @@ ALTER TABLE ONLY public.solicitacoes_oferta
 -- PostgreSQL database dump complete
 --
 
-\unrestrict BZ0rR21trPbVlo9cCaArxCwpkd6ng126C8jy76hf1LOaQheXalb0YzpnhdYUdIa
+\unrestrict 27LJIeJrFfOQkM6jSWK28auRAmqVa6zPbbDtUc4a6sB2UqePSyuqTqd8P06GRhh
 

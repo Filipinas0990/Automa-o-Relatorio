@@ -1,7 +1,8 @@
 import type { FastifyInstance, FastifyPluginOptions, FastifyRequest, FastifyReply } from 'fastify';
 import { upsertToken } from './repository';
 import { adsService } from './service';
-import { verificarTokenMeta, buscarLocalizacoes } from '../meta/client';
+import { verificarTokenMeta, buscarLocalizacoes, listarContasDeAnuncio } from '../meta/client';
+import { tokenMetaDo, msgTokenExpirado, type TokenMeta } from '../meta/tokenGestor';
 import { coordenadasDaCidade } from './geocode';
 
 type Middleware = (req: FastifyRequest, reply: FastifyReply) => Promise<void>;
@@ -63,11 +64,18 @@ export async function adsRoutes(
     '/api/ads/contas',
     { preHandler: [autenticar] },
     async (req, reply) => {
-      const token = process.env.META_ACCESS_TOKEN ?? '';
-      if (!token) {
-        return reply.code(400).send({ detail: 'META_ACCESS_TOKEN não configurado no servidor.' });
+      let meta: TokenMeta;
+      try { meta = tokenMetaDo(req.user); } catch (e) {
+        return reply.code(400).send({ detail: (e as Error).message });
       }
       try {
+        // Facebook do gestor: lista ao vivo só as contas que ELE acessa. O
+        // cache (migration 0032) é do token geral — uma linha só, igual para todos.
+        if (meta.proprio) {
+          const contas = await listarContasDeAnuncio(meta.token);
+          return reply.send({ contas, atualizadoEm: null, sincronizando: false, aviso: null });
+        }
+        const token = meta.token;
         const { refresh, forcar: forcarQuery } = req.query;
         const forcar =
           refresh === '1' || refresh === 'true' ||
@@ -78,7 +86,7 @@ export async function adsRoutes(
         // 502 (não 401): problema é o token do META, não a sessão do usuário.
         // 401 faria o frontend deslogar o gestor indevidamente.
         if (msg === 'META_TOKEN_EXPIRADO') {
-          return reply.code(502).send({ detail: 'Token do Meta expirado ou inválido. Gere um novo e atualize o servidor.' });
+          return reply.code(502).send({ detail: msgTokenExpirado(meta.proprio) });
         }
         return reply.code(502).send({ detail: `Erro ao consultar a Meta: ${msg}` });
       }
@@ -93,9 +101,9 @@ export async function adsRoutes(
     '/api/ads/geo-busca',
     { preHandler: [autenticar] },
     async (req, reply) => {
-      const token = process.env.META_ACCESS_TOKEN ?? '';
-      if (!token) {
-        return reply.code(400).send({ detail: 'META_ACCESS_TOKEN não configurado no servidor.' });
+      let token: string;
+      try { token = tokenMetaDo(req.user).token; } catch (e) {
+        return reply.code(400).send({ detail: (e as Error).message });
       }
       try {
         const resultados = await buscarLocalizacoes(token, req.query.q ?? '');

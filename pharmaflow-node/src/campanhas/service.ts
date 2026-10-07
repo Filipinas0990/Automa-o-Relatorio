@@ -9,6 +9,8 @@ import type { MetaToken } from '../meta/types';
 // ── Tipos do payload que vem do wizard ────────────────────────────────────────
 
 export interface PublicarCampanhaInput {
+  /** Token do Meta resolvido pela rota (gestor ou geral). Nunca vem do cliente. */
+  accessToken?: string;
   nomeCampanha?: string;   // nome definido pelo gestor no wizard
   conta: {
     id: string;          // "act_..."
@@ -230,7 +232,7 @@ export async function publicarCampanha(input: PublicarCampanhaInput): Promise<{
   avisos: string[];
 }> {
   const avisos: string[] = [];
-  const accessToken = process.env.META_ACCESS_TOKEN ?? '';
+  const accessToken = input.accessToken ?? process.env.META_ACCESS_TOKEN ?? '';
   if (!accessToken) throw new Error('META_ACCESS_TOKEN não configurado no servidor.');
 
   const adAccountId = input.conta.id.startsWith('act_') ? input.conta.id : `act_${input.conta.id}`;
@@ -293,6 +295,8 @@ export async function publicarCampanha(input: PublicarCampanhaInput): Promise<{
 // ── Fluxo "partir de um conjunto existente" ───────────────────────────────────
 
 export interface NovosAnunciosInput {
+  /** Token do Meta resolvido pela rota (gestor ou geral). Nunca vem do cliente. */
+  accessToken?: string;
   conta:      { id: string; nome?: string; cliente?: string };
   /** Página escolhida na etapa 1 (com o Instagram dela). Ver PublicarCampanhaInput. */
   pagina?:    { id: string; nome?: string; instagramId?: string | null } | null;
@@ -309,6 +313,8 @@ export interface NovosAnunciosInput {
 }
 
 export interface AnunciosNoConjuntoInput {
+  /** Token do Meta resolvido pela rota (gestor ou geral). Nunca vem do cliente. */
+  accessToken?: string;
   conta:      { id: string; nome?: string; cliente?: string };
   pagina?:    { id: string; nome?: string; instagramId?: string | null } | null;
   conjuntoId: string;                 // conjunto que RECEBE os anúncios
@@ -330,7 +336,7 @@ export async function publicarAnunciosNoConjunto(input: AnunciosNoConjuntoInput)
   avisos:          string[];
 }> {
   const avisos: string[] = [];
-  const accessToken = process.env.META_ACCESS_TOKEN ?? '';
+  const accessToken = input.accessToken ?? process.env.META_ACCESS_TOKEN ?? '';
   if (!accessToken) throw new Error('META_ACCESS_TOKEN não configurado no servidor.');
 
   const adAccountId = input.conta.id.startsWith('act_') ? input.conta.id : `act_${input.conta.id}`;
@@ -380,7 +386,7 @@ export async function publicarNovosAnuncios(input: NovosAnunciosInput): Promise<
   avisos:          string[];
 }> {
   const avisos: string[] = [];
-  const accessToken = process.env.META_ACCESS_TOKEN ?? '';
+  const accessToken = input.accessToken ?? process.env.META_ACCESS_TOKEN ?? '';
   if (!accessToken) throw new Error('META_ACCESS_TOKEN não configurado no servidor.');
 
   const adAccountId = input.conta.id.startsWith('act_') ? input.conta.id : `act_${input.conta.id}`;

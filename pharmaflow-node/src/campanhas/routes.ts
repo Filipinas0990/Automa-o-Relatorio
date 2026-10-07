@@ -10,6 +10,7 @@ import { listarPaginasDaConta } from '../meta/paginas';
 import type { MetaToken } from '../meta/types';
 import { logger } from '../logger';
 import { iniciarPublicacao, consultarPublicacao, type Resposta } from './publicacoes';
+import { tokenMetaDo, msgTokenExpirado } from '../meta/tokenGestor';
 
 /** Normaliza "123" ou "act_123" para o formato que a Graph API espera. */
 const normalizarConta = (id: string): string => (id.startsWith('act_') ? id : `act_${id}`);
@@ -34,21 +35,29 @@ function erroOrcamento(centavos: unknown): string | null {
 }
 
 /** Erro do Meta → resposta HTTP. 502 (não 401) para não deslogar o gestor. */
-function responderErroMeta(reply: FastifyReply, err: unknown, contexto: string) {
+/** Token do gestor logado (Facebook conectado) ou o geral do servidor. */
+const tokenMeta = (req: FastifyRequest): string => tokenMetaDo(req.user).token;
+
+/** O pedido usa o token do próprio gestor (Facebook conectado)? */
+const tokenProprio = (req: FastifyRequest): boolean => {
+  try { return tokenMetaDo(req.user).proprio; } catch { return false; }
+};
+
+function responderErroMeta(reply: FastifyReply, err: unknown, contexto: string, proprio = false) {
   const msg = (err as Error).message;
   logger.error({ err: msg }, contexto);
   if (msg === 'META_TOKEN_EXPIRADO') {
-    return reply.code(502).send({ detail: 'Token do Meta expirado ou inválido. Gere um novo e atualize o servidor.' });
+    return reply.code(502).send({ detail: msgTokenExpirado(proprio) });
   }
   return reply.code(502).send({ detail: `${contexto}: ${msg}` });
 }
 
 /** O mesmo que `responderErroMeta`, mas devolvendo a resposta em vez de enviar. */
-function erroMeta(err: unknown, contexto: string): Resposta {
+function erroMeta(err: unknown, contexto: string, proprio = false): Resposta {
   const msg = (err as Error).message;
   logger.error({ err: msg }, contexto);
   if (msg === 'META_TOKEN_EXPIRADO') {
-    return { codigo: 502, corpo: { detail: 'Token do Meta expirado ou inválido. Gere um novo e atualize o servidor.' } };
+    return { codigo: 502, corpo: { detail: msgTokenExpirado(proprio) } };
   }
   return { codigo: 502, corpo: { detail: `${contexto}: ${msg}` } };
 }
@@ -99,10 +108,10 @@ export async function campanhasRoutes(
       const conta = req.query.conta;
       if (!conta) return reply.code(400).send({ detail: 'Conta de anúncios não informada.' });
       try {
-        const paginas = await listarPaginasDaConta(tokenMeta(), normalizarConta(conta));
+        const paginas = await listarPaginasDaConta(tokenMeta(req), normalizarConta(conta));
         return reply.send({ paginas });
       } catch (err) {
-        return responderErroMeta(reply, err, 'Erro ao listar as páginas');
+        return responderErroMeta(reply, err, 'Erro ao listar as páginas', tokenProprio(req));
       }
     },
   );
@@ -128,9 +137,9 @@ export async function campanhasRoutes(
       if (!contaId) return reply.code(400).send({ detail: 'Conta de anúncios não informada.' });
       if (!png)     return reply.code(400).send({ detail: 'Imagem não informada.' });
 
-      const accessToken = process.env.META_ACCESS_TOKEN ?? '';
-      if (!accessToken) {
-        return reply.code(400).send({ detail: 'META_ACCESS_TOKEN não configurado no servidor.' });
+      let accessToken: string;
+      try { accessToken = tokenMeta(req); } catch (e) {
+        return reply.code(400).send({ detail: (e as Error).message });
       }
 
       const token: MetaToken = {
@@ -144,7 +153,7 @@ export async function campanhasRoutes(
         const img = await uploadImagem(token, png, req.body?.nome ?? 'criativo');
         return reply.send({ hash: img.hash });
       } catch (err) {
-        return responderErroMeta(reply, err, 'Erro ao subir a imagem do criativo');
+        return responderErroMeta(reply, err, 'Erro ao subir a imagem do criativo', tokenProprio(req));
       }
     },
   );
@@ -171,13 +180,13 @@ export async function campanhasRoutes(
 
       return responderPublicacao(req, reply, async () => {
         try {
-          const r = await publicarCampanha(body);
+          const r = await publicarCampanha({ ...body, accessToken: tokenMeta(req) });
           logger.info({ campanhaId: r.campanhaId, conta: body.conta.id }, 'Campanha criada via wizard');
           return { codigo: 201, corpo: r };
         } catch (err) {
           // 502 (não 401): problema é o token do META, não a sessão do usuário.
           // 401 faria o frontend deslogar o gestor indevidamente.
-          return erroMeta(err, 'Erro ao criar campanha no Meta');
+          return erroMeta(err, 'Erro ao criar campanha no Meta', tokenProprio(req));
         }
       });
     },
@@ -210,11 +219,11 @@ export async function campanhasRoutes(
       const conjuntoId = req.params.conjuntoId;
       return responderPublicacao(req, reply, async () => {
         try {
-          const r = await publicarNovosAnuncios({ ...body, conjuntoId });
+          const r = await publicarNovosAnuncios({ ...body, conjuntoId, accessToken: tokenMeta(req) });
           logger.info({ conjuntoId: r.conjuntoId, anuncios: r.anuncioIds.length }, 'Novos anúncios publicados');
           return { codigo: 201, corpo: r };
         } catch (err) {
-          return erroMeta(err, 'Erro ao subir os novos anúncios');
+          return erroMeta(err, 'Erro ao subir os novos anúncios', tokenProprio(req));
         }
       });
     },
@@ -239,11 +248,11 @@ export async function campanhasRoutes(
       const conjuntoId = req.params.conjuntoId;
       return responderPublicacao(req, reply, async () => {
         try {
-          const r = await publicarAnunciosNoConjunto({ ...body, conjuntoId });
+          const r = await publicarAnunciosNoConjunto({ ...body, conjuntoId, accessToken: tokenMeta(req) });
           logger.info({ conjuntoId: r.conjuntoId, anuncios: r.anuncioIds.length }, 'Anúncios adicionados ao conjunto');
           return { codigo: 201, corpo: r };
         } catch (err) {
-          return erroMeta(err, 'Erro ao adicionar os anúncios ao conjunto');
+          return erroMeta(err, 'Erro ao adicionar os anúncios ao conjunto', tokenProprio(req));
         }
       });
     },
@@ -259,10 +268,10 @@ export async function campanhasRoutes(
     { preHandler: [autenticar] },
     async (req, reply) => {
       try {
-        const token: MetaToken = { farmaciaId: 0, adAccountId: normalizarConta(req.query.conta ?? ''), pageId: '', accessToken: tokenMeta() };
+        const token: MetaToken = { farmaciaId: 0, adAccountId: normalizarConta(req.query.conta ?? ''), pageId: '', accessToken: tokenMeta(req) };
         return reply.send({ numero: await proximoNumeroDeAnuncio(token, req.params.conjuntoId) });
       } catch (err) {
-        return responderErroMeta(reply, err, 'Erro ao ler os anúncios do conjunto');
+        return responderErroMeta(reply, err, 'Erro ao ler os anúncios do conjunto', tokenProprio(req));
       }
     },
   );
@@ -285,11 +294,7 @@ export async function campanhasRoutes(
 
   // ── Gerenciador: leitura ao vivo + duplicação de conjunto ───────────────────
 
-  const tokenMeta = (): string => {
-    const t = process.env.META_ACCESS_TOKEN ?? '';
-    if (!t) throw new Error('META_ACCESS_TOKEN não configurado no servidor.');
-    return t;
-  };
+
 
   /** GET /api/campanhas/conjuntos?conta=act_123 — todos os ad sets da conta. */
   app.get<{ Querystring: { conta?: string } }>(
@@ -299,9 +304,9 @@ export async function campanhasRoutes(
       const conta = req.query.conta;
       if (!conta) return reply.code(400).send({ detail: 'Conta de anúncios não informada.' });
       try {
-        return reply.send({ conjuntos: await listarConjuntosDaConta(tokenMeta(), normalizarConta(conta)) });
+        return reply.send({ conjuntos: await listarConjuntosDaConta(tokenMeta(req), normalizarConta(conta)) });
       } catch (err) {
-        return responderErroMeta(reply, err, 'Erro ao listar conjuntos');
+        return responderErroMeta(reply, err, 'Erro ao listar conjuntos', tokenProprio(req));
       }
     },
   );
@@ -328,7 +333,7 @@ export async function campanhasRoutes(
       const avisos: string[] = [];
 
       try {
-        const token = tokenMeta();
+        const token = tokenMeta(req);
         for (let i = 1; i <= quantidade; i++) {
           // Uma cópia que falha não deve descartar as que já deram certo.
           try {
@@ -346,7 +351,7 @@ export async function campanhasRoutes(
           }
         }
       } catch (err) {
-        return responderErroMeta(reply, err, 'Erro ao duplicar conjunto');
+        return responderErroMeta(reply, err, 'Erro ao duplicar conjunto', tokenProprio(req));
       }
 
       if (!criados.length) {

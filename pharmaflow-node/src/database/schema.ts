@@ -21,6 +21,11 @@ export const gestoresTrafego = pgTable('gestores_trafego', {
   googleCalendarId:      varchar('google_calendar_id',    { length: 255 }).default('primary'),
   // Número WhatsApp do gestor (formato: 5511999999999) — identifica quem manda msg
   telefoneWhatsapp:      varchar('telefone_whatsapp',     { length: 20  }).unique(),
+  // Facebook do gestor (migration 0037). Token CRIPTOGRAFADO; nunca sai na API.
+  metaAccessToken:       text('meta_access_token'),
+  metaTokenExpiraEm:     timestamp('meta_token_expira_em', { withTimezone: true }),
+  metaUsuarioId:         varchar('meta_usuario_id',   { length: 40 }),
+  metaUsuarioNome:       varchar('meta_usuario_nome', { length: 120 }),
 });
 
 export const farmacias = pgTable('farmacias', {

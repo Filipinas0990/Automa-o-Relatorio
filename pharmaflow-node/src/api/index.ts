@@ -1,13 +1,11 @@
 import '../env';
-import Fastify, { FastifyRequest, FastifyReply } from 'fastify';
+import Fastify from 'fastify';
 import cors     from '@fastify/cors';
 import formbody from '@fastify/formbody';
-import bcrypt   from 'bcrypt';
 import { eq, and, sql } from 'drizzle-orm';
 import { google } from 'googleapis';
 import { db } from '../database/db';
 import { gestoresTrafego, farmacias, reunioes, agendaBloqueios, acoes, farmaciaAcoes } from '../database/schema';
-import type { Gestor } from '../database/schema';
 import { encrypt } from '../cripto';
 import { pipeline, previewPipeline } from '../pipeline-fn';
 import type { PipelineResultado } from '../pipeline-fn';
@@ -23,20 +21,7 @@ import { campanhasRoutes } from '../campanhas/routes';
 import { relatoriosRoutes } from '../relatorios/routes';
 import { disparosRoutes } from '../disparos/routes';
 import { ofertasRoutes } from '../ofertas/routes';
-import {
-  criarToken, verificarToken, tokenDoPedido, renovarSeNecessario,
-  gravarCookieSessao, apagarCookieSessao,
-  loginBloqueado, registrarFalhaLogin, limparFalhasLogin,
-  criarStateGoogle, lerStateGoogle,
-} from './sessao';
-
-// ── Module augmentation — adiciona `user` ao FastifyRequest ───────────────────
-
-declare module 'fastify' {
-  interface FastifyRequest {
-    user: Gestor;
-  }
-}
+import { autenticador, authController, gestorController, stateGoogle, stateMeta } from '../composicao';
 
 const app = Fastify({
   logger: {
@@ -67,33 +52,13 @@ app.addContentTypeParser('application/json', { parseAs: 'string' }, (_req, body,
   catch (e) { done(e as Error, undefined); }
 });
 
-const ADMIN_SECRET = process.env.ADMIN_SECRET || '';
+// ── Sessão e acesso (classes em ../auth, montadas em ../composicao) ──────────
+const { autenticar, apenasAdmin } = autenticador;
 
-// ── Sessão (JWT em cookie httpOnly — ver ./sessao.ts) ─────────────────────────
+app.register(authController.plugin);
+app.register(gestorController.plugin);
 
-async function autenticar(request: FastifyRequest, reply: FastifyReply): Promise<void> {
-  const token = tokenDoPedido(request);
-  if (!token) { reply.code(401).send({ detail: 'Token não fornecido' }); return; }
-  try {
-    const payload = verificarToken(token);
-    const [gestor] = await db.select().from(gestoresTrafego).where(
-      and(eq(gestoresTrafego.id, parseInt(payload.sub, 10)), eq(gestoresTrafego.ativo, true))
-    );
-    if (!gestor) { reply.code(401).send({ detail: 'Usuário não encontrado' }); return; }
-    request.user = gestor;
-    renovarSeNecessario(request, reply, payload);
-  } catch {
-    reply.code(401).send({ detail: 'Token inválido ou expirado' });
-  }
-}
-
-async function apenasAdmin(request: FastifyRequest, reply: FastifyReply): Promise<void> {
-  if (!request.user?.isAdmin) {
-    reply.code(403).send({ detail: 'Acesso restrito ao administrador' });
-  }
-}
-
-// ── WhatsApp Routes (plugin registrado após definição dos middlewares) ────────
+// ── Módulos ainda em funções (plugins recebem os middlewares por opção) ───────
 app.register(whatsappRoutes, { autenticar, apenasAdmin });
 app.register(adsRoutes,      { autenticar, apenasAdmin });
 app.register(catalogoRoutes, { autenticar, apenasAdmin });
@@ -103,132 +68,6 @@ app.register(relatoriosRoutes, { autenticar, apenasAdmin });
 app.register(disparosRoutes, { autenticar, apenasAdmin });
 // Ofertas: inclui rotas PÚBLICAS (/api/publico/ofertas/*) onde o token é a credencial
 app.register(ofertasRoutes, { autenticar, apenasAdmin });
-
-// ── Auth ──────────────────────────────────────────────────────────────────────
-
-app.post('/api/auth/criar-super-admin', async (request, reply) => {
-  const body = request.body as Record<string, string>;
-  const { nome, email, senha, admin_secret } = body;
-  if (!ADMIN_SECRET)                 return reply.code(503).send({ detail: 'ADMIN_SECRET não configurado' });
-  if (admin_secret !== ADMIN_SECRET) return reply.code(403).send({ detail: 'Segredo inválido' });
-
-  const admins = await db.select().from(gestoresTrafego).where(eq(gestoresTrafego.isAdmin, true));
-  if (admins.length) return reply.code(409).send({ detail: 'Super admin já existe. Use o login normal.' });
-
-  const existe = await db.select().from(gestoresTrafego).where(eq(gestoresTrafego.email, email));
-  if (existe.length) return reply.code(409).send({ detail: 'Email já cadastrado' });
-
-  const [admin] = await db.insert(gestoresTrafego).values({
-    nome, email, senhaHash: await bcrypt.hash(senha, 10), isAdmin: true,
-  }).returning();
-
-  return reply.code(201).send({ id: admin.id, nome: admin.nome, email: admin.email, is_admin: true });
-});
-
-app.post('/api/auth/login', async (request, reply) => {
-  const body     = request.body as Record<string, string>;
-  const username = body.username || body.email;
-  const password = body.password || body.senha;
-  if (!username || !password) return reply.code(400).send({ detail: 'Informe email e senha' });
-
-  const espera = loginBloqueado(username);
-  if (espera) {
-    return reply.code(429).header('Retry-After', String(espera)).send({
-      detail: `Muitas tentativas erradas. Tente de novo em ${Math.ceil(espera / 60)} min.`,
-    });
-  }
-
-  const [gestor] = await db.select().from(gestoresTrafego).where(eq(gestoresTrafego.email, username));
-  if (!gestor || !await bcrypt.compare(password, gestor.senhaHash)) {
-    registrarFalhaLogin(username);
-    return reply.code(401).send({ detail: 'Email ou senha incorretos' });
-  }
-  if (!gestor.ativo) return reply.code(403).send({ detail: 'Usuário inativo' });
-
-  limparFalhasLogin(username);
-  // O token vai só no cookie httpOnly — fora do corpo, o JavaScript da página nunca o vê
-  gravarCookieSessao(reply, criarToken(gestor.id, gestor.nome, gestor.isAdmin));
-  return {
-    id:       gestor.id,
-    nome:     gestor.nome,
-    email:    gestor.email,
-    is_admin: gestor.isAdmin,
-  };
-});
-
-app.post('/api/auth/logout', async (_request, reply) => {
-  apagarCookieSessao(reply);
-  return { mensagem: 'Sessão encerrada' };
-});
-
-app.get('/api/auth/me', { preHandler: autenticar }, async (request) => {
-  const g = request.user;
-  return { id: g.id, nome: g.nome, email: g.email, is_admin: g.isAdmin };
-});
-
-// ── Gestores CRUD ─────────────────────────────────────────────────────────────
-
-// Admin vê todos; gestor comum vê só a si mesmo (as telas que listam gestores
-// continuam funcionando, sem expor nome e email dos colegas)
-app.get('/api/gestores', { preHandler: autenticar }, async (request) => {
-  const soEle = request.user.isAdmin ? sql`` : sql`AND g.id = ${request.user.id}`;
-  const rows = await db.execute(sql`
-    SELECT g.*, COUNT(f.id) FILTER (WHERE f.ativa = TRUE) AS farmacias
-    FROM gestores_trafego g
-    LEFT JOIN farmacias f ON f.gestor_id = g.id
-    WHERE g.ativo = TRUE ${soEle}
-    GROUP BY g.id
-    ORDER BY g.nome
-  `);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return rows.rows.map((g: any) => ({
-    id: g.id, nome: g.nome, email: g.email,
-    is_admin: g.is_admin, criado_em: g.criado_em,
-    farmacias: parseInt(g.farmacias || 0),
-  }));
-});
-
-app.post('/api/gestores', { preHandler: [autenticar, apenasAdmin] }, async (request, reply) => {
-  const { nome, email, senha } = request.body as Record<string, string>;
-
-  const existe = await db.select().from(gestoresTrafego).where(eq(gestoresTrafego.email, email));
-  if (existe.length) return reply.code(409).send({ detail: 'Email já cadastrado' });
-
-  const [g] = await db.insert(gestoresTrafego).values({
-    nome, email, senhaHash: await bcrypt.hash(senha, 10), isAdmin: false,
-  }).returning();
-
-  return reply.code(201).send({ id: g.id, nome: g.nome, email: g.email });
-});
-
-app.put('/api/gestores/:id', { preHandler: [autenticar, apenasAdmin] }, async (request, reply) => {
-  const id = parseInt((request.params as { id: string }).id, 10);
-  const [existe] = await db.select().from(gestoresTrafego).where(eq(gestoresTrafego.id, id));
-  if (!existe) return reply.code(404).send({ detail: 'Gestor não encontrado' });
-
-  const { nome, email, senha } = request.body as Record<string, string>;
-  const dados: Partial<typeof gestoresTrafego.$inferInsert> = {};
-  if (nome)  dados.nome      = nome;
-  if (email) dados.email     = email;
-  if (senha) dados.senhaHash = await bcrypt.hash(senha, 10);
-
-  if (Object.keys(dados).length) {
-    await db.update(gestoresTrafego).set(dados).where(eq(gestoresTrafego.id, id));
-  }
-  const [g] = await db.select().from(gestoresTrafego).where(eq(gestoresTrafego.id, id));
-  return { id: g.id, nome: g.nome, email: g.email };
-});
-
-app.delete('/api/gestores/:id', { preHandler: [autenticar, apenasAdmin] }, async (request, reply) => {
-  const id = parseInt((request.params as { id: string }).id, 10);
-  if (id === request.user.id) return reply.code(400).send({ detail: 'Não é possível deletar seu próprio usuário' });
-
-  const [existe] = await db.select().from(gestoresTrafego).where(eq(gestoresTrafego.id, id));
-  if (!existe) return reply.code(404).send({ detail: 'Gestor não encontrado' });
-
-  await db.update(gestoresTrafego).set({ ativo: false }).where(eq(gestoresTrafego.id, id));
-  return { mensagem: 'Gestor desativado' };
-});
 
 // ── Farmácias CRUD ────────────────────────────────────────────────────────────
 
@@ -951,7 +790,7 @@ app.get('/api/auth/google/url', { preHandler: autenticar }, async (request, repl
   if (!GOOGLE_CLIENT_ID) {
     return reply.code(503).send({ detail: 'Google Calendar não configurado no servidor.' });
   }
-  const state = criarStateGoogle(request.user.id);
+  const state = stateGoogle.criar(request.user.id);
   const url   = makeOAuth2().generateAuthUrl({
     access_type: 'offline',
     prompt:      'consent',
@@ -967,7 +806,7 @@ app.get('/api/auth/google', { preHandler: autenticar }, async (request, reply) =
     return reply.code(503).send({ detail: 'Google Calendar não configurado no servidor.' });
   }
 
-  const state = criarStateGoogle(request.user.id);
+  const state = stateGoogle.criar(request.user.id);
   const url   = makeOAuth2().generateAuthUrl({
     access_type: 'offline',
     prompt:      'consent',
@@ -992,7 +831,7 @@ app.get('/api/auth/google/callback', async (request, reply) => {
     return reply.redirect(`${frontendUrl}/reunioes?google=error`);
   }
 
-  const gestorId = lerStateGoogle(state);
+  const gestorId = stateGoogle.ler(state);
   if (!gestorId) return reply.redirect(`${frontendUrl}/reunioes?google=error`);
 
   try {
@@ -1029,6 +868,159 @@ app.delete('/api/auth/google', { preHandler: autenticar }, async (request) => {
     .set({ googleRefreshToken: null })
     .where(eq(gestoresTrafego.id, request.user.id));
   return { mensagem: 'Google Calendar desconectado.' };
+});
+
+// ── Facebook (Meta Ads) por gestor — conectar / callback / status / desconectar ──
+//
+// Cada gestor conecta o próprio Facebook e passa a publicar com o token dele
+// (src/meta/tokenGestor.ts). O token é de usuário: troca-se o de curta duração
+// pelo de ~60 dias e guarda-se CRIPTOGRAFADO. Vencido, o gestor reconecta — e
+// enquanto isso o sistema usa o token geral do servidor.
+//
+// No app do Meta (developers.facebook.com → Login do Facebook → Configurações)
+// o META_REDIRECT_URI abaixo precisa estar em "URIs de redirecionamento do OAuth válidos".
+
+const META_APP_ID       = process.env.META_APP_ID ?? '';
+const META_APP_SECRET   = process.env.META_APP_SECRET ?? '';
+const META_REDIRECT_URI = process.env.META_REDIRECT_URI ??
+  'https://api.pharmarelatorios.online/api/auth/meta/callback';
+const META_GRAPH        = 'https://graph.facebook.com/v20.0';
+/** O que o sistema precisa para listar contas/páginas e publicar. */
+const META_ESCOPOS = [
+  'ads_management', 'ads_read', 'business_management',
+  'pages_show_list', 'pages_read_engagement', 'pages_manage_ads', 'instagram_basic',
+];
+/** Sem estes não dá para publicar: se o gestor desmarcar, a conexão não vale. */
+const META_ESCOPOS_OBRIGATORIOS = ['ads_management', 'pages_manage_ads', 'pages_show_list'];
+
+async function metaGet<T>(caminho: string, params: Record<string, string>): Promise<T> {
+  const url = new URL(`${META_GRAPH}${caminho}`);
+  for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
+  const res  = await fetch(url);
+  const json = await res.json() as T & { error?: { message?: string } };
+  if (json.error) throw new Error(json.error.message ?? 'Erro do Meta');
+  return json;
+}
+
+app.get('/api/auth/meta/url', { preHandler: autenticar }, async (request, reply) => {
+  if (!META_APP_ID || !META_APP_SECRET) {
+    return reply.code(503).send({ detail: 'Login do Facebook não configurado no servidor (META_APP_ID/META_APP_SECRET).' });
+  }
+  const url = new URL('https://www.facebook.com/v20.0/dialog/oauth');
+  url.searchParams.set('client_id', META_APP_ID);
+  url.searchParams.set('redirect_uri', META_REDIRECT_URI);
+  url.searchParams.set('state', stateMeta.criar(request.user.id));
+  url.searchParams.set('scope', META_ESCOPOS.join(','));
+  url.searchParams.set('response_type', 'code');
+  // Reabre a tela de permissões: quem desmarcou algo da outra vez consegue marcar.
+  url.searchParams.set('auth_type', 'rerequest');
+  return { url: url.toString() };
+});
+
+app.get('/api/auth/meta/callback', async (request, reply) => {
+  const q = request.query as Record<string, string>;
+  const frontendUrl = process.env.FRONTEND_URL || 'https://pharmarelatorios.online';
+  const voltar = (status: string) => reply.redirect(`${frontendUrl}/configuracoes?meta=${status}`);
+
+  if (q.error || !q.code || !q.state) return voltar(q.error === 'access_denied' ? 'cancelado' : 'erro');
+  const gestorId = stateMeta.ler(q.state);
+  if (!gestorId) return voltar('erro');
+
+  try {
+    // 1) código → token curto → token de ~60 dias
+    const curto = await metaGet<{ access_token: string }>('/oauth/access_token', {
+      client_id: META_APP_ID, client_secret: META_APP_SECRET, redirect_uri: META_REDIRECT_URI, code: q.code,
+    });
+    const longo = await metaGet<{ access_token: string; expires_in?: number }>('/oauth/access_token', {
+      grant_type: 'fb_exchange_token', client_id: META_APP_ID, client_secret: META_APP_SECRET,
+      fb_exchange_token: curto.access_token,
+    });
+
+    // 2) o gestor pode ter desmarcado permissões na tela do Facebook
+    const perms = await metaGet<{ data: Array<{ permission: string; status: string }> }>('/me/permissions', {
+      access_token: longo.access_token,
+    });
+    const concedidas = new Set(perms.data.filter((p) => p.status === 'granted').map((p) => p.permission));
+    if (META_ESCOPOS_OBRIGATORIOS.some((e) => !concedidas.has(e))) return voltar('permissoes');
+
+    const eu = await metaGet<{ id: string; name: string }>('/me', { fields: 'id,name', access_token: longo.access_token });
+
+    await db.update(gestoresTrafego).set({
+      metaAccessToken:   encrypt(longo.access_token),
+      // Sem expires_in o Meta não informou prazo: assume os 60 dias usuais.
+      metaTokenExpiraEm: new Date(Date.now() + (longo.expires_in ?? 60 * 86_400) * 1000),
+      metaUsuarioId:     eu.id,
+      metaUsuarioNome:   eu.name.slice(0, 120),
+    }).where(eq(gestoresTrafego.id, gestorId));
+
+    logger.info({ gestorId, metaUsuario: eu.id }, 'Facebook conectado pelo gestor');
+    return voltar('ok');
+  } catch (err) {
+    logger.error({ gestorId, err: (err as Error).message }, 'Falha ao conectar Facebook do gestor');
+    return voltar('erro');
+  }
+});
+
+/**
+ * Alternativa ao botão: o gestor cola um token que ele mesmo gerou no Facebook
+ * (de qualquer app). Validado AQUI antes de guardar — válido, com as
+ * permissões de publicar, e com a validade real informada pelo Meta.
+ */
+app.post('/api/auth/meta/token', { preHandler: autenticar }, async (request, reply) => {
+  const token = String((request.body as { token?: string } | undefined)?.token ?? '').trim();
+  if (!/^EA[A-Za-z0-9]{40,}$/.test(token)) {
+    return reply.code(400).send({ detail: 'Isso não parece um token do Facebook (começa com "EA").' });
+  }
+  try {
+    // debug_token consultado com o próprio token: funciona para token de qualquer app.
+    const dbg = await metaGet<{ data?: {
+      is_valid?: boolean; type?: string; expires_at?: number; data_access_expires_at?: number; scopes?: string[];
+    } }>('/debug_token', { input_token: token, access_token: token });
+    const d = dbg.data ?? {};
+    if (!d.is_valid) return reply.code(400).send({ detail: 'Token inválido ou expirado. Gere um novo no Facebook.' });
+
+    const faltando = META_ESCOPOS_OBRIGATORIOS.filter((e) => !(d.scopes ?? []).includes(e));
+    if (faltando.length) {
+      return reply.code(400).send({ detail: `Faltam permissões no token: ${faltando.join(', ')}. Gere de novo marcando todas.` });
+    }
+
+    const eu = await metaGet<{ id: string; name: string }>('/me', { fields: 'id,name', access_token: token });
+    // expires_at = 0 → não vence (usuário do sistema); vale então o prazo de acesso a dados, se houver.
+    const vence = d.expires_at ? d.expires_at : (d.data_access_expires_at ?? 0);
+
+    await db.update(gestoresTrafego).set({
+      metaAccessToken:   encrypt(token),
+      metaTokenExpiraEm: vence ? new Date(vence * 1000) : null,
+      metaUsuarioId:     eu.id,
+      metaUsuarioNome:   eu.name.slice(0, 120),
+    }).where(eq(gestoresTrafego.id, request.user.id));
+
+    logger.info({ gestorId: request.user.id, metaUsuario: eu.id, tipo: d.type }, 'Token do Facebook colado pelo gestor');
+    return { nome: eu.name, expira_em: vence ? new Date(vence * 1000).toISOString() : null };
+  } catch (err) {
+    return reply.code(400).send({ detail: `Não consegui validar o token no Facebook: ${(err as Error).message}` });
+  }
+});
+
+app.get('/api/auth/meta/status', { preHandler: autenticar }, async (request) => {
+  const g = request.user;
+  const expira = g.metaTokenExpiraEm ? new Date(g.metaTokenExpiraEm) : null;
+  const valido = !!g.metaAccessToken && (!expira || expira.getTime() > Date.now());
+  return {
+    configurado:    !!(META_APP_ID && META_APP_SECRET),
+    conectado:      valido,
+    expirado:       !!g.metaAccessToken && !valido,
+    nome:           g.metaUsuarioNome ?? null,
+    expira_em:      expira ? expira.toISOString() : null,
+    dias_restantes: expira ? Math.max(0, Math.floor((expira.getTime() - Date.now()) / 86_400_000)) : null,
+  };
+});
+
+app.delete('/api/auth/meta', { preHandler: autenticar }, async (request) => {
+  await db.update(gestoresTrafego).set({
+    metaAccessToken: null, metaTokenExpiraEm: null, metaUsuarioId: null, metaUsuarioNome: null,
+  }).where(eq(gestoresTrafego.id, request.user.id));
+  return { mensagem: 'Facebook desconectado. Você volta a publicar com o acesso geral da agência.' };
 });
 
 // ── Agenda — Verificação de Conflito ─────────────────────────────────────────

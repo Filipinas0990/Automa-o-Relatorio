@@ -1,5 +1,5 @@
 /**
- * Login e sessão (src/api/sessao.ts).
+ * Login e sessão (src/auth/).
  *
  * O que se protege: o token só existe no cookie httpOnly (nunca no corpo do
  * login nem aceito pela URL), quem erra a senha muitas vezes é barrado, a
@@ -11,7 +11,8 @@ import jwt from 'jsonwebtoken';
 import { app } from '../src/api';
 import { db } from '../src/database/db';
 import { gestoresTrafego } from '../src/database/schema';
-import { criarStateGoogle, lerStateGoogle, COOKIE_SESSAO } from '../src/api/sessao';
+import { stateGoogle } from '../src/composicao';
+import { TransporteSessao } from '../src/auth/TransporteSessao';
 import { api, criarGestor, limparBanco } from './helpers';
 
 const SENHA = 'senha-certa-123';
@@ -47,7 +48,7 @@ describe('Login e sessão', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).not.toHaveProperty('access_token');
     const sc = String(res.headers['set-cookie']);
-    expect(sc).toContain(`${COOKIE_SESSAO}=`);
+    expect(sc).toContain(`${TransporteSessao.COOKIE}=`);
     expect(sc).toContain('HttpOnly');
     expect(sc).toContain('Secure');
     expect(sc).toContain('SameSite=Strict');
@@ -95,7 +96,7 @@ describe('Login e sessão', () => {
       SEGREDO, { expiresIn: '8h' },
     );
     const res = await app.inject({
-      method: 'GET', url: '/api/auth/me', headers: { cookie: `${COOKIE_SESSAO}=${antigo}` },
+      method: 'GET', url: '/api/auth/me', headers: { cookie: `${TransporteSessao.COOKIE}=${antigo}` },
     });
     expect(res.statusCode).toBe(200);
     const novo = cookieDe(res).split('=')[1];
@@ -113,7 +114,7 @@ describe('Login e sessão', () => {
       SEGREDO, { expiresIn: '8h' },
     );
     const res = await app.inject({
-      method: 'GET', url: '/api/auth/me', headers: { cookie: `${COOKIE_SESSAO}=${velho}` },
+      method: 'GET', url: '/api/auth/me', headers: { cookie: `${TransporteSessao.COOKIE}=${velho}` },
     });
     expect(res.statusCode).toBe(200);
     expect(res.headers['set-cookie']).toBeUndefined();
@@ -139,13 +140,13 @@ describe('Lista de gestores', () => {
 
 describe('state do OAuth do Google', () => {
   it('recusa o state antigo (id em base64, sem assinatura)', () => {
-    expect(lerStateGoogle(Buffer.from('1').toString('base64url'))).toBeNull();
-    expect(lerStateGoogle(criarStateGoogle(42))).toBe(42);
+    expect(stateGoogle.ler(Buffer.from('1').toString('base64url'))).toBeNull();
+    expect(stateGoogle.ler(stateGoogle.criar(42))).toBe(42);
   });
 
   it('um state não serve como sessão', async () => {
     const g = await criarGestor();
-    const res = await api('GET', '/api/auth/me', { token: criarStateGoogle(g.id) });
+    const res = await api('GET', '/api/auth/me', { token: stateGoogle.criar(g.id) });
     expect(res.status).toBe(401);
   });
 });
