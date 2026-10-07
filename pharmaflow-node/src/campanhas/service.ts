@@ -91,6 +91,9 @@ async function descobrirPageId(token: MetaToken): Promise<string | null> {
 
 type ItemCriativo = {
   nome: string;
+  /** Todas as opções de título/descrição do anúncio (o Meta testa as combinações). */
+  titulos?: string[] | null;
+  descricoes?: string[] | null;
   /** Nome do anúncio digitado na revisão. Vazio = padrão "AD01 - produto - 2/10". */
   nomeAnuncio?: string | null;
   preco?: string | null;
@@ -152,6 +155,7 @@ async function subirCriativos(
       const descricaoItem = item.descricao?.trim()      || copy.descricao;
       const creative = await criarAdCreative(token, hash, textoItem, linkDestino, {
         titulo: tituloItem, descricao: descricaoItem,
+        titulos: item.titulos ?? undefined, descricoes: item.descricoes ?? undefined,
         whatsapp: destino === 'whatsapp', mensagens: destino === 'mensagens',
         instagramActorId: instagramId,
       });

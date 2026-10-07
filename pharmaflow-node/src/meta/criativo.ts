@@ -39,6 +39,15 @@ export async function criarAdCreative(
   extras?: {
     titulo?:    string;
     descricao?: string;
+    /**
+     * TODAS as opções de título/descrição do anúncio ("várias opções de texto"
+     * do Meta, até 5 de cada): o Meta combina e entrega mais a que performa.
+     * Com mais de uma opção elas vão no asset_feed_spec e `titulo`/`descricao`
+     * deixam de ir no link_data — formato validado no Meta em 07/10/2026, tanto
+     * em conjunto WhatsApp quanto no de vários destinos.
+     */
+    titulos?:    string[];
+    descricoes?: string[];
     whatsapp?:  boolean;
     /**
      * Conjunto de mensagens com vários destinos (Messenger + WhatsApp + Direct,
@@ -61,8 +70,12 @@ export async function criarAdCreative(
     link:       linkDestino,
     message:    copy,
   };
-  if (extras?.titulo)    link_data.name        = extras.titulo;     // headline
-  if (extras?.descricao) link_data.description = extras.descricao;
+  const titulos    = limparOpcoes(extras?.titulos);
+  const descricoes = limparOpcoes(extras?.descricoes);
+  const variasOpcoes = titulos.length > 1 || descricoes.length > 1;
+  // Com várias opções os textos vão todos no asset_feed_spec (mais abaixo).
+  if (!variasOpcoes && extras?.titulo)    link_data.name        = extras.titulo;     // headline
+  if (!variasOpcoes && extras?.descricao) link_data.description = extras.descricao;
 
   // Click-to-WhatsApp: link fixo + botão "Enviar mensagem" que abre o WhatsApp
   if (extras?.whatsapp) {
@@ -112,6 +125,17 @@ export async function criarAdCreative(
     };
   }
 
+  // Várias opções de texto: entram no asset_feed_spec — junto do de mensagens,
+  // quando ele existe, ou num próprio (DEGREES_OF_FREEDOM).
+  if (variasOpcoes) {
+    const textos: Record<string, unknown> = {};
+    if (titulos.length)    textos.titles       = titulos.map((text) => ({ text }));
+    if (descricoes.length) textos.descriptions = descricoes.map((text) => ({ text }));
+    corpo.asset_feed_spec = corpo.asset_feed_spec
+      ? { ...(corpo.asset_feed_spec as Record<string, unknown>), ...textos }
+      : { ...textos, optimization_type: 'DEGREES_OF_FREEDOM' };
+  }
+
   // Tenta do opt-out mais completo ao menor: chave que a versão da API ou a
   // conta não conhece volta erro 100 (parâmetro inválido). Sem spec nenhum é o
   // último recurso — e nem sempre serve: conjunto de "múltiplos destinos"
@@ -132,6 +156,19 @@ export async function criarAdCreative(
     }
   }
   throw new Error('inalcançável');
+}
+
+/** Tira vazios e repetidos e respeita o teto do Meta (5 opções). */
+function limparOpcoes(lista?: string[]): string[] {
+  const vistos = new Set<string>();
+  const saida: string[] = [];
+  for (const bruto of lista ?? []) {
+    const t = bruto?.trim();
+    if (!t || vistos.has(t)) continue;
+    vistos.add(t);
+    saida.push(t);
+  }
+  return saida.slice(0, 5);
 }
 
 /** Para onde o clique do anúncio leva — decide o formato do criativo. */
