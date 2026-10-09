@@ -2,7 +2,6 @@ import './env';
 import bcrypt from 'bcrypt';
 import { db } from './database/db';
 import { gestoresTrafego, farmacias, coletas, coletaCanais } from './database/schema';
-import { encrypt } from './cripto';
 
 const CANAIS = ['Google', 'Facebook', 'Grupos de Oferta', 'WhatsApp', 'Indicação'];
 
@@ -50,8 +49,6 @@ async function seed() {
   console.log(`✅ Gestores criados: ${gestorAdmin.id}, ${gestorJoao.id}`);
 
   // ── Farmácias ─────────────────────────────────────────────────────────────
-  const senhaEnc = encrypt('senha_chatbot_teste');
-
   const dadosFarmacias = [
     { nome: 'Farmácia Saúde Total',    cidade: 'São Paulo',     gestorId: gestorAdmin.id, metaReceita: '45000', metaLeadsGoogle: 80, metaLeadsMeta: 50 },
     { nome: 'Drogaria Bem Estar',      cidade: 'Campinas',      gestorId: gestorAdmin.id, metaReceita: '32000', metaLeadsGoogle: 60, metaLeadsMeta: 40 },
@@ -63,9 +60,6 @@ async function seed() {
   const farmaciasInseridas = await db.insert(farmacias).values(
     dadosFarmacias.map(f => ({
       nome:            f.nome,
-      urlBase:         'https://chatbot.exemplo.com.br',
-      email:           `contato@${f.nome.toLowerCase().replace(/\s+/g, '').slice(0, 10)}.com`,
-      senhaEnc,
       gestorId:        f.gestorId,
       ativa:           true,
       temChatbot:      true,

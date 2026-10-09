@@ -515,12 +515,16 @@ export async function publicarNovosAnuncios(input: NovosAnunciosInput): Promise<
 
   // 3) Anúncios dentro da cópia (os criativos já subiram no passo 0).
 
-  const anuncioIds = criativosMeta.length
-    ? await criarAnuncios(token, novoConjuntoId, criativosMeta, status, dataDeInicioDoAnuncio(input.orcamento.dataInicio))
-    : [];
-
-  if (!anuncioIds.length) {
-    avisos.push('O conjunto novo foi criado, mas ficou sem anúncios.');
+  // Se o Meta recusar os anúncios (ex.: bloqueio de segurança da conta), a cópia
+  // ficaria vazia no Gerenciador: apaga-se a cópia e o erro segue para o gestor.
+  let anuncioIds: string[];
+  try {
+    anuncioIds = await criarAnuncios(token, novoConjuntoId, criativosMeta, status, dataDeInicioDoAnuncio(input.orcamento.dataInicio));
+  } catch (e) {
+    await metaReq('POST', `/${novoConjuntoId}`, accessToken, { status: 'DELETED' })
+      .then(() => logger.warn({ conjunto: novoConjuntoId }, 'Anúncios recusados — cópia vazia do conjunto apagada'))
+      .catch((e2) => logger.warn({ conjunto: novoConjuntoId, err: (e2 as Error).message }, 'Não consegui apagar a cópia vazia'));
+    throw e;
   }
 
   return {

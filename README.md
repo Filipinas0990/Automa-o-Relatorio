@@ -1,6 +1,8 @@
-# PharmaFlow — Automação de Relatórios Semanais
+# PharmaFlow
 
-Sistema de coleta, processamento e visualização automática de dados de ~70 farmácias clientes de uma agência de marketing, via scraping do painel **PharmaChatBot**.
+Sistema de acompanhamento de ~70 farmácias clientes de uma agência de marketing que usam o **PharmaChatBot**.
+
+> **Coleta de dados em transição.** O robô (Playwright) que fazia login no painel de cada farmácia e lia os números da tela foi removido. Os dados vão chegar pela API do PharmaChatBot, que ainda não existe. Até lá, as telas mostram as últimas coletas gravadas no banco.
 
 ---
 
@@ -10,45 +12,35 @@ A agência atende ~70 farmácias, cada uma com um chatbot de atendimento integra
 
 ## A Solução
 
-Um pipeline 100% automatizado que:
-
-1. **Entra automaticamente** no painel de cada farmácia todo domingo às 22h
-2. **Coleta os dados** dos últimos 7, 15 e 30 dias
-3. **Calcula um score de criticidade** comparando com a coleta anterior
-4. **Salva tudo no banco de dados**
-5. Na segunda de manhã, o **dashboard PharmaFlow** já reflete os dados atualizados
+1. **Recebe os dados** de cada farmácia nos períodos de 7, 15 e 30 dias (hoje: tabelas `coletas` e `coleta_canais`; no futuro: API do PharmaChatBot)
+2. **Calcula um score de criticidade** comparando com a coleta anterior (`src/processor/score.ts`)
+3. O **dashboard PharmaFlow** mostra ranking, alertas e metas
 
 ---
 
 ## Arquitetura
 
 ```
-PostgreSQL (banco)
+API do PharmaChatBot (a construir)
       │
       ▼
-pipeline.ts — Pipeline (todo domingo 22h)
+ingestão (a construir) ── score.ts → calcula criticidade vs coleta anterior
       │
-      ├── Playwright → faz login em cada farmácia
-      │               → coleta métricas dos períodos (7 / 15 / 30 dias)
-      │               → extrai canais via React fiber (Recharts)
+      ▼
+PostgreSQL (coletas, coleta_canais, views)
       │
-      ├── Score Calculator → calcula criticidade vs coleta anterior
+      ▼
+Fastify (API REST — porta 8000)
       │
-      └── Drizzle ORM → salva histórico no PostgreSQL
-                │
-                ▼
-           Fastify (API REST — porta 8000)
-                │
-                ▼
-         PharmaFlow (Frontend Framer)
-         front-end-ecru-two-48.vercel.app
+      ▼
+PharmaFlow (frontend)
 ```
 
 ---
 
 ## Métricas Coletadas por Farmácia
 
-Extraídas do dashboard do PharmaChatBot para cada período (7, 15 e 30 dias):
+Gravadas por período (7, 15 e 30 dias):
 
 | Métrica | Descrição |
 |---|---|
@@ -84,13 +76,10 @@ Cada farmácia pode ter metas individuais configuradas:
 | Camada | Tecnologia |
 |---|---|
 | Runtime | Node.js + TypeScript |
-| Scraper | Playwright (Chromium) |
 | API | Fastify v4 + JWT + bcrypt |
 | ORM | Drizzle ORM |
 | Banco de dados | PostgreSQL 16 |
-| Export | ExcelJS (XLSX) + CSV |
 | Deploy | Docker + Docker Compose |
-| Agendamento (VPS) | Cron Job Linux |
 | Frontend | Framer (externo, integrado via API) |
 | Domínio API | api.pharmarelatorios.online (Nginx + Let's Encrypt) |
 
@@ -107,20 +96,16 @@ AUTOMAÇÂO/
 │       ├── database/
 │       │   ├── db.ts             # conexão Drizzle + pg
 │       │   └── schema.ts         # tabelas e views (Drizzle schema)
-│       ├── scraper/
-│       │   └── pharmachatbot.ts  # Playwright: login + filtro + extração
 │       ├── processor/
 │       │   └── score.ts          # cálculo de score de criticidade
-│       ├── pipeline.ts           # entrypoint do scraper (docker)
-│       ├── pipeline-fn.ts        # lógica principal do pipeline
-│       ├── types.ts              # tipos compartilhados
+│       ├── types.ts              # tipos da regra de score
 │       ├── logger.ts             # pino logger
-│       ├── cripto.ts             # encrypt/decrypt de senhas
+│       ├── cripto.ts             # encrypt/decrypt de tokens
 │       └── transactions.ts
 ├── sql/
 │   └── init.sql                  # schema, índices e views do banco
 ├── config/                       # credenciais e configurações (não commitar!)
-├── logs/                         # logs do pipeline (montado via volume)
+├── logs/                         # logs da API (montado via volume)
 ├── docker-compose.yml
 └── .env.example
 ```
@@ -177,16 +162,11 @@ AUTOMAÇÂO/
 | `DELETE /api/farmacias/:id` | Desativa farmácia (admin) |
 | `GET /api/farmacias/:id/evolucao` | Histórico semanal de uma farmácia |
 
-### Painel e Relatórios
+### Painel
 
 | Endpoint | Descrição |
 |---|---|
 | `GET /api/painel` | KPIs gerais + canais agregados (`?dias=7\|15\|30`) |
-| `GET /api/relatorios` | Lista de semanas com coletas |
-| `GET /api/relatorios/:periodo/xlsx` | Download do relatório em Excel |
-| `GET /api/relatorios/:periodo/csv` | Download do relatório em CSV (compatível Power BI) |
-| `POST /api/rodar-agora` | Dispara o pipeline manualmente (admin) |
-| `GET /api/status` | Verifica se o pipeline está rodando |
 
 ### Ranking de Gestores
 
@@ -209,7 +189,6 @@ AUTOMAÇÂO/
 ```bash
 cd pharmaflow-node
 npm install
-npx playwright install chromium
 ```
 
 ### 2. Configurar variáveis de ambiente
@@ -234,14 +213,6 @@ npm start
 npm run dev
 ```
 
-### 5. Rodar o pipeline manualmente
-
-```bash
-npm run pipeline
-# ou via docker:
-docker compose run --rm scraper
-```
-
 ---
 
 ## Deploy na VPS (Linux)
@@ -256,20 +227,11 @@ cd /opt/pharmaflow
 docker compose up -d --build
 ```
 
-### Cron job (domingo 22h)
-
-```bash
-crontab -e
-# adicione:
-0 22 * * 0 cd /opt/pharmaflow && docker compose run --rm scraper >> /opt/pharmaflow/logs/cron.log 2>&1
-```
-
 ### Verificar funcionamento
 
 ```bash
 docker compose ps                    # containers ativos
 docker compose logs -f api           # logs da API em tempo real
-docker compose logs scraper          # logs da última execução do scraper
 ```
 
 ---
@@ -278,12 +240,11 @@ docker compose logs scraper          # logs da última execução do scraper
 
 | Fase | Descrição | Status |
 |---|---|---|
-| Coleta | Playwright: login + filtro + extração (7 / 15 / 30 dias) | ✅ Concluído |
+| Coleta | Via API do PharmaChatBot (robô Playwright removido) | ⏳ Aguardando API |
 | Processamento | Score de criticidade vs coleta anterior | ✅ Concluído |
 | Banco de dados | PostgreSQL com schema, índices e views | ✅ Concluído |
-| API | Fastify com todos os endpoints + export XLSX/CSV | ✅ Concluído |
+| API | Fastify com todos os endpoints | ✅ Concluído |
 | Autenticação | JWT + bcrypt + roles (admin / gestor) | ✅ Concluído |
 | Ranking de Gestores | Pontuação mensal por metas atingidas | ✅ Concluído |
-| Agendamento | Cron Linux (VPS) | ✅ Concluído |
 | Deploy | Docker Compose (VPS) + Nginx + Let's Encrypt | ✅ Concluído |
 | Frontend | PharmaFlow (Framer, integrado via API) | ✅ Existente |

@@ -1,5 +1,8 @@
 import type { Metricas, ScoreInfo } from '../types';
 
+// Regra de criticidade das coletas. Ficou sem chamador quando o robô saiu;
+// a ingestão pela API do PharmaChatbot vai usá-la ao gravar cada coleta.
+
 function variacao(atual: number, anterior: number): number {
   if (anterior === 0) return 0;
   return ((atual - anterior) / anterior) * 100;

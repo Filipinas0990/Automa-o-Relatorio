@@ -1,24 +1,4 @@
-// Interfaces compartilhadas por scraper, pipeline e API
-
-export interface CanalVenda {
-  vendas:  number;
-  receita: number;
-}
-
-export interface DadosFarmacia {
-  nome:                 string;
-  periodoInicio:        string;
-  periodoFim:           string;
-  clientesGoogle:       number;
-  clientesFacebook:     number;
-  clientesGruposOferta: number;
-  totalAtendimentos:    number;
-  vendasRealizadas:     number;
-  receitaTotal:         number;
-  canais:               Record<string, number>;
-  canaisVendas:         Record<string, CanalVenda>;
-  erro:                 string | null;
-}
+// Tipos da regra de score (processor/score.ts)
 
 export interface Metricas {
   clientesGoogle:       number;
@@ -37,14 +17,4 @@ export interface ScoreInfo {
   variacaoVendas:   number;
   variacaoReceita:  number;
   alertas:          string[];
-}
-
-export interface FarmaciaParaColeta {
-  id:              number;
-  nome:            string;
-  urlBase:         string;
-  email:           string;
-  senha:           string;
-  metaLeadsGoogle: number | null;
-  metaLeadsMeta:   number | null;
 }

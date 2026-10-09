@@ -36,13 +36,10 @@ export const farmacias = pgTable('farmacias', {
   // e na mensagem do grupo. Null nos cadastros antigos — quem lê usa
   // `nomeVisivel()`, que cai na razão social enquanto não for preenchido.
   nomeFachada: varchar('nome_fachada', { length: 120 }),
-  urlBase:     varchar('url_base', { length: 255 }),
-  email:       varchar('email', { length: 120 }),
-  senhaEnc:    text('senha_enc'),
   gestorId:    integer('gestor_id').references(() => gestoresTrafego.id),
   ativa:       boolean('ativa').default(true),
   temChatbot:  boolean('tem_chatbot').default(true).notNull(),
-  // 'entrada' = cliente novo sem credenciais; 'ativo' = cliente com acesso configurado
+  // 'entrada' = cliente novo, ainda em implantação; 'ativo' = cliente acompanhado no painel
   fase:        varchar('fase', { length: 10 }).default('ativo').notNull(),
   telefone:    varchar('telefone',    { length: 20  }),
   responsavel: varchar('responsavel', { length: 120 }),
@@ -439,7 +436,7 @@ export const solicitacoesOferta = pgTable('solicitacoes_oferta', {
   atendidaEm:     timestamp('atendida_em', { withTimezone: true }),
 });
 
-// ── Tipos inferidos do schema (usados pela API e pipeline) ────────────────────
+// ── Tipos inferidos do schema (usados pela API) ────────────────────
 
 export type Gestor          = typeof gestoresTrafego.$inferSelect;
 export type Farmacia        = typeof farmacias.$inferSelect;

@@ -32,7 +32,6 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-farmacia}:${POSTGRES_PASSWORD:-farmacia123}@postgres:5432/${POSTGRES_DB:-farmacia_monitor}
-      PARALELO_MAX: "1"
     ports:
       - "8000:8000"
     volumes:
@@ -40,26 +39,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-
-  scraper:
-    build: ./pharmaflow-node
-    container_name: farmacia_scraper
-    restart: "no"
-    shm_size: '256m'
-    command: node dist/pipeline.js
-    env_file: .env
-    environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-farmacia}:${POSTGRES_PASSWORD:-farmacia123}@postgres:5432/${POSTGRES_DB:-farmacia_monitor}
-      PARALELO_MAX: "1"
-      DEBUG_SCREENSHOTS: "${DEBUG_SCREENSHOTS:-false}"
-    volumes:
-      - ./logs:/app/logs
-    depends_on:
-      postgres:
-        condition: service_healthy
-    profiles:
-      - scraper
-    # Cron na VPS chama: docker compose run --rm scraper
 
 volumes:
   postgres_data:

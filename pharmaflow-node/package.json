@@ -6,9 +6,7 @@
   "scripts": {
     "build": "node --max-old-space-size=2048 ./node_modules/typescript/bin/tsc --skipLibCheck",
     "start": "node dist/api/index.js",
-    "pipeline": "node dist/pipeline.js",
     "dev": "ts-node src/api/index.ts",
-    "dev:pipeline": "ts-node src/pipeline.ts",
     "seed": "ts-node src/seed.ts",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -20,15 +18,13 @@
     "bcrypt": "^5.1.1",
     "dotenv": "^16.4.5",
     "drizzle-orm": "^0.31.2",
-    "exceljs": "^4.4.0",
     "fastify": "^4.28.1",
     "googleapis": "^172.0.0",
     "jsonwebtoken": "^9.0.2",
     "openai": "^6.44.0",
     "pg": "^8.11.5",
     "pino": "^8.21.0",
-    "pino-pretty": "^11.2.1",
-    "playwright": "^1.45.0"
+    "pino-pretty": "^11.2.1"
   },
   "devDependencies": {
     "@types/bcrypt": "^5.0.2",

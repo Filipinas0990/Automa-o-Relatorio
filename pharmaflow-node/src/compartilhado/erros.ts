@@ -10,6 +10,8 @@ export class ErroAplicacao extends Error {
     readonly status: number,
     readonly detail: string,
     readonly cabecalhos: Record<string, string> = {},
+    /** Campos que vão na resposta junto do `detail`. */
+    readonly extras: Record<string, unknown> = {},
   ) {
     super(detail);
     this.name = new.target.name;

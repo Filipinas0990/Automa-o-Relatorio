@@ -4,7 +4,8 @@ import {
   disparosService, motivoEvolutionIndisponivel, horarioValido, ehFimDeSemana,
 } from './service';
 import type { GrupoSelecionado, MidiaDisparo, ResultadoGrupo } from './service';
-import { ofertasRepository } from '../ofertas/repository';
+// Instância compartilhada até Disparos virar classe e receber pelo construtor
+import { solicitacaoRepository } from '../composicao';
 import { logger } from '../logger';
 
 type Middleware = (req: FastifyRequest, reply: FastifyReply) => Promise<void>;
@@ -288,7 +289,7 @@ export async function disparosRoutes(
       // como atendida o pedido de um cliente de outro gestor.
       let solicitacaoId: number | null = null;
       if (b.solicitacao_id) {
-        const s = await ofertasRepository.getSolicitacao(Number(b.solicitacao_id));
+        const s = await solicitacaoRepository.buscarPorId(Number(b.solicitacao_id));
         if (s && s.gestorId === req.user.id) solicitacaoId = s.id;
       }
 
@@ -398,7 +399,7 @@ export async function disparosRoutes(
         try {
           const resultado = await disparosService.executarDisparo(disparo.id);
           if (solicitacaoId) {
-            await ofertasRepository.atualizarStatus(solicitacaoId, 'atendida');
+            await solicitacaoRepository.atualizarStatus(solicitacaoId, 'atendida');
           }
           if (resultado.modo === 'campanhas') {
             // Enfileirado no motor de campanhas — o resultado por grupo chega
@@ -431,7 +432,7 @@ export async function disparosRoutes(
        * DELETE abaixo devolve o pedido para pendente.
        */
       if (solicitacaoId) {
-        await ofertasRepository.atualizarStatus(solicitacaoId, 'atendida');
+        await solicitacaoRepository.atualizarStatus(solicitacaoId, 'atendida');
       }
 
       return reply.code(201).send({
@@ -624,7 +625,7 @@ export async function disparosRoutes(
           disparo.solicitacaoId,
         );
         if (!aindaTemCampanha) {
-          await ofertasRepository.atualizarStatus(disparo.solicitacaoId, 'pendente');
+          await solicitacaoRepository.atualizarStatus(disparo.solicitacaoId, 'pendente');
         }
       }
 

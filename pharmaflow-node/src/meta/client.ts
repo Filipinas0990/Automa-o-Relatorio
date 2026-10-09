@@ -62,6 +62,17 @@ export async function metaReq<T = unknown>(
     // Página com WhatsApp PESSOAL ligado: anúncio para WhatsApp exige número do
     // WhatsApp Business. O conjunto não guarda número — usa o da página —, então
     // só se resolve na página (Configurações → Contas vinculadas → WhatsApp).
+    // Checkpoint de segurança do Facebook na conta do dono do token (#31,
+    // subcódigo 3858385): bloqueia criar/editar anúncios até ele se autenticar
+    // no Gerenciador. Os anúncios que já rodam continuam. Nada a fazer pela API.
+    if (json.error.code === 31 || json.error.error_subcode === 3858385) {
+      console.error('[Meta API]', JSON.stringify({ path, error: json.error }));
+      throw new Error(
+        'O Facebook bloqueou a criação de anúncios nesta conta por segurança (suspeita de acesso indevido). '
+        + 'O dono do Facebook conectado precisa abrir o Gerenciador de Anúncios (adsmanager.facebook.com), '
+        + 'confirmar a identidade quando for pedido e depois publicar de novo. Os anúncios que já rodam não param.',
+      );
+    }
     // Token emitido por app do Meta em MODO DE DESENVOLVIMENTO: o Meta cria o
     // criativo mas recusa publicar o anúncio. Só se resolve no app (modo Ao vivo).
     const textoErro = `${json.error.error_user_msg ?? ''} ${json.error.message ?? ''}`;

@@ -15,7 +15,7 @@ export abstract class Controller {
   readonly plugin = async (app: FastifyInstance): Promise<void> => {
     app.setErrorHandler((erro, _request, reply) => {
       if (!(erro instanceof ErroAplicacao)) throw erro;
-      return reply.code(erro.status).headers(erro.cabecalhos).send({ detail: erro.detail });
+      return reply.code(erro.status).headers(erro.cabecalhos).send({ detail: erro.detail, ...erro.extras });
     });
     this.rotas(app);
   };

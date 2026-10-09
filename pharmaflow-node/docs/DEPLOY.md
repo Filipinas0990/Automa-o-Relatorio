@@ -128,17 +128,12 @@ docker exec farmacia_db psql -U farmacia -d farmacia_monitor -c '\d nome_da_tabe
 |---|---|---|---|
 | `postgres` | `farmacia_db` | 5432 | Banco de dados PostgreSQL 16 |
 | `api` | `farmacia_api` | 8000 | API Fastify — sempre rodando |
-| `scraper` | `farmacia_scraper` | — | Scraper Playwright — acionado pelo cron |
 
-### O serviço `scraper`
+### Coleta de dados
 
-O scraper **não fica rodando o tempo todo**. Ele usa o perfil `scraper` do Docker Compose e é acionado pelo cron da VPS:
-
-```bash
-docker compose run --rm scraper
-```
-
-Isso cria um container temporário, executa o scraper e remove o container ao terminar.
+Não há mais serviço de coleta. O robô que fazia login no painel do
+PharmaChatbot foi removido; os dados vão chegar pela API do PharmaChatbot
+quando ela existir. Não há cron de coleta na VPS.
 
 ---
 
