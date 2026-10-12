@@ -1,5 +1,4 @@
 import { and, eq, lte, desc, sql, notInArray } from 'drizzle-orm';
-import { db } from '../database/db';
 import {
   gestorWhatsapp, disparosGrupo, disparosGrupoLog, gruposCache, gruposCacheSync,
   horariosDisparo, farmacias,
@@ -7,18 +6,21 @@ import {
 import type {
   GestorWhatsapp, DisparoGrupo, GrupoCache, HorarioDisparo,
 } from '../database/schema';
+import type { BancoDeDados } from '../compartilhado/tipos';
 
 export type InstanciaStatus = 'open' | 'close' | 'connecting';
 
-export const disparosRepository = {
+/** Acesso às tabelas de disparo em grupos: instância do gestor, disparos, horários e cache de grupos. */
+export class DisparoRepository {
+  constructor(private readonly db: BancoDeDados) {}
 
   // ── Instância Evolution do gestor ──────────────────────────────────────────
 
   async getInstancia(gestorId: number): Promise<GestorWhatsapp | null> {
-    const [row] = await db.select().from(gestorWhatsapp)
+    const [row] = await this.db.select().from(gestorWhatsapp)
       .where(eq(gestorWhatsapp.gestorId, gestorId));
     return row ?? null;
-  },
+  }
 
   async criarInstancia(data: {
     gestorId:     number;
@@ -26,18 +28,18 @@ export const disparosRepository = {
     status:       InstanciaStatus;
     qrCode:       string | null;
   }): Promise<GestorWhatsapp> {
-    const [row] = await db.insert(gestorWhatsapp).values(data).returning();
+    const [row] = await this.db.insert(gestorWhatsapp).values(data).returning();
     return row;
-  },
+  }
 
   async atualizarInstancia(
     id:     number,
     campos: Partial<{ status: InstanciaStatus; qrCode: string | null; numeroConectado: string | null }>,
   ): Promise<void> {
-    await db.update(gestorWhatsapp)
+    await this.db.update(gestorWhatsapp)
       .set({ ...campos, atualizadoEm: sql`NOW()` })
       .where(eq(gestorWhatsapp.id, id));
-  },
+  }
 
   // ── Disparos ───────────────────────────────────────────────────────────────
 
@@ -61,9 +63,9 @@ export const disparosRepository = {
     status:       string;
     proximoEnvio: Date | null;
   }): Promise<DisparoGrupo> {
-    const [row] = await db.insert(disparosGrupo).values(data).returning();
+    const [row] = await this.db.insert(disparosGrupo).values(data).returning();
     return row;
-  },
+  }
 
   /**
    * Produtos do último disparo daquele cliente — alimenta o chip "Recentes".
@@ -80,7 +82,7 @@ export const disparosRepository = {
     gestorId:   number,
     farmaciaId: number,
   ): Promise<{ produtosJson: string; criadoEm: Date | null } | null> {
-    const [row] = await db
+    const [row] = await this.db
       .select({ produtosJson: disparosGrupo.produtosJson, criadoEm: disparosGrupo.criadoEm })
       .from(disparosGrupo)
       .where(and(
@@ -92,7 +94,7 @@ export const disparosRepository = {
       .orderBy(desc(disparosGrupo.criadoEm))
       .limit(1);
     return row?.produtosJson ? { produtosJson: row.produtosJson, criadoEm: row.criadoEm } : null;
-  },
+  }
 
   /**
    * A última campanha de CADA cliente do gestor, em uma consulta só.
@@ -110,7 +112,7 @@ export const disparosRepository = {
     ultimoEnvio:  Date | null;
     criadoEm:     Date | null;
   }>> {
-    const resultado = await db.execute<{
+    const resultado = await this.db.execute<{
       farmacia_id:   number;
       id:            number;
       status:        string;
@@ -139,14 +141,14 @@ export const disparosRepository = {
       ultimoEnvio:  data(r.ultimo_envio),
       criadoEm:     data(r.criado_em),
     }]));
-  },
+  }
 
   /**
    * Sobrou alguma campanha viva deste pedido? Usado no cancelamento: só o
    * último cancelamento devolve a solicitação para "pendente".
    */
   async temDisparoAtivoDaSolicitacao(solicitacaoId: number): Promise<boolean> {
-    const [row] = await db
+    const [row] = await this.db
       .select({ id: disparosGrupo.id })
       .from(disparosGrupo)
       .where(and(
@@ -155,7 +157,7 @@ export const disparosRepository = {
       ))
       .limit(1);
     return Boolean(row);
-  },
+  }
 
   /**
    * A quem cada um destes grupos JÁ pertenceu, segundo o histórico de disparos
@@ -180,7 +182,7 @@ export const disparosRepository = {
 
     const lista = sql.join(jids.map((j) => sql`${j}`), sql`, `);
 
-    const resultado = await db.execute<{
+    const resultado = await this.db.execute<{
       jid: string; farmacia_id: number; nome: string; nome_fachada: string | null;
     }>(sql`
       SELECT el->>'jid'   AS jid,
@@ -202,30 +204,30 @@ export const disparosRepository = {
       nome:        r.nome,
       nomeFachada: r.nome_fachada,
     }));
-  },
+  }
 
   async getDisparo(id: number): Promise<DisparoGrupo | null> {
-    const [row] = await db.select().from(disparosGrupo).where(eq(disparosGrupo.id, id));
+    const [row] = await this.db.select().from(disparosGrupo).where(eq(disparosGrupo.id, id));
     return row ?? null;
-  },
+  }
 
   /** Disparos do gestor, mais recentes primeiro. */
   async listarDisparos(gestorId: number): Promise<DisparoGrupo[]> {
-    return db.select().from(disparosGrupo)
+    return this.db.select().from(disparosGrupo)
       .where(eq(disparosGrupo.gestorId, gestorId))
       .orderBy(desc(disparosGrupo.criadoEm))
       .limit(100);
-  },
+  }
 
   /** Agendados cuja hora já chegou — usado pelo scheduler. */
   async buscarDisparosPendentes(agora: Date): Promise<DisparoGrupo[]> {
-    return db.select().from(disparosGrupo).where(
+    return this.db.select().from(disparosGrupo).where(
       and(
         eq(disparosGrupo.status, 'agendado'),
         lte(disparosGrupo.proximoEnvio, agora),
       ),
     );
-  },
+  }
 
   async atualizarDisparo(
     id:     number,
@@ -233,10 +235,10 @@ export const disparosRepository = {
       status: string; proximoEnvio: Date | null; ultimoEnvio: Date | null; cursorMidia: number;
     }>,
   ): Promise<void> {
-    await db.update(disparosGrupo)
+    await this.db.update(disparosGrupo)
       .set({ ...campos, atualizadoEm: sql`NOW()` })
       .where(eq(disparosGrupo.id, id));
-  },
+  }
 
   async registrarLog(data: {
     disparoId: number;
@@ -245,45 +247,45 @@ export const disparosRepository = {
     status:    'ok' | 'erro';
     erro:      string | null;
   }): Promise<void> {
-    await db.insert(disparosGrupoLog).values(data);
-  },
+    await this.db.insert(disparosGrupoLog).values(data);
+  }
 
   async logsDoDisparo(disparoId: number) {
-    return db.select().from(disparosGrupoLog)
+    return this.db.select().from(disparosGrupoLog)
       .where(eq(disparosGrupoLog.disparoId, disparoId))
       .orderBy(desc(disparosGrupoLog.enviadoEm));
-  },
+  }
 
   // ── Horários pré-definidos (migration 0022) ────────────────────────────────
 
   async listarHorarios(gestorId: number): Promise<HorarioDisparo[]> {
-    return db.select().from(horariosDisparo)
+    return this.db.select().from(horariosDisparo)
       .where(eq(horariosDisparo.gestorId, gestorId))
       .orderBy(horariosDisparo.horario);
-  },
+  }
 
   /** Cria (ou ignora, se aquele horário já estiver na lista). */
   async criarHorario(gestorId: number, horario: string, rotulo: string | null): Promise<void> {
-    await db.insert(horariosDisparo)
+    await this.db.insert(horariosDisparo)
       .values({ gestorId, horario, rotulo })
       .onConflictDoNothing();
-  },
+  }
 
   /** Semeia os horários padrão — só na primeira vez que o gestor abre a lista. */
   async criarHorariosPadrao(gestorId: number, horarios: string[]): Promise<void> {
     if (horarios.length === 0) return;
-    await db.insert(horariosDisparo)
+    await this.db.insert(horariosDisparo)
       .values(horarios.map((horario) => ({ gestorId, horario, rotulo: null })))
       .onConflictDoNothing();
-  },
+  }
 
   /** Remove, mas só se o horário for daquele gestor. */
   async removerHorario(gestorId: number, id: number): Promise<boolean> {
-    const removidos = await db.delete(horariosDisparo)
+    const removidos = await this.db.delete(horariosDisparo)
       .where(and(eq(horariosDisparo.id, id), eq(horariosDisparo.gestorId, gestorId)))
       .returning({ id: horariosDisparo.id });
     return removidos.length > 0;
-  },
+  }
 
   // ── Disparos travados ──────────────────────────────────────────────────────
 
@@ -294,29 +296,29 @@ export const disparosRepository = {
    * oferta não foi ao ar.
    */
   async buscarDisparosTravados(limite: Date): Promise<DisparoGrupo[]> {
-    return db.select().from(disparosGrupo).where(
+    return this.db.select().from(disparosGrupo).where(
       and(
         eq(disparosGrupo.status, 'enviando'),
         lte(disparosGrupo.atualizadoEm, limite),
       ),
     );
-  },
+  }
 
   // ── Cache de grupos (migration 0020) ───────────────────────────────────────
 
   /** Grupos cacheados de uma instância, já em ordem alfabética. */
   async listarGruposCache(instanceName: string): Promise<GrupoCache[]> {
-    return db.select().from(gruposCache)
+    return this.db.select().from(gruposCache)
       .where(eq(gruposCache.instanceName, instanceName))
       .orderBy(gruposCache.nome);
-  },
+  }
 
   /** Quando esta instância foi sincronizada por inteiro (null = nunca). */
   async getSyncGrupos(instanceName: string): Promise<{ sincronizadoEm: Date; erro: string | null } | null> {
-    const [row] = await db.select().from(gruposCacheSync)
+    const [row] = await this.db.select().from(gruposCacheSync)
       .where(eq(gruposCacheSync.instanceName, instanceName));
     return row ? { sincronizadoEm: row.sincronizadoEm, erro: row.erro } : null;
-  },
+  }
 
   /**
    * Substitui o cache da instância pela lista recém-buscada na Evolution.
@@ -329,7 +331,7 @@ export const disparosRepository = {
   ): Promise<Date> {
     const agora = new Date();
 
-    await db.transaction(async (tx) => {
+    await this.db.transaction(async (tx) => {
       const jids = grupos.map((g) => g.jid);
       await tx.delete(gruposCache).where(
         jids.length > 0
@@ -359,7 +361,7 @@ export const disparosRepository = {
     });
 
     return agora;
-  },
+  }
 
   /**
    * Marca que a sincronização falhou, sem apagar o cache: é melhor mostrar a
@@ -370,8 +372,8 @@ export const disparosRepository = {
    * achar que o cache está fresco e devolver "nenhum grupo" em vez do erro.
    */
   async registrarErroSyncGrupos(instanceName: string, erro: string): Promise<void> {
-    await db.update(gruposCacheSync)
+    await this.db.update(gruposCacheSync)
       .set({ erro })
       .where(eq(gruposCacheSync.instanceName, instanceName));
-  },
-};
+  }
+}

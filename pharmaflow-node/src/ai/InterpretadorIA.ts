@@ -1,14 +1,6 @@
 import OpenAI from 'openai';
 import type { MensagemInterpretada } from './types';
 
-// Cliente OpenAI criado sob demanda (lazy) — assim a app NÃO quebra ao subir
-// quando não há OPENAI_API_KEY. Só é instanciado se o bot for realmente usado.
-let _openai: OpenAI | null = null;
-function getOpenAI(): OpenAI {
-  if (!_openai) _openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  return _openai;
-}
-
 const SYSTEM_PROMPT = `Você é um assistente especializado em criar campanhas no Meta Ads para gestores de tráfego de farmácias.
 
 Retorne SEMPRE um JSON válido (sem markdown, sem blocos de código) com esta estrutura exata:
@@ -57,49 +49,73 @@ export type HistoricoMensagem = {
   content: string;
 };
 
-export async function interpretarMensagem(
-  texto:         string,
-  imagemBase64?: string,
-  historico?:    HistoricoMensagem[],
-): Promise<MensagemInterpretada> {
-  const userContent: OpenAI.Chat.ChatCompletionContentPart[] = [];
+/**
+ * Interpretação de mensagens em linguagem natural (texto + imagem) via GPT-4o,
+ * para extrair os dados de uma campanha do que o gestor digita no WhatsApp/Web.
+ */
+export class InterpretadorIA {
+  // Cliente OpenAI criado sob demanda (lazy) — assim a app NÃO quebra ao subir
+  // quando não há OPENAI_API_KEY. Só é instanciado se o bot for realmente usado.
+  private openai: OpenAI | null = null;
 
-  if (imagemBase64) {
-    const dataUrl = imagemBase64.startsWith('data:')
-      ? imagemBase64
-      : `data:image/jpeg;base64,${imagemBase64}`;
+  private cliente(): OpenAI {
+    if (!this.openai) {
+      this.openai = new OpenAI({
+        apiKey: process.env.OPENAI_API_KEY,
+        // Delega ao `fetch` global em cada chamada, em vez de deixar o SDK
+        // capturar uma referência fixa na construção — sem isso, trocar o
+        // `fetch` global depois de o cliente já existir (como os testes fazem
+        // a cada simulação) não tem efeito nenhum.
+        fetch: (...args: Parameters<typeof fetch>) => fetch(...args),
+      });
+    }
+    return this.openai;
+  }
+
+  async interpretar(
+    texto:         string,
+    imagemBase64?: string,
+    historico?:    HistoricoMensagem[],
+  ): Promise<MensagemInterpretada> {
+    const userContent: OpenAI.Chat.ChatCompletionContentPart[] = [];
+
+    if (imagemBase64) {
+      const dataUrl = imagemBase64.startsWith('data:')
+        ? imagemBase64
+        : `data:image/jpeg;base64,${imagemBase64}`;
+
+      userContent.push({
+        type:      'image_url',
+        image_url: { url: dataUrl, detail: 'low' },
+      });
+    }
 
     userContent.push({
-      type:      'image_url',
-      image_url: { url: dataUrl, detail: 'low' },
+      type: 'text',
+      text: texto || '(mensagem sem texto, apenas imagem)',
     });
-  }
 
-  userContent.push({
-    type: 'text',
-    text: texto || '(mensagem sem texto, apenas imagem)',
-  });
+    const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+      { role: 'system', content: SYSTEM_PROMPT },
+    ];
 
-  const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
-    { role: 'system', content: SYSTEM_PROMPT },
-  ];
-
-  // Injeta o histórico da conversa (sem as imagens antigas, só texto)
-  if (historico && historico.length > 0) {
-    for (const h of historico) {
-      messages.push({ role: h.role, content: h.content });
+    // Injeta o histórico da conversa (sem as imagens antigas, só texto)
+    if (historico && historico.length > 0) {
+      for (const h of historico) {
+        messages.push({ role: h.role, content: h.content });
+      }
     }
+
+    messages.push({ role: 'user', content: userContent });
+
+    const response = await this.cliente().chat.completions.create({
+      model:       'gpt-4o',
+      messages,
+      max_tokens:  1024,
+      temperature: 0,
+    });
+
+    const raw = response.choices[0].message.content ?? '{}';
+    return JSON.parse(raw) as MensagemInterpretada;
   }
-
-  messages.push({ role: 'user', content: userContent });
-
-  const response = await getOpenAI().chat.completions.create({
-    model:       'gpt-4o',
-    messages,
-    max_tokens:  1024,
-    temperature: 0,
-  });
-
-  const raw = response.choices[0].message.content ?? '{}';
-  return JSON.parse(raw) as MensagemInterpretada;
 }

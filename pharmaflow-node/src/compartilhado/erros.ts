@@ -47,3 +47,12 @@ export class MuitasTentativas extends ErroAplicacao {
 export class Indisponivel extends ErroAplicacao {
   constructor(detail: string) { super(503, detail); }
 }
+
+/**
+ * Um serviço externo (Evolution, Meta, Google...) falhou ou recusou. 502, e
+ * não 500: o bug não é nosso, e não é 401/403 — não é a sessão do gestor que
+ * está errada, então o frontend não deve deslogar ninguém por causa disto.
+ */
+export class FalhaExterna extends ErroAplicacao {
+  constructor(detail: string) { super(502, detail); }
+}

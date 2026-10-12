@@ -140,7 +140,6 @@ AUTOMAÇÂO/
 |---|---|
 | `POST /api/auth/login` | Login — retorna JWT (8h) |
 | `GET /api/auth/me` | Dados do usuário autenticado |
-| `POST /api/auth/criar-super-admin` | Cria o primeiro admin (requer `ADMIN_SECRET`) |
 
 ### Gestores
 
@@ -195,7 +194,7 @@ npm install
 
 ```bash
 copy .env.example .env
-# edite o .env com DATABASE_URL, JWT_SECRET_KEY, ADMIN_SECRET, CRYPT_KEY
+# edite o .env com DATABASE_URL, JWT_SECRET_KEY, CRYPT_KEY
 ```
 
 ### 3. Subir o banco de dados

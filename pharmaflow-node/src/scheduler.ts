@@ -1,8 +1,6 @@
-import { whatsappService }    from './whatsapp/service';
-import { whatsappRepository } from './whatsapp/repository';
-import { disparosService }    from './disparos/service';
-import { disparosRepository } from './disparos/repository';
-import { logger }             from './logger';
+import { logger } from './logger';
+// Instâncias compartilhadas até este scheduler virar classe e receber pelo construtor.
+import { whatsappService, whatsappRepository, disparoService, disparoRepository } from './composicao';
 
 const INTERVALO_MS = 60_000; // verifica a cada 1 minuto
 
@@ -85,21 +83,21 @@ async function verificarENotificar(): Promise<void> {
  * recalcula o proximo_envio conforme a repetição (ou finaliza o disparo).
  */
 async function verificarDisparosAgendados(): Promise<void> {
-  const pendentes = await disparosRepository.buscarDisparosPendentes(new Date());
+  const pendentes = await disparoRepository.buscarDisparosPendentes(new Date());
   if (!pendentes.length) return;
 
   logger.info({ total: pendentes.length }, 'Scheduler: disparos de grupo pendentes');
 
   for (const disparo of pendentes) {
     try {
-      const resultado = await disparosService.executarDisparo(disparo.id);
+      const resultado = await disparoService.executarDisparo(disparo.id);
       logger.info(
         { disparoId: disparo.id, resultado },
         'Scheduler: disparo em grupos processado',
       );
     } catch (err) {
       logger.error({ err, disparoId: disparo.id }, 'Erro ao executar disparo agendado');
-      await disparosRepository.atualizarDisparo(disparo.id, { status: 'erro' });
+      await disparoRepository.atualizarDisparo(disparo.id, { status: 'erro' });
     }
   }
 }
@@ -117,7 +115,7 @@ const LIMITE_ENVIANDO_MS = 30 * 60 * 1000;
 
 async function verificarDisparosTravados(): Promise<void> {
   const limite = new Date(Date.now() - LIMITE_ENVIANDO_MS);
-  const travados = await disparosRepository.buscarDisparosTravados(limite);
+  const travados = await disparoRepository.buscarDisparosTravados(limite);
   if (!travados.length) return;
 
   for (const disparo of travados) {
@@ -125,7 +123,7 @@ async function verificarDisparosTravados(): Promise<void> {
       { disparoId: disparo.id, desde: disparo.atualizadoEm },
       'Disparo preso em "enviando" — marcando como erro',
     );
-    await disparosRepository.atualizarDisparo(disparo.id, { status: 'erro' });
+    await disparoRepository.atualizarDisparo(disparo.id, { status: 'erro' });
   }
 }
 

@@ -1,4 +1,4 @@
-import { eq, and } from 'drizzle-orm';
+import { eq, and, ilike } from 'drizzle-orm';
 import { farmacias } from '../database/schema';
 import type { BancoDeDados } from '../compartilhado/tipos';
 
@@ -24,6 +24,13 @@ export class FarmaciaRepository {
 
   async buscarAtiva(id: number): Promise<Farmacia | null> {
     const [f] = await this.db.select().from(farmacias).where(and(eq(farmacias.id, id), eq(farmacias.ativa, true)));
+    return f ?? null;
+  }
+
+  /** Primeira farmácia cujo nome contém `nome` (usado pelo bot de ads, que recebe o cliente em texto livre). */
+  async buscarPorNome(nome: string): Promise<{ id: number; nome: string } | null> {
+    const [f] = await this.db.select({ id: farmacias.id, nome: farmacias.nome })
+      .from(farmacias).where(ilike(farmacias.nome, `%${nome}%`)).limit(1);
     return f ?? null;
   }
 

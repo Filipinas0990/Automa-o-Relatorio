@@ -4,17 +4,12 @@ import cors     from '@fastify/cors';
 import formbody from '@fastify/formbody';
 import { logger } from '../logger';
 import { iniciarSchedulerWhatsApp } from '../scheduler';
-import { whatsappRoutes } from '../whatsapp/routes';
-import { adsRoutes } from '../ads/routes';
-import { aquecerContasAnuncio } from '../ads/service';
-import { catalogoRoutes } from '../catalogo/routes';
-import { campanhasRoutes } from '../campanhas/routes';
-import { disparosRoutes } from '../disparos/routes';
 import {
-  autenticador, authController, gestorController, farmaciaController, painelController,
+  authController, gestorController, farmaciaController, painelController,
   rankingController, googleController, conexaoMetaController,
   agendaController, reuniaoController, dashboardController, acaoController,
-  ofertaPublicaController, ofertaController,
+  ofertaPublicaController, ofertaController, catalogoController, whatsappController,
+  campanhaController, disparoController, adsController, adsService,
 } from '../composicao';
 
 const app = Fastify({
@@ -47,8 +42,6 @@ app.addContentTypeParser('application/json', { parseAs: 'string' }, (_req, body,
 });
 
 // ── Controllers (classes montadas em ../composicao) ──────────────────────────
-const { autenticar, apenasAdmin } = autenticador;
-
 app.register(authController.plugin);
 app.register(gestorController.plugin);
 app.register(farmaciaController.plugin);
@@ -63,14 +56,11 @@ app.register(acaoController.plugin);
 // Ofertas: as rotas PÚBLICAS (/api/publico/ofertas/*) usam o token do link como credencial
 app.register(ofertaPublicaController.plugin);
 app.register(ofertaController.plugin);
-
-// ── Módulos ainda em funções (plugins recebem os middlewares por opção) ───────
-app.register(whatsappRoutes, { autenticar, apenasAdmin });
-app.register(adsRoutes,      { autenticar, apenasAdmin });
-app.register(catalogoRoutes, { autenticar, apenasAdmin });
-app.register(campanhasRoutes,{ autenticar, apenasAdmin });
-// Disparo em grupos: rotas usam só `autenticar` — cada gestor opera as farmácias dele
-app.register(disparosRoutes, { autenticar, apenasAdmin });
+app.register(catalogoController.plugin);
+app.register(whatsappController.plugin);
+app.register(campanhaController.plugin);
+app.register(disparoController.plugin);
+app.register(adsController.plugin);
 
 // ── Tratamento global de erros ────────────────────────────────────────────────
 
@@ -94,7 +84,7 @@ if (require.main === module) {
     // a abrir o wizard de campanha depois do deploy encontra a lista pronta,
     // em vez de esperar a Meta responder. Falha aqui não derruba nada — a
     // listagem sincroniza sozinha na primeira visita.
-    aquecerContasAnuncio();
+    adsService.aquecerContasAnuncio();
   });
 }
 

@@ -1,7 +1,10 @@
 import './env';
 import { readdirSync, readFileSync } from 'fs';
 import { join, extname, basename } from 'path';
-import { upsertProduto, contarProdutos } from './catalogo/repository';
+import { db } from './database/db';
+import { ProdutoRepository } from './catalogo/ProdutoRepository';
+
+const produtoRepository = new ProdutoRepository(db);
 
 /**
  * Importa uma pasta de imagens PNG para o catálogo de produtos.
@@ -52,7 +55,7 @@ async function importar() {
     const mime  = MIME_POR_EXT[ext];
     try {
       const b64 = readFileSync(join(pasta, arquivo)).toString('base64');
-      await upsertProduto(nome, b64, mime);
+      await produtoRepository.upsert(nome, b64, mime);
       ok++;
       process.stdout.write(`  ✅ ${nome}\n`);
     } catch (e) {
@@ -61,7 +64,7 @@ async function importar() {
     }
   }
 
-  const total = await contarProdutos();
+  const total = await produtoRepository.contar();
   console.log(`\n✅ Importação concluída: ${ok} ok, ${erro} erro(s).`);
   console.log(`   Catálogo agora tem ${total} produtos.`);
   process.exit(0);

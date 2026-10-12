@@ -10,10 +10,9 @@ import {
   api, criarGestor, criarFarmacia, criarSolicitacao,
   conectarWhatsappFake, limparBanco,
 } from './helpers';
-import {
-  fatiarRodizio, PRODUTOS_POR_ENVIO, calcularProximoEnvio, ehFimDeSemana,
-} from '../src/disparos/service';
-import type { MidiaDisparo } from '../src/disparos/service';
+import { fatiarRodizio, PRODUTOS_POR_ENVIO } from '../src/disparos/rodizio';
+import { calcularProximoEnvio, ehFimDeSemana } from '../src/disparos/agendamento';
+import type { MidiaDisparo } from '../src/disparos/types';
 
 const GRUPO = { jid: '55119999@g.us', nome: 'Grupo de Ofertas' };
 const MIDIA = { b64: 'ZmFrZQ==', mime: 'image/png', rotulo: 'Dipirona — R$ 9,90' };

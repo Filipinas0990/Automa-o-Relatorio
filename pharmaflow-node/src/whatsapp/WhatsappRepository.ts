@@ -1,31 +1,31 @@
 import { eq, sql } from 'drizzle-orm';
-import { db } from '../database/db';
 import { whatsappConfig, reunioes } from '../database/schema';
 import type { WhatsAppConfig } from '../database/schema';
+import type { BancoDeDados } from '../compartilhado/tipos';
 
 export type WhatsAppStatus = 'open' | 'close' | 'connecting';
 
-// ── Config da instância ───────────────────────────────────────────────────────
-
-export const whatsappRepository = {
+/** Acesso às conexões WhatsApp (Evolution API) e à notificação de reuniões. */
+export class WhatsappRepository {
+  constructor(private readonly db: BancoDeDados) {}
 
   /** Conexão "default" (a mais antiga) — usada pelas notificações de reunião. */
   async getConfig(): Promise<WhatsAppConfig | null> {
-    const [row] = await db.select().from(whatsappConfig)
+    const [row] = await this.db.select().from(whatsappConfig)
       .orderBy(whatsappConfig.id).limit(1);
     return row ?? null;
-  },
+  }
 
   /** Todas as conexões globais (a tela Conexões lista várias). */
   async listConfigs(): Promise<WhatsAppConfig[]> {
-    return db.select().from(whatsappConfig).orderBy(whatsappConfig.id);
-  },
+    return this.db.select().from(whatsappConfig).orderBy(whatsappConfig.id);
+  }
 
   async getConfigByInstance(instanceName: string): Promise<WhatsAppConfig | null> {
-    const [row] = await db.select().from(whatsappConfig)
+    const [row] = await this.db.select().from(whatsappConfig)
       .where(eq(whatsappConfig.instanceName, instanceName)).limit(1);
     return row ?? null;
-  },
+  }
 
   async salvarConfig(data: {
     instanceName:    string;
@@ -36,13 +36,13 @@ export const whatsappRepository = {
   }): Promise<WhatsAppConfig> {
     // Upsert POR instância — cada conexão distinta é a sua própria linha
     // (é o que permite ter várias conexões globais).
-    const [existente] = await db.select({ id: whatsappConfig.id })
+    const [existente] = await this.db.select({ id: whatsappConfig.id })
       .from(whatsappConfig)
       .where(eq(whatsappConfig.instanceName, data.instanceName))
       .limit(1);
 
     if (existente) {
-      const [atualizado] = await db.update(whatsappConfig).set({
+      const [atualizado] = await this.db.update(whatsappConfig).set({
         status:          data.status,
         qrCode:          data.qrCode          ?? null,
         numeroConectado: data.numeroConectado  ?? null,
@@ -52,7 +52,7 @@ export const whatsappRepository = {
       return atualizado;
     }
 
-    const [criado] = await db.insert(whatsappConfig).values({
+    const [criado] = await this.db.insert(whatsappConfig).values({
       instanceName:    data.instanceName,
       status:          data.status,
       qrCode:          data.qrCode          ?? null,
@@ -60,7 +60,7 @@ export const whatsappRepository = {
       nome:            data.nome ?? null,
     }).returning();
     return criado;
-  },
+  }
 
   async atualizarStatus(
     id:              number,
@@ -73,12 +73,12 @@ export const whatsappRepository = {
     if (qrCode          !== undefined) campos.qrCode          = qrCode;
     if (numeroConectado !== undefined) campos.numeroConectado = numeroConectado;
 
-    await db.update(whatsappConfig).set(campos).where(eq(whatsappConfig.id, id));
-  },
+    await this.db.update(whatsappConfig).set(campos).where(eq(whatsappConfig.id, id));
+  }
 
   async deletarConfig(id: number): Promise<void> {
-    await db.delete(whatsappConfig).where(eq(whatsappConfig.id, id));
-  },
+    await this.db.delete(whatsappConfig).where(eq(whatsappConfig.id, id));
+  }
 
   // ── Reuniões — usado pelo scheduler ────────────────────────────────────────
 
@@ -87,7 +87,7 @@ export const whatsappRepository = {
     const limiteIni = new Date(agora.getTime() + (5 * 60 - 5) * 60_000);  // +4h55m
     const limiteFim = new Date(agora.getTime() + (5 * 60 + 5) * 60_000);  // +5h05m
 
-    const { rows } = await db.execute(sql`
+    const { rows } = await this.db.execute(sql`
       SELECT
         r.id,
         r.titulo,
@@ -116,11 +116,11 @@ export const whatsappRepository = {
       telefone:        unknown;
       farmacia_nome:   unknown;
     }[];
-  },
+  }
 
   async marcarNotificacaoEnviada(reuniaoId: number): Promise<void> {
-    await db.update(reunioes)
+    await this.db.update(reunioes)
       .set({ whatsappNotificadoEm: new Date() })
       .where(eq(reunioes.id, reuniaoId));
-  },
-};
+  }
+}

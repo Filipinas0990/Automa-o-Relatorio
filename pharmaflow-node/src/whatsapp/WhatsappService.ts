@@ -1,57 +1,12 @@
-import { whatsappRepository } from './repository';
-import type { WhatsAppStatus } from './repository';
-import type { WhatsAppConfig } from '../database/schema';
 import { logger } from '../logger';
-
-const EVOLUTION_URL = () => process.env.EVOLUTION_API_URL || '';
-const EVOLUTION_KEY = () => process.env.EVOLUTION_API_KEY || '';
-
-// ── Utilitários ───────────────────────────────────────────────────────────────
+import { FalhaExterna } from '../compartilhado/erros';
+import type { WhatsAppConfig } from '../database/schema';
+import type { ClienteEvolution } from './ClienteEvolution';
+import type { WhatsAppStatus, WhatsappRepository } from './WhatsappRepository';
 
 function normalizarTelefone(tel: string): string {
   const d = tel.replace(/\D/g, '');
   return d.startsWith('55') && d.length >= 12 ? d : `55${d}`;
-}
-
-/** Teto padrão de espera pela Evolution. Sem isso um request travado ali deixa
- *  o gestor com o spinner rodando para sempre, sem erro nenhum na tela. */
-const TIMEOUT_PADRAO_MS = 30_000;
-
-/** Chamada crua à Evolution API. Exportada para o módulo de disparos reusar. */
-export async function evolutionReq<T = unknown>(
-  method: string,
-  path:   string,
-  body?:  unknown,
-  opts?:  { timeoutMs?: number },
-): Promise<{ ok: boolean; status: number; data: T }> {
-  const url = `${EVOLUTION_URL()}${path}`;
-  const timeoutMs = opts?.timeoutMs ?? TIMEOUT_PADRAO_MS;
-
-  let res: Response;
-  try {
-    res = await fetch(url, {
-      method,
-      headers: {
-        'Content-Type': 'application/json',
-        apikey:          EVOLUTION_KEY(),
-      },
-      body:   body !== undefined ? JSON.stringify(body) : undefined,
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-  } catch (err) {
-    // TimeoutError vem do AbortSignal.timeout; o resto é rede fora do ar.
-    const expirou = err instanceof Error && err.name === 'TimeoutError';
-    logger.error({ err, url, method, timeoutMs }, 'Evolution não respondeu');
-    throw new Error(
-      expirou
-        ? `A Evolution API não respondeu em ${Math.round(timeoutMs / 1000)}s.`
-        : 'Não foi possível falar com a Evolution API.',
-    );
-  }
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const data = await res.json().catch(() => ({} as any));
-  return { ok: res.ok, status: res.status, data: data as T };
 }
 
 /** Uma conexão da tela "Conexões", já com o status conferido na Evolution. */
@@ -65,52 +20,80 @@ export interface ConexaoWhatsApp {
 }
 
 /**
- * Status ao vivo de UMA instância, com o banco sincronizado de quebra.
- * Se a Evolution não responde, devolve o último status conhecido — melhor um
- * dado velho do que a tela inteira falhar por causa de uma conexão morta.
+ * Quem recebe uma mensagem de WhatsApp entrante (evento `messages.upsert` do
+ * webhook) e decide o que fazer com ela. Hoje é o módulo de ads (bot de
+ * criação de campanhas via WhatsApp).
+ *
+ * Injetado por SETTER (`definirRoteador`), não pelo construtor: ads precisa de
+ * uma instância de WhatsappService para ENVIAR respostas, e WhatsappService
+ * precisa de uma instância de AdsService para RECEBER mensagens — uma
+ * dependência mútua de verdade entre as duas classes finais. A raiz de
+ * composição monta o WhatsappService primeiro, monta o AdsService recebendo-o
+ * pelo construtor, e só então fecha o laço chamando `definirRoteador`.
  */
-async function statusAoVivo(config: WhatsAppConfig): Promise<WhatsAppStatus> {
-  try {
-    const { data } = await evolutionReq<{ instance?: { state?: string }; state?: string }>(
-      'GET', `/instance/connectionState/${config.instanceName}`,
-    );
-    const live = (data?.instance?.state ?? data?.state ?? 'close') as WhatsAppStatus;
-    if (live !== config.status) {
-      await whatsappRepository.atualizarStatus(config.id, live);
-    }
-    return live;
-  } catch (err) {
-    logger.warn({ err, instancia: config.instanceName }, 'Não foi possível consultar status da Evolution API');
-    return config.status as WhatsAppStatus;
-  }
+export interface RoteadorMensagemWhatsapp {
+  processarMensagem(telefone: string, texto: string, imagemBase64?: string): Promise<void>;
 }
 
 /**
- * Resolve qual conexão uma operação deve atingir. Sem `instanceName` cai na
- * "default" (a mais antiga) — é o que mantém de pé quem chama as rotas antigas,
- * de quando existia uma conexão só.
+ * Conexões de WhatsApp (Evolution API) usadas para notificações e no bot de
+ * ads, e o roteamento de mensagens/eventos recebidos via webhook.
  */
-async function resolverConfig(instanceName?: string | null): Promise<WhatsAppConfig | null> {
-  const alvo = instanceName?.trim();
-  return alvo
-    ? whatsappRepository.getConfigByInstance(alvo)
-    : whatsappRepository.getConfig();
-}
+export class WhatsappService {
+  private roteadorMensagens: RoteadorMensagemWhatsapp | null = null;
 
-// ── Service ───────────────────────────────────────────────────────────────────
+  constructor(
+    private readonly config: WhatsappRepository,
+    private readonly evolution: ClienteEvolution,
+  ) {}
 
-export const whatsappService = {
+  definirRoteador(roteador: RoteadorMensagemWhatsapp): void {
+    this.roteadorMensagens = roteador;
+  }
+
+  /**
+   * Status ao vivo de UMA instância, com o banco sincronizado de quebra.
+   * Se a Evolution não responde, devolve o último status conhecido — melhor um
+   * dado velho do que a tela inteira falhar por causa de uma conexão morta.
+   */
+  private async statusAoVivo(config: WhatsAppConfig): Promise<WhatsAppStatus> {
+    try {
+      const { data } = await this.evolution.req<{ instance?: { state?: string }; state?: string }>(
+        'GET', `/instance/connectionState/${config.instanceName}`,
+      );
+      const live = (data?.instance?.state ?? data?.state ?? 'close') as WhatsAppStatus;
+      if (live !== config.status) {
+        await this.config.atualizarStatus(config.id, live);
+      }
+      return live;
+    } catch (err) {
+      logger.warn({ err, instancia: config.instanceName }, 'Não foi possível consultar status da Evolution API');
+      return config.status as WhatsAppStatus;
+    }
+  }
+
+  /**
+   * Resolve qual conexão uma operação deve atingir. Sem `instanceName` cai na
+   * "default" (a mais antiga) — é o que mantém de pé quem chama as rotas antigas,
+   * de quando existia uma conexão só.
+   */
+  private async resolverConfig(instanceName?: string | null): Promise<WhatsAppConfig | null> {
+    const alvo = instanceName?.trim();
+    return alvo
+      ? this.config.getConfigByInstance(alvo)
+      : this.config.getConfig();
+  }
 
   /**
    * Todas as conexões cadastradas, com status conferido na Evolution.
    * As consultas saem em paralelo: uma instância lenta não segura as outras.
    */
   async listarConexoes(): Promise<{ conexoes: ConexaoWhatsApp[]; configurado: boolean }> {
-    if (!EVOLUTION_URL()) return { conexoes: [], configurado: false };
+    if (!process.env.EVOLUTION_API_URL) return { conexoes: [], configurado: false };
 
-    const configs = await whatsappRepository.listConfigs();
+    const configs = await this.config.listConfigs();
     const conexoes = await Promise.all(configs.map(async (c): Promise<ConexaoWhatsApp> => {
-      const status = await statusAoVivo(c);
+      const status = await this.statusAoVivo(c);
       return {
         id:        c.id,
         instancia: c.instanceName,
@@ -122,7 +105,7 @@ export const whatsappService = {
     }));
 
     return { conexoes, configurado: true };
-  },
+  }
 
   /**
    * Status resumido para quem só quer saber "tem WhatsApp de pé?" (o pontinho
@@ -148,7 +131,7 @@ export const whatsappService = {
       /** Quantas conexões existem ao todo — a tela Conexões lista todas. */
       total:       conexoes.length,
     };
-  },
+  }
 
   /**
    * Cria (ou reconecta) uma instância na Evolution API e retorna o QR code.
@@ -156,60 +139,62 @@ export const whatsappService = {
    * nome já existente só reconecta aquela, sem mexer nas outras.
    */
   async conectar(instanceName: string, nome?: string | null) {
-    // Tenta criar a instância (se já existir a Evolution API retorna erro ignorável)
-    await evolutionReq('POST', '/instance/create', {
-      instanceName,
-      qrcode:      true,
-      integration: 'WHATSAPP-BAILEYS',
-    });
+    try {
+      // Tenta criar a instância (se já existir a Evolution API retorna erro ignorável)
+      await this.evolution.req('POST', '/instance/create', {
+        instanceName,
+        qrcode:      true,
+        integration: 'WHATSAPP-BAILEYS',
+      });
 
-    // Busca QR code
-    const { data: qrData } = await evolutionReq<{
-      base64?: string; qrcode?: { base64?: string };
-    }>('GET', `/instance/connect/${instanceName}`);
+      const { data: qrData } = await this.evolution.req<{
+        base64?: string; qrcode?: { base64?: string };
+      }>('GET', `/instance/connect/${instanceName}`);
 
-    const qrCode = qrData?.base64 ?? qrData?.qrcode?.base64 ?? null;
+      const qrCode = qrData?.base64 ?? qrData?.qrcode?.base64 ?? null;
 
-    await whatsappRepository.salvarConfig({
-      instanceName,
-      status:          'connecting',
-      qrCode,
-      numeroConectado: null,
-      // `undefined` preserva o nome já salvo (caso de reconexão).
-      nome:            nome?.trim() ? nome.trim() : undefined,
-    });
+      await this.config.salvarConfig({
+        instanceName,
+        status:          'connecting',
+        qrCode,
+        numeroConectado: null,
+        // `undefined` preserva o nome já salvo (caso de reconexão).
+        nome:            nome?.trim() ? nome.trim() : undefined,
+      });
 
-    return { instancia: instanceName, status: 'connecting', qr_code: qrCode };
-  },
+      return { instancia: instanceName, status: 'connecting', qr_code: qrCode };
+    } catch (err) {
+      logger.error({ err }, 'Erro ao iniciar conexão WhatsApp');
+      throw new FalhaExterna('Não foi possível conectar à Evolution API. Verifique as credenciais.');
+    }
+  }
 
   /**
    * Retorna QR code atualizado e verifica se já conectou.
    * O frontend deve chamar este endpoint a cada 3-5 segundos enquanto status = connecting.
    */
   async getQrCode(instanceName?: string | null) {
-    const config = await resolverConfig(instanceName);
+    const config = await this.resolverConfig(instanceName);
     if (!config) return null;
 
-    // Verifica status ao vivo
     try {
-      const { data: stateData } = await evolutionReq<{ instance?: { state?: string }; state?: string }>(
+      const { data: stateData } = await this.evolution.req<{ instance?: { state?: string }; state?: string }>(
         'GET', `/instance/connectionState/${config.instanceName}`,
       );
       const liveStatus = (stateData?.instance?.state ?? stateData?.state ?? 'close') as WhatsAppStatus;
 
       if (liveStatus === 'open') {
-        await whatsappRepository.atualizarStatus(config.id, 'open', null);
+        await this.config.atualizarStatus(config.id, 'open', null);
         return { status: 'open' as WhatsAppStatus, qr_code: null, instancia: config.instanceName };
       }
 
-      // Atualiza QR code se ainda está conectando
-      const { data: qrData } = await evolutionReq<{
+      const { data: qrData } = await this.evolution.req<{
         base64?: string; qrcode?: { base64?: string };
       }>('GET', `/instance/connect/${config.instanceName}`);
 
       const qrCode = qrData?.base64 ?? qrData?.qrcode?.base64 ?? config.qrCode;
       if (qrCode !== config.qrCode) {
-        await whatsappRepository.atualizarStatus(config.id, 'connecting', qrCode);
+        await this.config.atualizarStatus(config.id, 'connecting', qrCode);
       }
 
       return { status: liveStatus, qr_code: qrCode, instancia: config.instanceName };
@@ -217,37 +202,37 @@ export const whatsappService = {
       logger.warn({ err }, 'Erro ao obter QR code da Evolution API');
       return { status: config.status as WhatsAppStatus, qr_code: config.qrCode, instancia: config.instanceName };
     }
-  },
+  }
 
   /** Desconecta UMA conexão (logout) e atualiza o banco. */
   async desconectar(instanceName?: string | null): Promise<boolean> {
-    const config = await resolverConfig(instanceName);
+    const config = await this.resolverConfig(instanceName);
     if (!config) return false;
 
     try {
-      await evolutionReq('DELETE', `/instance/logout/${config.instanceName}`);
+      await this.evolution.req('DELETE', `/instance/logout/${config.instanceName}`);
     } catch (err) {
       logger.warn({ err, instancia: config.instanceName }, 'Erro ao fazer logout na Evolution API');
     }
 
-    await whatsappRepository.atualizarStatus(config.id, 'close', null, null);
+    await this.config.atualizarStatus(config.id, 'close', null, null);
     return true;
-  },
+  }
 
   /** Remove UMA conexão por completo — da Evolution API e do banco. */
   async deletarInstancia(instanceName?: string | null): Promise<boolean> {
-    const config = await resolverConfig(instanceName);
+    const config = await this.resolverConfig(instanceName);
     if (!config) return false;
 
     try {
-      await evolutionReq('DELETE', `/instance/delete/${config.instanceName}`);
+      await this.evolution.req('DELETE', `/instance/delete/${config.instanceName}`);
     } catch (err) {
       logger.warn({ err, instancia: config.instanceName }, 'Erro ao deletar instância na Evolution API');
     }
 
-    await whatsappRepository.deletarConfig(config.id);
+    await this.config.deletarConfig(config.id);
     return true;
-  },
+  }
 
   /**
    * Envia mensagem de texto para um número via Evolution API.
@@ -258,8 +243,8 @@ export const whatsappService = {
    */
   async enviarMensagem(telefone: string, mensagem: string, instanceName?: string | null): Promise<boolean> {
     const config = instanceName
-      ? await whatsappRepository.getConfigByInstance(instanceName)
-      : (await whatsappRepository.listConfigs()).find((c) => c.status === 'open') ?? null;
+      ? await this.config.getConfigByInstance(instanceName)
+      : (await this.config.listConfigs()).find((c) => c.status === 'open') ?? null;
 
     if (!config || config.status !== 'open') {
       logger.warn({ status: config?.status ?? 'sem conexão conectada' }, 'WhatsApp não conectado — notificação ignorada');
@@ -268,7 +253,7 @@ export const whatsappService = {
 
     const numero = normalizarTelefone(telefone);
     try {
-      const { ok, data } = await evolutionReq('POST', `/message/sendText/${config.instanceName}`, {
+      const { ok, data } = await this.evolution.req('POST', `/message/sendText/${config.instanceName}`, {
         number: numero,
         text:   mensagem,
       });
@@ -284,7 +269,7 @@ export const whatsappService = {
       logger.error({ err, numero }, 'Erro ao enviar mensagem WhatsApp');
       return false;
     }
-  },
+  }
 
   /**
    * Processa eventos recebidos via webhook da Evolution API.
@@ -294,7 +279,7 @@ export const whatsappService = {
    * conexão é o evento. Sem ele, um QR da conexão B sobrescrevia a linha da A.
    */
   async processarWebhook(evento: string, data: unknown, instanceName?: string | null): Promise<void> {
-    const config = await resolverConfig(instanceName);
+    const config = await this.resolverConfig(instanceName);
     if (!config) {
       logger.warn({ instancia: instanceName }, 'Webhook de instância desconhecida — ignorado');
       return;
@@ -306,7 +291,7 @@ export const whatsappService = {
     if (evento === 'connection.update') {
       const state: WhatsAppStatus = payload?.state ?? 'close';
       const phone: string | null  = payload?.phoneNumber ?? null;
-      await whatsappRepository.atualizarStatus(
+      await this.config.atualizarStatus(
         config.id,
         state,
         state === 'open' ? null : config.qrCode,
@@ -318,19 +303,19 @@ export const whatsappService = {
     if (evento === 'qrcode.updated') {
       const qrCode: string | null = payload?.qrcode?.base64 ?? payload?.base64 ?? null;
       if (qrCode) {
-        await whatsappRepository.atualizarStatus(config.id, 'connecting', qrCode);
+        await this.config.atualizarStatus(config.id, 'connecting', qrCode);
         logger.info({ instancia: config.instanceName }, 'WhatsApp: QR code atualizado via webhook');
       }
     }
 
-    // Mensagem recebida de um gestor — roteia para o módulo de ads
+    // Mensagem recebida de um gestor — roteia para quem trata o bot (ads)
     if (evento === 'messages.upsert') {
       const message = payload?.messages?.[0];
       // Ignora mensagens enviadas pelo próprio bot e status
       if (!message || message.key?.fromMe || message.messageType === 'protocolMessage') return;
 
-      const from: string        = message.key?.remoteJid?.replace('@s.whatsapp.net', '') ?? '';
-      const texto: string       = message.message?.conversation
+      const from: string  = message.key?.remoteJid?.replace('@s.whatsapp.net', '') ?? '';
+      const texto: string = message.message?.conversation
         ?? message.message?.extendedTextMessage?.text
         ?? '';
 
@@ -341,10 +326,12 @@ export const whatsappService = {
         ?? undefined;
 
       if (!from) return;
+      if (!this.roteadorMensagens) {
+        logger.warn('Mensagem recebida antes do roteador ser definido — ignorada');
+        return;
+      }
 
-      // Import lazy para evitar dependência circular
-      const { adsService } = await import('../ads/service');
-      await adsService.processarMensagem(from, texto, imagemBase64);
+      await this.roteadorMensagens.processarMensagem(from, texto, imagemBase64);
     }
-  },
-};
+  }
+}

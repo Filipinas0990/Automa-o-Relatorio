@@ -1,25 +1,18 @@
 import type { Gestor } from '../database/schema';
 import type { HashSenha } from '../compartilhado/HashSenha';
-import {
-  Conflito, Indisponivel, MuitasTentativas, NaoAutorizado, Proibido, RequisicaoInvalida,
-} from '../compartilhado/erros';
+import { MuitasTentativas, NaoAutorizado, Proibido, RequisicaoInvalida } from '../compartilhado/erros';
 import type { GestorRepository } from '../gestores/GestorRepository';
 import type { LimitadorLogin } from './LimitadorLogin';
 
-export interface DadosSuperAdmin {
-  nome: string;
-  email: string;
-  senha: string;
-  admin_secret: string;
-}
-
-/** Regras de entrada no sistema: login e criação do primeiro admin. */
+/**
+ * Regras de entrada no sistema: só login. De propósito sem autocadastro —
+ * gestor novo é criado por um admin já logado (ver GestorService.criar).
+ */
 export class AuthService {
   constructor(
     private readonly gestores: GestorRepository,
     private readonly hash: HashSenha,
     private readonly limitador: LimitadorLogin,
-    private readonly adminSecret: string,
   ) {}
 
   /** Confere email e senha e devolve o gestor. Quem abre a sessão é o controller. */
@@ -40,17 +33,5 @@ export class AuthService {
 
     this.limitador.limpar(email);
     return gestor;
-  }
-
-  /** Só funciona enquanto não existe nenhum admin, e exige o ADMIN_SECRET do servidor. */
-  async criarSuperAdmin(dados: DadosSuperAdmin): Promise<Gestor> {
-    if (!this.adminSecret)                        throw new Indisponivel('ADMIN_SECRET não configurado');
-    if (dados.admin_secret !== this.adminSecret)  throw new Proibido('Segredo inválido');
-    if (await this.gestores.existeAdmin())        throw new Conflito('Super admin já existe. Use o login normal.');
-    if (await this.gestores.buscarPorEmail(dados.email)) throw new Conflito('Email já cadastrado');
-
-    return this.gestores.criar({
-      nome: dados.nome, email: dados.email, senhaHash: await this.hash.gerar(dados.senha), isAdmin: true,
-    });
   }
 }

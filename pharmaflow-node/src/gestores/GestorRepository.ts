@@ -35,9 +35,11 @@ export class GestorRepository {
     return g;
   }
 
-  async existeAdmin(): Promise<boolean> {
-    const admins = await this.db.select().from(gestoresTrafego).where(eq(gestoresTrafego.isAdmin, true));
-    return admins.length > 0;
+  /** O gestor identificado pelo telefone do WhatsApp — usado pelo bot de ads. */
+  async buscarPorTelefoneWhatsapp(telefone: string): Promise<{ id: number } | null> {
+    const [g] = await this.db.select({ id: gestoresTrafego.id }).from(gestoresTrafego)
+      .where(eq(gestoresTrafego.telefoneWhatsapp, telefone)).limit(1);
+    return g ?? null;
   }
 
   /** Gestores ativos com o número de farmácias ativas de cada um. `somenteId` restringe a um gestor. */

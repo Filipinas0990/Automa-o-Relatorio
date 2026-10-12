@@ -291,7 +291,7 @@ export const catalogoProdutos = pgTable('catalogo_produtos', {
 // as três telas que filtram o acervo comparam por texto, e trocar isso por FK
 // seria refatorá-las para ganhar integridade que a canonização já entrega.
 // Consequência: renomear aqui faz UPDATE em cascata nos produtos, e excluir
-// deixa os produtos sem categoria — ver src/catalogo/repository.ts.
+// deixa os produtos sem categoria — ver src/catalogo/CatalogoService.ts.
 export const catalogoCategorias = pgTable('catalogo_categorias', {
   id:           serial('id').primaryKey(),
   nome:         varchar('nome', { length: 60 }).notNull(),

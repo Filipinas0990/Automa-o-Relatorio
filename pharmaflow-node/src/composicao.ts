@@ -49,8 +49,28 @@ import { AcaoRepository } from './acoes/AcaoRepository';
 import { ParticipacaoRepository } from './acoes/ParticipacaoRepository';
 import { AcaoService } from './acoes/AcaoService';
 import { AcaoController } from './acoes/AcaoController';
-import { listarProdutos, getImagem } from './catalogo/repository';
-import { disparosRepository } from './disparos/repository';
+import { WhatsappRepository } from './whatsapp/WhatsappRepository';
+import { ClienteEvolution } from './whatsapp/ClienteEvolution';
+import { WhatsappService } from './whatsapp/WhatsappService';
+import { WhatsappController } from './whatsapp/WhatsappController';
+import { CampanhaService } from './campanhas/CampanhaService';
+import { PublicacaoAssincrona } from './campanhas/PublicacaoAssincrona';
+import { CampanhaController } from './campanhas/CampanhaController';
+import { ProdutoRepository } from './catalogo/ProdutoRepository';
+import { CategoriaRepository } from './catalogo/CategoriaRepository';
+import { CatalogoService } from './catalogo/CatalogoService';
+import { CatalogoController } from './catalogo/CatalogoController';
+import { DisparoRepository } from './disparos/DisparoRepository';
+import { ClienteCampanhas } from './disparos/ClienteCampanhas';
+import { DisparoService } from './disparos/DisparoService';
+import { DisparoController } from './disparos/DisparoController';
+import { InterpretadorIA } from './ai/InterpretadorIA';
+import { TokenMetaRepository } from './ads/TokenMetaRepository';
+import { CampanhaPendenteRepository } from './ads/CampanhaPendenteRepository';
+import { ContaAnuncioCacheRepository } from './ads/ContaAnuncioCacheRepository';
+import { GeocodificadorCidade } from './ads/GeocodificadorCidade';
+import { AdsService } from './ads/AdsService';
+import { AdsController } from './ads/AdsController';
 import { LinkOfertaRepository } from './ofertas/LinkOfertaRepository';
 import { SolicitacaoRepository } from './ofertas/SolicitacaoRepository';
 import { LinkOfertaService } from './ofertas/LinkOfertaService';
@@ -76,10 +96,22 @@ export const autenticador     = new Autenticador(tokenSessao, transporteSessao, 
 export const gestorController = new GestorController(new GestorService(gestorRepository, hashSenha), autenticador);
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
-const authService = new AuthService(
-  gestorRepository, hashSenha, new LimitadorLogin(), process.env.ADMIN_SECRET || '',
-);
+const authService = new AuthService(gestorRepository, hashSenha, new LimitadorLogin());
 export const authController = new AuthController(authService, autenticador, tokenSessao, transporteSessao);
+
+// ── WhatsApp (Evolution API) ──────────────────────────────────────────────────
+export const whatsappRepository = new WhatsappRepository(db);
+export const clienteEvolution   = new ClienteEvolution();
+// O roteador de mensagens entrantes (bot de ads) é ligado mais abaixo, depois
+// que AdsService existe — ver `whatsappService.definirRoteador(...)`.
+export const whatsappService    = new WhatsappService(whatsappRepository, clienteEvolution);
+export const whatsappController = new WhatsappController(whatsappService, autenticador);
+
+// ── Disparo em grupos de WhatsApp ──────────────────────────────────────────────
+// (repository + cliente do motor de campanhas já saem daqui; o Service entra
+// mais abaixo, depois do solicitacaoRepository, que ele também usa)
+export const disparoRepository = new DisparoRepository(db);
+const clienteCampanhas = new ClienteCampanhas();
 
 // ── Farmácias ─────────────────────────────────────────────────────────────────
 const farmaciaRepository = new FarmaciaRepository(db);
@@ -88,6 +120,26 @@ export const farmaciaController = new FarmaciaController(
   new FarmaciaService(farmaciaRepository), desempenhoService, autenticador,
 );
 export const painelController = new PainelController(desempenhoService, autenticador);
+
+// ── Ads (bot de criação de campanhas via WhatsApp/Web + config Meta por cliente) ─
+const tokenMetaRepository = new TokenMetaRepository(db);
+export const adsService = new AdsService(
+  tokenMetaRepository,
+  new CampanhaPendenteRepository(db),
+  new ContaAnuncioCacheRepository(db),
+  farmaciaRepository,
+  gestorRepository,
+  new InterpretadorIA(),
+  // WhatsappService satisfaz EnviadorWhatsapp (só precisa de enviarMensagem) por estrutura.
+  whatsappService,
+);
+// Fecha o laço: a mensagem que chega pelo webhook do WhatsApp é roteada para o
+// bot de ads. Só dá para ligar aqui, depois que os dois lados já existem — ver
+// o comentário em WhatsappService.definirRoteador.
+whatsappService.definirRoteador(adsService);
+export const adsController = new AdsController(
+  adsService, tokenMetaRepository, new GeocodificadorCidade(), autenticador,
+);
 
 // ── Ranking ───────────────────────────────────────────────────────────────────
 export const rankingController = new RankingController(
@@ -140,8 +192,23 @@ export const acaoController = new AcaoController(
   autenticador,
 );
 
+// ── Campanhas (Meta Ads) ──────────────────────────────────────────────────────
+export const campanhaController = new CampanhaController(
+  new CampanhaService(), new PublicacaoAssincrona(), autenticador,
+);
+
+// ── Catálogo de produtos (imagens dos criativos) ──────────────────────────────
+const produtoRepository = new ProdutoRepository(db);
+export const catalogoController = new CatalogoController(
+  new CatalogoService(produtoRepository, new CategoriaRepository(db)),
+  autenticador,
+);
+
 // ── Ofertas (link público do dono da farmácia) ────────────────────────────────
-const catalogo = { listarProdutos, getImagem };
+// ProdutoRepository satisfaz ProdutosDoCatalogo & ImagensDoCatalogo (ver
+// ofertas/SolicitacaoService e OfertaPublicaController) por estrutura — não
+// precisa de objeto adaptador.
+const catalogo = produtoRepository;
 export const solicitacaoRepository = new SolicitacaoRepository(db);
 const linkOfertaService = new LinkOfertaService(
   new LinkOfertaRepository(db), farmaciaRepository,
@@ -155,6 +222,14 @@ export const ofertaPublicaController = new OfertaPublicaController(
 );
 export const ofertaController = new OfertaController(
   linkOfertaService, solicitacaoService,
-  new CarteiraService(farmaciaRepository, solicitacaoRepository, linkOfertaService, disparosRepository),
+  // DisparoRepository satisfaz CampanhasDosClientes (ver CarteiraService) por
+  // estrutura — mesmo truque do ProdutoRepository acima, sem adaptador.
+  new CarteiraService(farmaciaRepository, solicitacaoRepository, linkOfertaService, disparoRepository),
   autenticador,
 );
+
+// ── Disparo em grupos de WhatsApp (continuação) ───────────────────────────────
+export const disparoService = new DisparoService(
+  disparoRepository, whatsappRepository, clienteEvolution, clienteCampanhas, solicitacaoRepository,
+);
+export const disparoController = new DisparoController(disparoService, autenticador);

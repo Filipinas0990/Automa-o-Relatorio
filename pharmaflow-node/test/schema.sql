@@ -1498,6 +1498,81 @@ ALTER TABLE ONLY public.solicitacoes_oferta
 
 
 --
+-- Name: campanhas_meta; Type: TABLE; Schema: public; Owner: -
+-- (migration 0012 — faltava neste dump; meta_tokens e campanhas_meta já
+-- existiam no banco de dev, só nunca tinham sido capturados aqui)
+--
+
+CREATE TABLE public.campanhas_meta (
+    id integer NOT NULL,
+    farmacia_id integer NOT NULL,
+    gestor_telefone character varying(20) NOT NULL,
+    status character varying(30) DEFAULT 'aguardando_confirmacao'::character varying NOT NULL,
+    payload_json text NOT NULL,
+    imagem_base64 text,
+    meta_campanha_id character varying(30),
+    meta_conjunto_id character varying(30),
+    meta_anuncio_id character varying(30),
+    criado_em timestamp with time zone DEFAULT now(),
+    atualizado_em timestamp with time zone DEFAULT now()
+);
+
+CREATE SEQUENCE public.campanhas_meta_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+ALTER SEQUENCE public.campanhas_meta_id_seq OWNED BY public.campanhas_meta.id;
+
+ALTER TABLE ONLY public.campanhas_meta ALTER COLUMN id SET DEFAULT nextval('public.campanhas_meta_id_seq'::regclass);
+
+ALTER TABLE ONLY public.campanhas_meta
+    ADD CONSTRAINT campanhas_meta_pkey PRIMARY KEY (id);
+
+CREATE INDEX idx_campanhas_meta_gestor_status ON public.campanhas_meta USING btree (gestor_telefone, status);
+
+ALTER TABLE ONLY public.campanhas_meta
+    ADD CONSTRAINT campanhas_meta_farmacia_id_fkey FOREIGN KEY (farmacia_id) REFERENCES public.farmacias(id);
+
+--
+-- Name: meta_tokens; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.meta_tokens (
+    id integer NOT NULL,
+    farmacia_id integer NOT NULL,
+    ad_account_id character varying(60) NOT NULL,
+    page_id character varying(60) NOT NULL,
+    criado_em timestamp with time zone DEFAULT now(),
+    atualizado_em timestamp with time zone DEFAULT now()
+);
+
+CREATE SEQUENCE public.meta_tokens_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+ALTER SEQUENCE public.meta_tokens_id_seq OWNED BY public.meta_tokens.id;
+
+ALTER TABLE ONLY public.meta_tokens ALTER COLUMN id SET DEFAULT nextval('public.meta_tokens_id_seq'::regclass);
+
+ALTER TABLE ONLY public.meta_tokens
+    ADD CONSTRAINT meta_tokens_farmacia_id_key UNIQUE (farmacia_id);
+
+ALTER TABLE ONLY public.meta_tokens
+    ADD CONSTRAINT meta_tokens_pkey PRIMARY KEY (id);
+
+ALTER TABLE ONLY public.meta_tokens
+    ADD CONSTRAINT meta_tokens_farmacia_id_fkey FOREIGN KEY (farmacia_id) REFERENCES public.farmacias(id);
+
+
+--
 -- PostgreSQL database dump complete
 --
 
