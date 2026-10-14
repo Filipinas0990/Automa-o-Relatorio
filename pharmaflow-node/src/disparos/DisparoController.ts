@@ -84,7 +84,7 @@ export class DisparoController extends Controller {
 
     /**
      * GET /api/disparos/donos-grupos?jids=a@g.us,b@g.us
-     * Para cada grupo, as farmácias que JÁ receberam disparo nele.
+     * Para cada grupo, as farmácias com campanha AINDA RODANDO nele.
      *
      * O modal de agendamento usa isto para avisar quando o grupo escolhido é de
      * outro cliente — foi assim que a oferta da Farma Fátima caiu no grupo da

@@ -470,7 +470,7 @@ export class DisparoService {
       .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
   }
 
-  /** Para cada grupo, as farmácias que JÁ receberam disparo nele (ver DisparoRepository.donosDeGrupos). */
+  /** Para cada grupo, as farmácias com campanha ainda rodando nele (ver DisparoRepository.donosDeGrupos). */
   async donosDeGrupos(gestorId: number, jids: string[]) {
     return this.disparos.donosDeGrupos(gestorId, jids);
   }
@@ -868,7 +868,7 @@ export class DisparoService {
 
         throw new ErroAplicacao(
           409,
-          'Um dos grupos escolhidos já recebeu disparo de outro cliente. Confira o grupo antes de continuar.',
+          'Um dos grupos escolhidos tem campanha de outro cliente rodando agora. Confira o grupo antes de continuar.',
           {},
           { grupos_de_outro_cliente: porGrupo },
         );

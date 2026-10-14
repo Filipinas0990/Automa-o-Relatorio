@@ -172,7 +172,14 @@ export class DisparoRepository {
    * Nome não resolve (73 das 86 farmácias estão sem fachada), mas o histórico
    * sim: esse grupo já tinha recebido 4 disparos da Mais Saúde. Quem já usou o
    * grupo é um fato, não um palpite — é isso que o modal mostra antes de
-   * confirmar. Disparo cancelado não conta: não foi ao ar.
+   * confirmar.
+   *
+   * REGRA DO DONO (14/10): só conta campanha que AINDA ESTÁ RODANDO no grupo
+   * — agendada ou enviando, e com a data de término não vencida. Encerrou
+   * (enviado, erro, cancelado ou passou do término), o grupo fica livre para
+   * outro cliente. Antes contava o histórico inteiro, e a Santa Mônica
+   * Unidade 2 ficou travada num grupo que a Unidade 1 tinha usado e já
+   * encerrado.
    */
   async donosDeGrupos(
     gestorId: number,
@@ -193,7 +200,8 @@ export class DisparoRepository {
       JOIN ${farmacias} f ON f.id = d.farmacia_id
       CROSS JOIN LATERAL jsonb_array_elements(d.grupos_json::jsonb) el
       WHERE d.gestor_id = ${gestorId}
-        AND d.status <> 'cancelado'
+        AND d.status IN ('agendado', 'enviando')
+        AND (d.repetir_ate IS NULL OR d.repetir_ate > now())
         AND el->>'jid' IN (${lista})
       GROUP BY 1, 2, 3, 4
     `);
