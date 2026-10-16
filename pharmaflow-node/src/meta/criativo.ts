@@ -115,7 +115,14 @@ export async function criarAdCreative(
     };
   }
 
-  const corpo: Record<string, unknown> = { name: 'Criativo via Automação', object_story_spec };
+  const corpo: Record<string, unknown> = {
+    name: 'Criativo via Automação',
+    object_story_spec,
+    // "Anúncios com vários anunciantes": sem este campo o Meta liga sozinho e o
+    // anúncio da farmácia aparece misturado com o de concorrentes (e pode ser
+    // recortado). Pedido do dono: sempre desligado. Validado no Meta em 16/10/2026.
+    contextual_multi_ads: { enroll_status: 'OPT_OUT' },
+  };
   if (extras?.mensagens) {
     corpo.asset_feed_spec = {
       optimization_type: 'DOF_MESSAGING_DESTINATION',
