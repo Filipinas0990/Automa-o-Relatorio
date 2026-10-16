@@ -48,6 +48,11 @@ export interface ConjuntoMeta {
   destinoWhatsapp: boolean;
   dataInicio:      string;   // YYYY-MM-DD ("" se não houver)
   dataFim:         string;   // YYYY-MM-DD ("" = sem término)
+  /**
+   * Onde o conjunto entrega. No "Novo conjunto" a cópia HERDA isto (o app não
+   * muda a localização), então a tela mostra só para conferência.
+   */
+  localizacao:     LocalizacaoConjunto;
 }
 
 // Meta: genders [1]=homens, [2]=mulheres, ausente/ambos = todos
@@ -59,6 +64,57 @@ const GENERO = (g?: number[]): 'todos' | 'homens' | 'mulheres' => {
 const GENERO_LEGIVEL: Record<string, string> = {
   todos: 'Todos', homens: 'Homens', mulheres: 'Mulheres',
 };
+
+// ── Localização do conjunto (só leitura) ─────────────────────────────────────
+
+interface GeoMeta {
+  countries?:        string[];
+  regions?:          Array<{ name?: string }>;
+  cities?:           Array<{ name?: string; region?: string; radius?: number; distance_unit?: string }>;
+  custom_locations?: Array<{
+    name?: string; address_string?: string; latitude?: number; longitude?: number;
+    radius?: number; distance_unit?: string;
+  }>;
+}
+
+export interface LocalizacaoConjunto {
+  /** Texto pronto: "Fortaleza (CE) + 10 km", "Av. X, 1400 + 3 km", "Brasil inteiro". */
+  resumo:  string;
+  /** Centro e raio para o mapa — só quando o Meta informa coordenada (endereço/pino). */
+  lat?:    number;
+  lng?:    number;
+  raioKm?: number;
+}
+
+const emKm = (raio?: number, unidade?: string): number | undefined =>
+  raio == null ? undefined : unidade === 'mile' ? Math.round(raio * 1.609 * 10) / 10 : raio;
+
+function resumirLocalizacao(geo?: GeoMeta): LocalizacaoConjunto {
+  if (!geo) return { resumo: 'Não informada' };
+  const partes: string[] = [];
+  let mapa: Pick<LocalizacaoConjunto, 'lat' | 'lng' | 'raioKm'> = {};
+
+  for (const c of geo.custom_locations ?? []) {
+    const km = emKm(c.radius, c.distance_unit);
+    const nome = (c.name || c.address_string || 'Ponto no mapa').replace(/, Brasil$/, '');
+    partes.push(km ? `${nome} + ${km} km` : nome);
+    if (mapa.lat == null && c.latitude != null && c.longitude != null) {
+      mapa = { lat: c.latitude, lng: c.longitude, raioKm: km };
+    }
+  }
+  for (const c of geo.cities ?? []) {
+    const km = emKm(c.radius, c.distance_unit);
+    const nome = c.region ? `${c.name} (${c.region})` : (c.name ?? 'Cidade');
+    partes.push(km ? `${nome} + ${km} km` : nome);
+  }
+  for (const r of geo.regions ?? []) partes.push(r.name ?? 'Estado');
+  if (!partes.length && geo.countries?.length) {
+    partes.push(geo.countries.length === 1 && geo.countries[0] === 'BR' ? 'Brasil inteiro' : geo.countries.join(', '));
+  }
+
+  const resumo = partes.length > 3 ? `${partes.slice(0, 3).join(' · ')} e mais ${partes.length - 3}` : partes.join(' · ');
+  return { resumo: resumo || 'Não informada', ...mapa };
+}
 
 /** "2026-07-21T00:00:00-0300" → "2026-07-21" */
 const soData = (t?: string): string => (t ? t.slice(0, 10) : '');
@@ -79,7 +135,7 @@ export async function listarConjuntosDaConta(
       id: string; name?: string; effective_status?: string;
       daily_budget?: string; optimization_goal?: string; destination_type?: string;
       start_time?: string; end_time?: string;
-      targeting?: { age_min?: number; age_max?: number; genders?: number[] };
+      targeting?: { age_min?: number; age_max?: number; genders?: number[]; geo_locations?: GeoMeta };
       campaign?: { id?: string; name?: string; daily_budget?: string; lifetime_budget?: string };
     }>;
   }>('GET', `/${adAccountId}/adsets?fields=${FIELDS}&limit=100`, accessToken);
@@ -109,6 +165,7 @@ export async function listarConjuntosDaConta(
         destinoWhatsapp: a.destination_type === 'WHATSAPP',
         dataInicio:      soData(a.start_time),
         dataFim:         soData(a.end_time),
+        localizacao:     resumirLocalizacao(a.targeting?.geo_locations),
       };
     });
 }
