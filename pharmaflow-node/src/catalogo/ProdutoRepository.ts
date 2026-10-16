@@ -80,7 +80,8 @@ export class ProdutoRepository {
    * composicao.ts, sem precisar de objeto adaptador.
    */
   async listarProdutos(): Promise<Array<{
-    id: number; nome: string; ativo: boolean; categoria: string | null; criadoEm: Date | null;
+    id: number; nome: string; ativo: boolean; categoria: string | null;
+    criadoEm: Date | null; atualizadoEm: Date | null;
   }>> {
     return this.db
       .select({
@@ -89,6 +90,8 @@ export class ProdutoRepository {
         ativo:     catalogoProdutos.ativo,
         categoria: catalogoProdutos.categoria,
         criadoEm:  catalogoProdutos.criadoEm,
+        // Versão da imagem: o front põe na URL (?v=) para furar o cache depois de editar.
+        atualizadoEm: catalogoProdutos.atualizadoEm,
       })
       .from(catalogoProdutos)
       .orderBy(desc(catalogoProdutos.criadoEm));
@@ -105,14 +108,59 @@ export class ProdutoRepository {
     return rows.length;
   }
 
-  /** Liga/desliga um produto. Retorna false se o produto não existe. */
-  async setAtivo(id: number, ativo: boolean): Promise<boolean> {
+  /**
+   * Edita os dados de um produto (tela de edição). Campo ausente fica como
+   * está. Trocar o nome recalcula o nome normalizado junto. Retorna false se o
+   * produto não existe.
+   */
+  async atualizar(
+    id: number,
+    campos: { nome?: string; categoria?: string | null; ativo?: boolean },
+  ): Promise<boolean> {
+    const set: Record<string, unknown> = { atualizadoEm: new Date() };
+    if (campos.nome !== undefined) {
+      set.nome = campos.nome;
+      set.nomeNorm = normalizar(campos.nome);
+    }
+    if (campos.categoria !== undefined) set.categoria = campos.categoria;
+    if (campos.ativo !== undefined) set.ativo = campos.ativo;
+
     const rows = await this.db
       .update(catalogoProdutos)
-      .set({ ativo, atualizadoEm: new Date() })
+      .set(set)
       .where(eq(catalogoProdutos.id, id))
       .returning({ id: catalogoProdutos.id });
     return rows.length > 0;
+  }
+
+  /** Substitui a imagem de um produto existente. Retorna false se o produto não existe. */
+  async trocarImagem(id: number, imagemB64: string, mime: string): Promise<boolean> {
+    const rows = await this.db
+      .update(catalogoProdutos)
+      .set({ imagemB64, mime, atualizadoEm: new Date() })
+      .where(eq(catalogoProdutos.id, id))
+      .returning({ id: catalogoProdutos.id });
+    return rows.length > 0;
+  }
+
+  /** Id do produto que já usa este nome (normalizado), ou null. */
+  async idPorNomeNorm(nomeNorm: string): Promise<number | null> {
+    const [row] = await this.db
+      .select({ id: catalogoProdutos.id })
+      .from(catalogoProdutos)
+      .where(eq(catalogoProdutos.nomeNorm, nomeNorm))
+      .limit(1);
+    return row?.id ?? null;
+  }
+
+  /** Quando o produto mudou pela última vez (vira o ETag da imagem). Null se não existe. */
+  async versaoImagem(id: number): Promise<Date | null> {
+    const [row] = await this.db
+      .select({ atualizadoEm: catalogoProdutos.atualizadoEm })
+      .from(catalogoProdutos)
+      .where(eq(catalogoProdutos.id, id))
+      .limit(1);
+    return row?.atualizadoEm ?? null;
   }
 
   /** A imagem (base64 + mime) de um produto. */

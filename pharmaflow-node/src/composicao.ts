@@ -60,6 +60,7 @@ import { ProdutoRepository } from './catalogo/ProdutoRepository';
 import { CategoriaRepository } from './catalogo/CategoriaRepository';
 import { CatalogoService } from './catalogo/CatalogoService';
 import { CatalogoController } from './catalogo/CatalogoController';
+import { SenhaBancoImagens } from './catalogo/SenhaBancoImagens';
 import { DisparoRepository } from './disparos/DisparoRepository';
 import { ClienteCampanhas } from './disparos/ClienteCampanhas';
 import { DisparoService } from './disparos/DisparoService';
@@ -202,6 +203,9 @@ const produtoRepository = new ProdutoRepository(db);
 export const catalogoController = new CatalogoController(
   new CatalogoService(produtoRepository, new CategoriaRepository(db)),
   autenticador,
+  // Senha única, definida no .env do servidor (gerar com `npm run senha-banco`).
+  // 5 erros em 15 min travam as ações do banco para aquele admin.
+  new SenhaBancoImagens(process.env.BANCO_IMAGENS_SENHA_HASH, new LimitadorLogin()),
 );
 
 // ── Ofertas (link público do dono da farmácia) ────────────────────────────────

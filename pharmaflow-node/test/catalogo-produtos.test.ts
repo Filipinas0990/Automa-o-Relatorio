@@ -8,7 +8,7 @@
  * conversão. Teste de cadastro de categorias já existe em categorias.test.ts.
  */
 import { describe, it, expect, beforeEach } from 'vitest';
-import { api, criarGestor, criarProduto, limparBanco } from './helpers';
+import { api, criarGestor, criarProduto, limparBanco, SENHA_BANCO } from './helpers';
 
 describe('Cadastro de produtos', () => {
   beforeEach(limparBanco);
@@ -16,7 +16,7 @@ describe('Cadastro de produtos', () => {
   it('admin cadastra um produto com imagem', async () => {
     const admin = await criarGestor({ isAdmin: true });
     const r = await api('POST', '/api/catalogo/produtos', {
-      token: admin.token,
+      token: admin.token, senhaBanco: SENHA_BANCO,
       body: { nome: 'Dipirona 500mg', imagem_b64: 'YQ==', mime: 'image/png' },
     });
     expect(r.status).toBe(201);
@@ -30,10 +30,10 @@ describe('Cadastro de produtos', () => {
   it('recusa cadastro sem nome ou sem imagem', async () => {
     const admin = await criarGestor({ isAdmin: true });
     expect((await api('POST', '/api/catalogo/produtos', {
-      token: admin.token, body: { imagem_b64: 'YQ==' },
+      token: admin.token, senhaBanco: SENHA_BANCO, body: { imagem_b64: 'YQ==' },
     })).status).toBe(400);
     expect((await api('POST', '/api/catalogo/produtos', {
-      token: admin.token, body: { nome: 'Sem imagem' },
+      token: admin.token, senhaBanco: SENHA_BANCO, body: { nome: 'Sem imagem' },
     })).status).toBe(400);
   });
 
@@ -56,7 +56,7 @@ describe('Cadastro de produtos', () => {
   it('cadastrar com categoria nova registra ela no cadastro de categorias', async () => {
     const admin = await criarGestor({ isAdmin: true });
     await api('POST', '/api/catalogo/produtos', {
-      token: admin.token,
+      token: admin.token, senhaBanco: SENHA_BANCO,
       body: { nome: 'Protetor solar', imagem_b64: 'YQ==', categoria: 'Dermocosméticos' },
     });
 
@@ -67,12 +67,12 @@ describe('Cadastro de produtos', () => {
   it('reenviar a imagem sem o campo categoria preserva a categoria já classificada', async () => {
     const admin = await criarGestor({ isAdmin: true });
     await api('POST', '/api/catalogo/produtos', {
-      token: admin.token,
+      token: admin.token, senhaBanco: SENHA_BANCO,
       body: { nome: 'Creme dental', imagem_b64: 'YQ==', categoria: 'Bucal' },
     });
     // Reenvia a mesma imagem sem "categoria" no corpo — não deve apagar a classificação.
     await api('POST', '/api/catalogo/produtos', {
-      token: admin.token,
+      token: admin.token, senhaBanco: SENHA_BANCO,
       body: { nome: 'Creme dental', imagem_b64: 'YmI=' },
     });
 
@@ -121,7 +121,7 @@ describe('Ativar/desativar e excluir', () => {
     const p = await criarProduto('Protetor');
 
     const r = await api('PATCH', `/api/catalogo/produtos/${p.id}`, {
-      token: admin.token, body: { ativo: false },
+      token: admin.token, senhaBanco: SENHA_BANCO, body: { ativo: false },
     });
     expect(r.status).toBe(200);
 
@@ -133,10 +133,10 @@ describe('Ativar/desativar e excluir', () => {
     const admin = await criarGestor({ isAdmin: true });
     const p = await criarProduto('X');
     expect((await api('PATCH', '/api/catalogo/produtos/99999', {
-      token: admin.token, body: { ativo: true },
+      token: admin.token, senhaBanco: SENHA_BANCO, body: { ativo: true },
     })).status).toBe(404);
     expect((await api('PATCH', `/api/catalogo/produtos/${p.id}`, {
-      token: admin.token, body: {},
+      token: admin.token, senhaBanco: SENHA_BANCO, body: {},
     })).status).toBe(400);
   });
 
@@ -144,7 +144,7 @@ describe('Ativar/desativar e excluir', () => {
     const admin = await criarGestor({ isAdmin: true });
     const p = await criarProduto('Descartável');
 
-    const r = await api('DELETE', `/api/catalogo/produtos/${p.id}`, { token: admin.token });
+    const r = await api('DELETE', `/api/catalogo/produtos/${p.id}`, { token: admin.token, senhaBanco: SENHA_BANCO });
     expect(r.status).toBe(200);
 
     const lista = await api('GET', '/api/catalogo/produtos', { token: admin.token });
@@ -161,7 +161,7 @@ describe('Classificação em lote', () => {
     const b = await criarProduto('Produto B');
 
     const r = await api('PATCH', '/api/catalogo/produtos/categoria', {
-      token: admin.token, body: { ids: [a.id, b.id], categoria: 'Higiene' },
+      token: admin.token, senhaBanco: SENHA_BANCO, body: { ids: [a.id, b.id], categoria: 'Higiene' },
     });
     expect(r.status).toBe(200);
     expect(r.body.total).toBe(2);
@@ -175,7 +175,7 @@ describe('Classificação em lote', () => {
     const p = await criarProduto('Produto', 'Higiene');
 
     const r = await api('PATCH', '/api/catalogo/produtos/categoria', {
-      token: admin.token, body: { ids: [p.id], categoria: null },
+      token: admin.token, senhaBanco: SENHA_BANCO, body: { ids: [p.id], categoria: null },
     });
     expect(r.status).toBe(200);
 
@@ -188,13 +188,13 @@ describe('Classificação em lote', () => {
     const p = await criarProduto('Produto');
 
     expect((await api('PATCH', '/api/catalogo/produtos/categoria', {
-      token: admin.token, body: { ids: [], categoria: 'X' },
+      token: admin.token, senhaBanco: SENHA_BANCO, body: { ids: [], categoria: 'X' },
     })).status).toBe(400);
     expect((await api('PATCH', '/api/catalogo/produtos/categoria', {
-      token: admin.token, body: { ids: ['abc'], categoria: 'X' },
+      token: admin.token, senhaBanco: SENHA_BANCO, body: { ids: ['abc'], categoria: 'X' },
     })).status).toBe(400);
     expect((await api('PATCH', '/api/catalogo/produtos/categoria', {
-      token: admin.token, body: { ids: [p.id] },
+      token: admin.token, senhaBanco: SENHA_BANCO, body: { ids: [p.id] },
     })).status).toBe(400);
   });
 });
@@ -234,7 +234,7 @@ describe('Identificar produtos da planilha', () => {
   it('produto desligado não entra no match', async () => {
     const admin = await criarGestor({ isAdmin: true });
     const p = await criarProduto('Item desligado');
-    await api('PATCH', `/api/catalogo/produtos/${p.id}`, { token: admin.token, body: { ativo: false } });
+    await api('PATCH', `/api/catalogo/produtos/${p.id}`, { token: admin.token, senhaBanco: SENHA_BANCO, body: { ativo: false } });
 
     const r = await api('POST', '/api/catalogo/identificar', {
       token: admin.token,

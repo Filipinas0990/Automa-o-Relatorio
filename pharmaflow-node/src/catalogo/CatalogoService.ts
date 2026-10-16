@@ -29,6 +29,15 @@ export interface DadosCadastroProduto {
   categoria?: string | null;
 }
 
+/** Corpo do PATCH de um produto. `unknown`: a validação é do Service. */
+export interface DadosEdicaoProduto {
+  nome?: unknown;
+  categoria?: unknown;
+  ativo?: unknown;
+}
+
+const MIMES_ACEITOS = new Set(['image/png', 'image/jpeg', 'image/webp']);
+
 export interface CategoriaCadastrada {
   id: number;
   nome: string;
@@ -56,6 +65,12 @@ export class CatalogoService {
 
   listarProdutos() {
     return this.produtos.listarProdutos();
+  }
+
+  /** ETag da imagem: muda sempre que o produto é editado. Null se o produto não existe. */
+  async etagImagem(id: number): Promise<string | null> {
+    const versao = await this.produtos.versaoImagem(id);
+    return versao ? `"${id}-${versao.getTime()}"` : null;
   }
 
   /** A imagem de um produto. Lança NaoEncontrado quando não existe ou está sem imagem. */
@@ -112,14 +127,48 @@ export class CatalogoService {
     return this.produtos.setCategoriaEmLote(limpos, await this.garantirCategoria(limpa));
   }
 
-  /** Liga/desliga um produto. Lança NaoEncontrado se o produto não existir. */
-  async setAtivo(id: number, ativo: unknown): Promise<void> {
-    if (typeof ativo !== 'boolean') {
-      throw new RequisicaoInvalida('Campo "ativo" (boolean) é obrigatório.');
+  /**
+   * Edição de um produto pela tela de edição: nome, categoria e status, todos
+   * opcionais (campo ausente fica como está). Lança RequisicaoInvalida quando
+   * nada válido vem, NaoEncontrado se o produto não existe e Conflito se o nome
+   * novo já for de outro produto (o nome normalizado é único).
+   */
+  async editarProduto(id: number, d: DadosEdicaoProduto): Promise<void> {
+    const campos: { nome?: string; categoria?: string | null; ativo?: boolean } = {};
+
+    if (d.nome !== undefined) {
+      const nome = typeof d.nome === 'string' ? d.nome.trim() : '';
+      if (!nome) throw new RequisicaoInvalida('O nome do produto não pode ficar em branco.');
+      if (nome.length > 200) throw new RequisicaoInvalida('Nome com no máximo 200 caracteres.');
+      const dono = await this.produtos.idPorNomeNorm(normalizar(nome));
+      if (dono !== null && dono !== id) throw new Conflito(`Já existe um produto chamado "${nome}".`);
+      campos.nome = nome;
     }
-    if (!await this.produtos.setAtivo(id, ativo)) {
-      throw new NaoEncontrado('Produto não encontrado.');
+    if (d.categoria !== undefined) {
+      const limpa = limparCategoria(d.categoria);
+      if (limpa === undefined) throw new RequisicaoInvalida('Categoria deve ser texto.');
+      campos.categoria = await this.garantirCategoria(limpa);
     }
+    if (d.ativo !== undefined) {
+      if (typeof d.ativo !== 'boolean') throw new RequisicaoInvalida('Campo "ativo" deve ser boolean.');
+      campos.ativo = d.ativo;
+    }
+    if (Object.keys(campos).length === 0) {
+      throw new RequisicaoInvalida('Envie ao menos um campo: nome, categoria ou ativo.');
+    }
+
+    if (!await this.produtos.atualizar(id, campos)) throw new NaoEncontrado('Produto não encontrado.');
+  }
+
+  /** Troca a imagem de um produto (resultado do editor). Só PNG, JPEG ou WEBP. */
+  async trocarImagem(id: number, imagemBruta: unknown, mimeBruto: unknown): Promise<void> {
+    const imagem = typeof imagemBruta === 'string' ? imagemBruta.trim() : '';
+    if (!imagem) throw new RequisicaoInvalida('imagem_b64 é obrigatório.');
+    const mime = typeof mimeBruto === 'string' ? mimeBruto : 'image/png';
+    if (!MIMES_ACEITOS.has(mime)) throw new RequisicaoInvalida('Formato aceito: PNG, JPEG ou WEBP.');
+
+    const b64 = imagem.includes(',') ? imagem.split(',')[1] : imagem;
+    if (!await this.produtos.trocarImagem(id, b64, mime)) throw new NaoEncontrado('Produto não encontrado.');
   }
 
   deletarProduto(id: number): Promise<void> {

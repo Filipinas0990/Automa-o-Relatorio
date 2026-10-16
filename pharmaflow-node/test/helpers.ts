@@ -93,20 +93,28 @@ export async function conectarWhatsappFake(gestorId: number) {
 
 // ── Chamadas HTTP ─────────────────────────────────────────────────────────────
 
+/** A mesma de vitest.config.ts (SENHA_BANCO_TESTE) — o hash dela está no env. */
+export const SENHA_BANCO = 'senha-do-banco-de-teste';
+
 interface OpcoesReq {
   token?: string;
   body?: unknown;
+  /** Vai no X-Senha-Banco. Exigida pelas ações do Banco de Imagens. */
+  senhaBanco?: string;
 }
 
 export async function api(
-  method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
+  method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE',
   url: string,
   opts: OpcoesReq = {},
 ) {
+  const headers: Record<string, string> = {};
+  if (opts.token) headers.authorization = `Bearer ${opts.token}`;
+  if (opts.senhaBanco !== undefined) headers['x-senha-banco'] = encodeURIComponent(opts.senhaBanco);
   const res = await app.inject({
     method,
     url,
-    headers: opts.token ? { authorization: `Bearer ${opts.token}` } : {},
+    headers,
     payload: opts.body as never,
   });
 

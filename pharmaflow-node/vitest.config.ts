@@ -1,4 +1,10 @@
 import { defineConfig } from 'vitest/config';
+import { scryptSync } from 'crypto';
+
+/** Senha do Banco de Imagens nos testes — o hash vai no env, como no servidor. */
+const SENHA_BANCO_TESTE = 'senha-do-banco-de-teste';
+const SAL_TESTE = Buffer.from('sal-fixo-de-teste');
+const HASH_SENHA_BANCO = `scrypt:${SAL_TESTE.toString('hex')}:${scryptSync(SENHA_BANCO_TESTE, SAL_TESTE, 64).toString('hex')}`;
 
 const TEST_DB = process.env.TEST_DB_NAME || 'farmacia_monitor_test';
 
@@ -27,6 +33,7 @@ export default defineConfig({
       EVOLUTION_API_URL: 'http://127.0.0.1:1',
       EVOLUTION_API_KEY: 'chave-de-teste',
       FRONTEND_URL: 'http://localhost:5173',
+      BANCO_IMAGENS_SENHA_HASH: HASH_SENHA_BANCO,
     },
   },
 });

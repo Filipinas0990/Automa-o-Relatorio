@@ -10,7 +10,8 @@
     "seed": "ts-node src/seed.ts",
     "test": "vitest run",
     "test:watch": "vitest",
-    "importar-catalogo": "ts-node src/importar-catalogo.ts"
+    "importar-catalogo": "ts-node src/importar-catalogo.ts",
+    "senha-banco": "ts-node src/gerar-senha-banco.ts"
   },
   "dependencies": {
     "@fastify/cors": "^9.0.1",

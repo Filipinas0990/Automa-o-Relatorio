@@ -12,7 +12,7 @@
  * protege é a escrita ser só do admin.
  */
 import { describe, it, expect, beforeEach } from 'vitest';
-import { api, criarGestor, criarProduto, limparBanco } from './helpers';
+import { api, criarGestor, criarProduto, limparBanco, SENHA_BANCO } from './helpers';
 
 /** Só os nomes, para comparar listas sem depender de id nem de data. */
 function nomes(body: { categorias: { nome: string }[] }): string[] {
@@ -135,7 +135,7 @@ describe('Cadastro de categorias', () => {
     const p = await criarProduto('Creme dental');
 
     await api('PATCH', '/api/catalogo/produtos/categoria', {
-      token: admin.token, body: { ids: [p.id], categoria: 'Bucal' },
+      token: admin.token, senhaBanco: SENHA_BANCO, body: { ids: [p.id], categoria: 'Bucal' },
     });
 
     const lista = await api('GET', '/api/catalogo/categorias', { token: admin.token });

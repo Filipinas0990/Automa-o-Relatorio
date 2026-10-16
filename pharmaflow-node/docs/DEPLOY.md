@@ -96,6 +96,24 @@ docker compose up -d --build api
 
 ---
 
+## Senha do Banco de Imagens (uma vez só)
+
+Toda ação no Banco de Imagens (subir, editar, ligar/desligar, classificar,
+excluir, baixar) é só do admin **e** pede uma senha. Ela é definida no servidor,
+no `.env` da raiz — não existe tela para trocá-la. Sem a variável, as ações do
+banco ficam bloqueadas (503).
+
+```bash
+# depois do passo 3 (tsc), no servidor:
+node pharmaflow-node/dist/gerar-senha-banco.js 'a senha escolhida'
+# cole a linha BANCO_IMAGENS_SENHA_HASH=scrypt:... no .env da raiz e:
+docker compose up -d --build api
+```
+
+Só o hash vai para o `.env`; a senha em si não fica gravada em lugar nenhum.
+Para trocar, gere de novo, substitua a linha e reinicie a API. 5 erros seguidos
+travam as ações daquele admin por 15 minutos.
+
 ## Rodando migrations do banco de dados
 
 Quando uma migration nova for adicionada (pasta `migrations/`), ela precisa ser aplicada no banco **junto com o deploy**. O código novo já espera as tabelas novas: se a migration ficar para trás, a tela quebra com um erro do Postgres (ex.: `relation "grupos_cache_sync" does not exist`).
