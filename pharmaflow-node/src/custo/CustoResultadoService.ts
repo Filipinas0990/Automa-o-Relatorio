@@ -1,7 +1,7 @@
 import type { Gestor } from '../database/schema';
 import { logger } from '../logger';
 import { metaReq } from '../meta/client';
-import { tokenMetaDo, msgTokenExpirado } from '../meta/tokenGestor';
+import { tokenProprioDo, msgTokenExpirado } from '../meta/tokenGestor';
 import {
   JANELAS, periodoDaJanela, resumirCampanhas, agoraBrasilia, diaBrasilia,
   type Janela, type InsightLinha,
@@ -17,7 +17,7 @@ const TENTATIVAS  = 3;
 
 const esperar = (ms: number) => ms > 0 ? new Promise<void>((r) => setTimeout(r, ms)) : Promise.resolve();
 
-export interface ResumoExecucao { farmaciasOk: number; farmaciasErro: number }
+export interface ResumoExecucao { farmaciasOk: number; farmaciasErro: number; semToken: number }
 
 interface PaginaInsights {
   data?:   InsightLinha[];
@@ -46,17 +46,28 @@ export class CustoResultadoService {
   async sincronizarTodas(agora: Date = new Date()): Promise<ResumoExecucao> {
     if (this.rodando) {
       logger.warn('Custo por resultado: rodada anterior ainda em andamento — ignorando');
-      return { farmaciasOk: 0, farmaciasErro: 0 };
+      return { farmaciasOk: 0, farmaciasErro: 0, semToken: 0 };
     }
     this.rodando = true;
     try {
-      const contas = await this.repo.contasParaSincronizar();
+      const todas = await this.repo.contasParaSincronizar();
       let farmaciasOk = 0, farmaciasErro = 0;
 
-      for (const [i, conta] of contas.entries()) {
+      // Cada gestor lê com o PRÓPRIO token. Farmácia cujo gestor não conectou o
+      // Facebook (ou cuja conexão expirou) não é lida e não aparece no painel:
+      // o que havia de leituras antigas dela é apagado.
+      const contas: Array<{ conta: ContaParaSincronizar; token: string }> = [];
+      const semToken: number[] = [];
+      for (const conta of todas) {
+        const token = tokenProprioDo(conta.gestor);
+        if (token) contas.push({ conta, token }); else semToken.push(conta.farmaciaId);
+      }
+      await this.repo.limparFarmacias(semToken);
+
+      for (const [i, { conta, token }] of contas.entries()) {
         if (i > 0) await esperar(this.pausaEntreContasMs);
         try {
-          await this.sincronizarConta(conta, agora);
+          await this.sincronizarConta(conta, token, agora);
           farmaciasOk++;
         } catch (err) {
           farmaciasErro++;
@@ -67,8 +78,8 @@ export class CustoResultadoService {
       }
 
       await this.repo.registrarExecucao(farmaciasOk, farmaciasErro);
-      logger.info({ farmaciasOk, farmaciasErro }, 'Custo por resultado: rodada concluída');
-      return { farmaciasOk, farmaciasErro };
+      logger.info({ farmaciasOk, farmaciasErro, semToken: semToken.length }, 'Custo por resultado: rodada concluída');
+      return { farmaciasOk, farmaciasErro, semToken: semToken.length };
     } finally {
       this.rodando = false;
     }
@@ -90,13 +101,12 @@ export class CustoResultadoService {
   }
 
   /** Uma conta, as três janelas. Qualquer erro sobe e marca a farmácia como falha. */
-  private async sincronizarConta(conta: ContaParaSincronizar, agora: Date): Promise<void> {
-    const { token, proprio } = tokenMetaDo(conta.gestor);
-    const campanhasWhatsapp = await this.campanhasWhatsapp(conta.adAccountId, token, proprio);
+  private async sincronizarConta(conta: ContaParaSincronizar, token: string, agora: Date): Promise<void> {
+    const campanhasWhatsapp = await this.campanhasWhatsapp(conta.adAccountId, token);
 
     for (const dias of JANELAS) {
       const periodo = periodoDaJanela(dias, agora);
-      const linhas  = await this.lerInsights(conta.adAccountId, token, periodo, proprio);
+      const linhas  = await this.lerInsights(conta.adAccountId, token, periodo);
       await this.repo.salvar(conta.farmaciaId, dias, periodo, resumirCampanhas(linhas, campanhasWhatsapp));
     }
   }
@@ -105,7 +115,7 @@ export class CustoResultadoService {
    * IDs das campanhas que levam para o WhatsApp: as que têm algum conjunto com
    * destino WHATSAPP. O Insights não informa o destino, então vem dos conjuntos.
    */
-  private async campanhasWhatsapp(adAccountId: string, token: string, proprio: boolean): Promise<Set<string>> {
+  private async campanhasWhatsapp(adAccountId: string, token: string): Promise<Set<string>> {
     const ids = new Set<string>();
     let after: string | undefined;
 
@@ -115,7 +125,7 @@ export class CustoResultadoService {
 
       const pagina = await this.comRetentativa(() =>
         metaReq<PaginaAdsets>('GET', `/${adAccountId}/adsets`, token, params),
-      proprio);
+      );
 
       for (const c of pagina.data ?? []) {
         if (c.destination_type === 'WHATSAPP' && c.campaign_id) ids.add(c.campaign_id);
@@ -128,7 +138,7 @@ export class CustoResultadoService {
 
   /** Insights por campanha no período, seguindo a paginação e tentando de novo no limite do Meta. */
   private async lerInsights(
-    adAccountId: string, token: string, periodo: { inicio: string; fim: string }, proprio: boolean,
+    adAccountId: string, token: string, periodo: { inicio: string; fim: string },
   ): Promise<InsightLinha[]> {
     const linhas: InsightLinha[] = [];
     let after: string | undefined;
@@ -144,7 +154,7 @@ export class CustoResultadoService {
 
       const pagina = await this.comRetentativa(() =>
         metaReq<PaginaInsights>('GET', `/${adAccountId}/insights`, token, params),
-      proprio);
+      );
 
       linhas.push(...(pagina.data ?? []));
       after = pagina.paging?.next ? pagina.paging.cursors?.after : undefined;
@@ -153,13 +163,13 @@ export class CustoResultadoService {
     return linhas;
   }
 
-  private async comRetentativa<T>(fn: () => Promise<T>, proprio: boolean): Promise<T> {
+  private async comRetentativa<T>(fn: () => Promise<T>): Promise<T> {
     for (let tentativa = 1; ; tentativa++) {
       try {
         return await fn();
       } catch (err) {
         const msg = (err as Error).message;
-        if (msg === 'META_TOKEN_EXPIRADO') throw new Error(msgTokenExpirado(proprio));
+        if (msg === 'META_TOKEN_EXPIRADO') throw new Error(msgTokenExpirado(true));
         if (tentativa >= TENTATIVAS || !ERRO_LIMITE.test(msg)) throw err;
         await esperar(this.pausaEntreContasMs * 4 * tentativa);
       }

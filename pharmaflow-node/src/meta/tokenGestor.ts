@@ -43,6 +43,24 @@ export function tokenMetaDo(gestor?: GestorComMeta | null): TokenMeta {
   return { token: tokenGeral(), proprio: false };
 }
 
+/**
+ * Token do próprio gestor, ou null se ele não conectou o Facebook, se a conexão
+ * expirou ou se o token está ilegível. NUNCA cai no token geral do servidor —
+ * quem precisa de leitura estritamente por gestor (ex.: custo por resultado)
+ * usa esta, e não tokenMetaDo.
+ */
+export function tokenProprioDo(gestor?: GestorComMeta | null): string | null {
+  if (!gestor?.metaAccessToken) return null;
+  const expira = gestor.metaTokenExpiraEm ? new Date(gestor.metaTokenExpiraEm) : null;
+  if (expira && expira.getTime() <= Date.now()) return null;
+  try {
+    return decrypt(gestor.metaAccessToken);
+  } catch (e) {
+    logger.warn({ gestor: gestor.id, err: (e as Error).message }, 'Token Meta do gestor ilegível');
+    return null;
+  }
+}
+
 /** Mensagem de token expirado certa para cada caso. */
 export function msgTokenExpirado(proprio: boolean): string {
   return proprio

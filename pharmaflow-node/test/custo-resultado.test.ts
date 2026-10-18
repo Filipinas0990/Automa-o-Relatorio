@@ -5,10 +5,14 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { db } from '../src/database/db';
-import { metaTokens, custoResultadoMeta } from '../src/database/schema';
+import { metaTokens, custoResultadoMeta, gestoresTrafego } from '../src/database/schema';
+import { encrypt } from '../src/cripto';
 import { custoResultadoService } from '../src/composicao';
 import { periodoDaJanela, resumirCampanhas, agoraBrasilia } from '../src/custo/calculo';
 import { api, criarGestor, criarFarmacia, limparBanco } from './helpers';
+
+// A chave do Fernet só existe no servidor; nos testes usamos uma fixa.
+process.env.FARMACIAS_KEY = Buffer.alloc(32, 7).toString('base64').replace(/+/g, '-').replace(///g, '_');
 
 const WPP = 'onsite_conversion.messaging_conversation_started_7d';
 const resposta = (data: unknown) => new Response(JSON.stringify(data), { status: 200 });
@@ -88,6 +92,15 @@ describe('Job de custo por resultado', () => {
     vi.unstubAllGlobals();
   });
 
+  /** Gestor com o Facebook conectado (token próprio, criptografado, ainda válido). */
+  async function gestorComToken(token = 'token-do-gestor', expiraEm: Date | null = null) {
+    const g = await criarGestor();
+    await db.update(gestoresTrafego)
+      .set({ metaAccessToken: encrypt(token), metaTokenExpiraEm: expiraEm })
+      .where(eq(gestoresTrafego.id, g.id));
+    return g;
+  }
+
   async function farmaciaComConta(gestorId: number, conta: string) {
     const f = await criarFarmacia(gestorId);
     await db.insert(metaTokens).values({ farmaciaId: f.id, adAccountId: conta, pageId: 'p1' });
@@ -95,12 +108,13 @@ describe('Job de custo por resultado', () => {
   }
 
   it('grava as 3 janelas e a rota devolve o custo por resultado', async () => {
-    const gestor = await criarGestor();
+    const gestor = await gestorComToken();
     const f = await farmaciaComConta(gestor.id, 'act_111');
 
     const periodosPedidos: string[] = [];
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       const u = new URL(String(url));
+      expect(u.searchParams.get('access_token')).toBe('token-do-gestor');   // nunca o geral
       if (u.pathname.endsWith('/act_111/adsets')) return resposta(ADSETS);
       expect(u.pathname).toContain('/act_111/insights');
       expect(u.searchParams.get('level')).toBe('campaign');
@@ -114,7 +128,7 @@ describe('Job de custo por resultado', () => {
 
     const agora = new Date('2026-10-18T09:00:00Z');
     const resumo = await custoResultadoService.sincronizarTodas(agora);
-    expect(resumo).toEqual({ farmaciasOk: 1, farmaciasErro: 0 });
+    expect(resumo).toEqual({ farmaciasOk: 1, farmaciasErro: 0, semToken: 0 });
     expect(periodosPedidos.map((p) => JSON.parse(p).until)).toEqual(['2026-10-17', '2026-10-17', '2026-10-17']);
 
     const r = await api('GET', '/api/custo-resultado', { token: gestor.token });
@@ -127,7 +141,7 @@ describe('Job de custo por resultado', () => {
   });
 
   it('uma conta com erro não derruba as outras e mantém o último número bom', async () => {
-    const gestor = await criarGestor();
+    const gestor = await gestorComToken();
     const boa  = await farmaciaComConta(gestor.id, 'act_ok');
     const ruim = await farmaciaComConta(gestor.id, 'act_ruim');
 
@@ -143,7 +157,7 @@ describe('Job de custo por resultado', () => {
     await custoResultadoService.sincronizarTodas();
     falhar = true;
     const resumo = await custoResultadoService.sincronizarTodas();
-    expect(resumo).toEqual({ farmaciasOk: 1, farmaciasErro: 1 });
+    expect(resumo).toEqual({ farmaciasOk: 1, farmaciasErro: 1, semToken: 0 });
 
     const [linha7] = await db.select().from(custoResultadoMeta)
       .where(eq(custoResultadoMeta.farmaciaId, ruim.id));
@@ -155,7 +169,7 @@ describe('Job de custo por resultado', () => {
   });
 
   it('só roda a partir das 06:00 de Brasília e uma vez por dia', async () => {
-    const gestor = await criarGestor();
+    const gestor = await gestorComToken();
     await farmaciaComConta(gestor.id, 'act_222');
     // 1 chamada de conjuntos + 3 de insights (7, 15 e 30 dias)
     const fetchFalso = vi.fn(async () => resposta({ data: [] }));
@@ -167,7 +181,7 @@ describe('Job de custo por resultado', () => {
 
     // 06:00 — roda
     const agora = new Date('2026-10-18T09:00:00Z');
-    expect(await custoResultadoService.rodarSeForAHora(agora)).toEqual({ farmaciasOk: 1, farmaciasErro: 0 });
+    expect(await custoResultadoService.rodarSeForAHora(agora)).toEqual({ farmaciasOk: 1, farmaciasErro: 0, semToken: 0 });
     expect(fetchFalso).toHaveBeenCalledTimes(4);
 
     // mesmo dia, mais tarde — não repete
@@ -176,8 +190,8 @@ describe('Job de custo por resultado', () => {
   });
 
   it('gestor comum só vê as farmácias dele; sincronizar é só admin', async () => {
-    const a = await criarGestor();
-    const b = await criarGestor();
+    const a = await gestorComToken();
+    const b = await gestorComToken();
     const fa = await farmaciaComConta(a.id, 'act_a');
     const fb = await farmaciaComConta(b.id, 'act_b');
     vi.stubGlobal('fetch', vi.fn(async () => resposta({ data: [] })));
@@ -190,5 +204,34 @@ describe('Job de custo por resultado', () => {
 
     expect((await api('GET', '/api/custo-resultado')).status).toBe(401);
     expect((await api('POST', '/api/custo-resultado/sincronizar', { token: a.token })).status).toBe(403);
+  });
+
+  it('gestor sem token (ou com token vencido) não é lido e não aparece — mesmo com token geral no servidor', async () => {
+    const comToken = await gestorComToken();
+    const semToken = await criarGestor();                                   // nunca conectou o Facebook
+    const vencido  = await gestorComToken('token-velho', new Date(Date.now() - 60_000));
+    const f1 = await farmaciaComConta(comToken.id, 'act_com');
+    const f2 = await farmaciaComConta(semToken.id, 'act_sem');
+    const f3 = await farmaciaComConta(vencido.id,  'act_vencido');
+
+    // sobra de uma leitura antiga da farmácia que agora ficou sem token
+    await db.insert(custoResultadoMeta).values({ farmaciaId: f2.id, janelaDias: 7, gasto: '10.00' });
+
+    const contasLidas = new Set<string>();
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      const u = new URL(String(url));
+      contasLidas.add(u.pathname.split('/')[2]);
+      if (u.pathname.endsWith('/adsets')) return resposta(ADSETS);
+      return resposta({ data: [{ campaign_id: 'c1', spend: '50', actions: [{ action_type: WPP, value: '5' }] }] });
+    }));
+
+    const resumo = await custoResultadoService.sincronizarTodas();
+    expect(resumo).toEqual({ farmaciasOk: 1, farmaciasErro: 0, semToken: 2 });
+    expect([...contasLidas]).toEqual(['act_com']);                          // o Meta só foi chamado para quem tem token
+
+    const ids = (await db.select().from(custoResultadoMeta)).map((r) => r.farmaciaId);
+    expect(new Set(ids)).toEqual(new Set([f1.id]));
+    expect(ids).not.toContain(f2.id);                                       // a sobra antiga foi apagada
+    expect(ids).not.toContain(f3.id);
   });
 });

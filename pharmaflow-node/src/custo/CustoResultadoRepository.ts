@@ -82,6 +82,12 @@ export class CustoResultadoRepository {
       });
   }
 
+  /** Apaga as leituras de farmácias que deixaram de poder ser lidas (gestor sem token). */
+  async limparFarmacias(farmaciaIds: number[]): Promise<void> {
+    if (!farmaciaIds.length) return;
+    await this.db.delete(custoResultadoMeta).where(inArray(custoResultadoMeta.farmaciaId, farmaciaIds));
+  }
+
   /** Linhas com o nome da farmácia. `gestorId` restringe às farmácias de um gestor. */
   async listar(gestorId: number | null, farmaciaIds?: number[]): Promise<LinhaCusto[]> {
     const filtros = [eq(farmacias.ativa, true)];
