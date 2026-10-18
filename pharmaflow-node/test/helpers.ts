@@ -12,7 +12,7 @@ import {
   gestoresTrafego, farmacias, catalogoProdutos, catalogoCategorias,
   linksOferta, solicitacoesOferta,
   disparosGrupo, disparosGrupoLog, gestorWhatsapp, whatsappConfig,
-  contasAnuncioCache, contasAnuncioCacheSync,
+  contasAnuncioCache, contasAnuncioCacheSync, custoResultadoMetaExecucao,
 } from '../src/database/schema';
 
 const JWT_SECRET = process.env.JWT_SECRET_KEY || 'segredo-de-teste-com-pelo-menos-32-caracteres';
@@ -129,7 +129,7 @@ export async function limparBanco(): Promise<void> {
   await db.execute(sql`
     TRUNCATE ${disparosGrupoLog}, ${disparosGrupo}, ${solicitacoesOferta},
              ${linksOferta}, ${gestorWhatsapp}, ${whatsappConfig}, ${catalogoProdutos},
-             ${catalogoCategorias}, ${contasAnuncioCache}, ${contasAnuncioCacheSync},
+             ${catalogoCategorias}, ${contasAnuncioCache}, ${contasAnuncioCacheSync}, ${custoResultadoMetaExecucao},
              ${farmacias}, ${gestoresTrafego}
     RESTART IDENTITY CASCADE
   `);

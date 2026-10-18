@@ -9,7 +9,7 @@ import {
   rankingController, googleController, conexaoMetaController,
   agendaController, reuniaoController, dashboardController, acaoController,
   ofertaPublicaController, ofertaController, catalogoController, whatsappController,
-  campanhaController, disparoController, adsController, adsService,
+  campanhaController, disparoController, adsController, adsService, custoResultadoController,
 } from '../composicao';
 
 const app = Fastify({
@@ -61,6 +61,7 @@ app.register(whatsappController.plugin);
 app.register(campanhaController.plugin);
 app.register(disparoController.plugin);
 app.register(adsController.plugin);
+app.register(custoResultadoController.plugin);
 
 // ── Tratamento global de erros ────────────────────────────────────────────────
 

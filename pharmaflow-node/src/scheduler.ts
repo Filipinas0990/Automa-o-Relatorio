@@ -1,6 +1,8 @@
 import { logger } from './logger';
 // Instâncias compartilhadas até este scheduler virar classe e receber pelo construtor.
-import { whatsappService, whatsappRepository, disparoService, disparoRepository } from './composicao';
+import {
+  whatsappService, whatsappRepository, disparoService, disparoRepository, custoResultadoService,
+} from './composicao';
 
 const INTERVALO_MS = 60_000; // verifica a cada 1 minuto
 
@@ -143,6 +145,11 @@ export function iniciarSchedulerWhatsApp(): void {
 
     verificarDisparosTravados().catch(err =>
       logger.error({ err }, 'Erro ao verificar disparos travados'),
+    );
+
+    // Custo por resultado do Meta: uma rodada por dia, a partir das 06:00 (Brasília)
+    custoResultadoService.rodarSeForAHora().catch(err =>
+      logger.error({ err }, 'Erro no job de custo por resultado do Meta'),
     );
   }, INTERVALO_MS);
 }

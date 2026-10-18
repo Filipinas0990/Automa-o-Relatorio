@@ -72,6 +72,9 @@ import { ContaAnuncioCacheRepository } from './ads/ContaAnuncioCacheRepository';
 import { GeocodificadorCidade } from './ads/GeocodificadorCidade';
 import { AdsService } from './ads/AdsService';
 import { AdsController } from './ads/AdsController';
+import { CustoResultadoRepository } from './custo/CustoResultadoRepository';
+import { CustoResultadoService } from './custo/CustoResultadoService';
+import { CustoResultadoController } from './custo/CustoResultadoController';
 import { LinkOfertaRepository } from './ofertas/LinkOfertaRepository';
 import { SolicitacaoRepository } from './ofertas/SolicitacaoRepository';
 import { LinkOfertaService } from './ofertas/LinkOfertaService';
@@ -141,6 +144,10 @@ whatsappService.definirRoteador(adsService);
 export const adsController = new AdsController(
   adsService, tokenMetaRepository, new GeocodificadorCidade(), autenticador,
 );
+
+// ── Custo por resultado do Meta (job das 06:00 + rota de leitura) ─────────────
+export const custoResultadoService = new CustoResultadoService(new CustoResultadoRepository(db));
+export const custoResultadoController = new CustoResultadoController(custoResultadoService, autenticador);
 
 // ── Ranking ───────────────────────────────────────────────────────────────────
 export const rankingController = new RankingController(

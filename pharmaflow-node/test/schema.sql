@@ -1573,6 +1573,38 @@ ALTER TABLE ONLY public.meta_tokens
 
 
 --
+-- Name: custo_resultado_meta (migration 0039 — adicionada à mão ao dump)
+--
+
+CREATE TABLE public.custo_resultado_meta (
+    farmacia_id integer NOT NULL,
+    janela_dias integer NOT NULL,
+    periodo_inicio date,
+    periodo_fim date,
+    gasto numeric(15,2) DEFAULT 0 NOT NULL,
+    resultados integer DEFAULT 0 NOT NULL,
+    custo_por_resultado numeric(15,2),
+    tipo_resultado character varying(80),
+    cliques integer DEFAULT 0 NOT NULL,
+    impressoes integer DEFAULT 0 NOT NULL,
+    erro text,
+    sincronizado_em timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT custo_resultado_meta_janela CHECK ((janela_dias = ANY (ARRAY[7, 15, 30]))),
+    CONSTRAINT custo_resultado_meta_pkey PRIMARY KEY (farmacia_id, janela_dias),
+    CONSTRAINT custo_resultado_meta_farmacia_id_fkey FOREIGN KEY (farmacia_id) REFERENCES public.farmacias(id) ON DELETE CASCADE
+);
+
+CREATE TABLE public.custo_resultado_meta_execucao (
+    id integer DEFAULT 1 NOT NULL,
+    executado_em timestamp with time zone DEFAULT now() NOT NULL,
+    farmacias_ok integer DEFAULT 0 NOT NULL,
+    farmacias_erro integer DEFAULT 0 NOT NULL,
+    CONSTRAINT custo_resultado_meta_execucao_linha_unica CHECK ((id = 1)),
+    CONSTRAINT custo_resultado_meta_execucao_pkey PRIMARY KEY (id)
+);
+
+
+--
 -- PostgreSQL database dump complete
 --
 

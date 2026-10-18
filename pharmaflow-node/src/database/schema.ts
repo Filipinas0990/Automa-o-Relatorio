@@ -248,6 +248,35 @@ export const contasAnuncioCacheSync = pgTable('contas_anuncio_cache_sync', {
   erro:           text('erro'),
 });
 
+// ── Custo por resultado do Meta Ads (migration 0039) ─────────────────────────
+//
+// Uma linha por farmácia e janela (7, 15 ou 30 dias), sobrescrita todo dia pelo
+// job das 06:00. Sem histórico.
+export const custoResultadoMeta = pgTable('custo_resultado_meta', {
+  farmaciaId:        integer('farmacia_id').notNull().references(() => farmacias.id),
+  janelaDias:        integer('janela_dias').notNull(),
+  periodoInicio:     date('periodo_inicio'),
+  periodoFim:        date('periodo_fim'),
+  gasto:             numeric('gasto', { precision: 15, scale: 2 }).notNull().default('0'),
+  resultados:        integer('resultados').notNull().default(0),
+  custoPorResultado: numeric('custo_por_resultado', { precision: 15, scale: 2 }),
+  tipoResultado:     varchar('tipo_resultado', { length: 80 }),
+  cliques:           integer('cliques').notNull().default(0),
+  impressoes:        integer('impressoes').notNull().default(0),
+  erro:              text('erro'),
+  sincronizadoEm:    timestamp('sincronizado_em', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.farmaciaId, t.janelaDias] }),
+}));
+
+// Quando o job rodou por último. Linha única (id = 1).
+export const custoResultadoMetaExecucao = pgTable('custo_resultado_meta_execucao', {
+  id:            integer('id').primaryKey().default(1),
+  executadoEm:   timestamp('executado_em', { withTimezone: true }).defaultNow().notNull(),
+  farmaciasOk:   integer('farmacias_ok').notNull().default(0),
+  farmaciasErro: integer('farmacias_erro').notNull().default(0),
+});
+
 // ── Campanhas criadas via automação WhatsApp (adicionado pela migration 0012) ─
 
 export const campanhasMeta = pgTable('campanhas_meta', {
