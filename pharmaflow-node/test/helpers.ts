@@ -42,12 +42,16 @@ export async function criarGestor(opts: { nome?: string; isAdmin?: boolean } = {
   return { ...g, token: tokenDe(g.id, g.nome, g.isAdmin) };
 }
 
-export async function criarFarmacia(gestorId: number, opts: { nome?: string; telefone?: string } = {}) {
+export async function criarFarmacia(
+  gestorId: number,
+  opts: { nome?: string; telefone?: string; nomeFachada?: string | null } = {},
+) {
   const [f] = await db.insert(farmacias).values({
-    nome:     opts.nome ?? `Farmácia ${unico()}`,
+    nome:        opts.nome ?? `Farmácia ${unico()}`,
     gestorId,
-    ativa:    true,
-    telefone: opts.telefone ?? null,
+    ativa:       true,
+    telefone:    opts.telefone ?? null,
+    nomeFachada: opts.nomeFachada ?? null,
   }).returning();
   return f;
 }

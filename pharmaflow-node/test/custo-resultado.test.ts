@@ -5,7 +5,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { db } from '../src/database/db';
-import { metaTokens, custoResultadoMeta, gestoresTrafego } from '../src/database/schema';
+import { metaTokens, custoResultadoMeta, gestoresTrafego, farmacias } from '../src/database/schema';
 import { encrypt } from '../src/cripto';
 import { custoResultadoService } from '../src/composicao';
 import { periodoDaJanela, resumirCampanhas, agoraBrasilia } from '../src/custo/calculo';
@@ -147,7 +147,7 @@ describe('Job de custo por resultado', () => {
 
   /** Farmácia com a conta cadastrada à mão (meta_tokens). */
   async function farmaciaComConta(gestorId: number, conta: string) {
-    const f = await criarFarmacia(gestorId);
+    const f = await criarFarmacia(gestorId, { nomeFachada: 'Fachada de teste' });
     await db.insert(metaTokens).values({ farmaciaId: f.id, adAccountId: conta, pageId: 'p1' });
     return f;
   }
@@ -197,7 +197,7 @@ describe('Job de custo por resultado', () => {
 
     const agora = new Date('2026-10-18T09:00:00Z');
     const resumo = await custoResultadoService.sincronizarTodas(agora);
-    expect(resumo).toEqual({ farmaciasOk: 1, farmaciasErro: 0, semConta: 0 });
+    expect(resumo).toEqual({ farmaciasOk: 1, farmaciasErro: 0, semConta: 0, semFachada: 0 });
     expect(new Set(chamadas.map((c) => c.conta))).toEqual(new Set(['act_111']));
     expect(periodosPedidos.map((p) => JSON.parse(p).until)).toEqual(['2026-10-17', '2026-10-17', '2026-10-17']);
 
@@ -212,8 +212,8 @@ describe('Job de custo por resultado', () => {
 
   it('sem conta cadastrada: casa pelo nome e soma CA01 + CA02 da farmácia', async () => {
     const gestor = await gestorComToken();
-    const ribeira = await criarFarmacia(gestor.id, { nome: 'FARMACIA RIBEIRA LTDA' });
-    const outra   = await criarFarmacia(gestor.id, { nome: 'DROGARIA SEM CONTA NENHUMA' });
+    const ribeira = await criarFarmacia(gestor.id, { nome: 'FARMACIA RIBEIRA LTDA', nomeFachada: 'Drogaria Max Ribeira' });
+    const outra   = await criarFarmacia(gestor.id, { nome: 'DROGARIA SEM CONTA NENHUMA', nomeFachada: 'Sem Conta' });
 
     simularMeta({ 'token-do-gestor': [
       { id: 'act_r1', nome: 'CA01 - [FARMACIA RIBEIRA LTDA - Drogaria Max Ribeira]' },
@@ -224,7 +224,7 @@ describe('Job de custo por resultado', () => {
     ] }));
 
     const resumo = await custoResultadoService.sincronizarTodas();
-    expect(resumo).toEqual({ farmaciasOk: 1, farmaciasErro: 0, semConta: 1 });
+    expect(resumo).toEqual({ farmaciasOk: 1, farmaciasErro: 0, semConta: 1, semFachada: 0 });
 
     const linhas = await db.select().from(custoResultadoMeta);
     expect(new Set(linhas.map((l) => l.farmaciaId))).toEqual(new Set([ribeira.id]));
@@ -248,7 +248,7 @@ describe('Job de custo por resultado', () => {
     await custoResultadoService.sincronizarTodas();
     falhar = true;
     const resumo = await custoResultadoService.sincronizarTodas();
-    expect(resumo).toEqual({ farmaciasOk: 1, farmaciasErro: 1, semConta: 0 });
+    expect(resumo).toEqual({ farmaciasOk: 1, farmaciasErro: 1, semConta: 0, semFachada: 0 });
 
     const [linha7] = await db.select().from(custoResultadoMeta)
       .where(eq(custoResultadoMeta.farmaciaId, ruim.id));
@@ -271,7 +271,7 @@ describe('Job de custo por resultado', () => {
 
     // 06:00 — roda
     const agora = new Date('2026-10-18T09:00:00Z');
-    expect(await custoResultadoService.rodarSeForAHora(agora)).toEqual({ farmaciasOk: 1, farmaciasErro: 0, semConta: 0 });
+    expect(await custoResultadoService.rodarSeForAHora(agora)).toEqual({ farmaciasOk: 1, farmaciasErro: 0, semConta: 0, semFachada: 0 });
     expect(fn).toHaveBeenCalledTimes(5);
 
     // mesmo dia, mais tarde — não repete
@@ -309,7 +309,7 @@ describe('Job de custo por resultado', () => {
     });
 
     const resumo = await custoResultadoService.sincronizarTodas();
-    expect(resumo).toEqual({ farmaciasOk: 2, farmaciasErro: 0, semConta: 0 });
+    expect(resumo).toEqual({ farmaciasOk: 2, farmaciasErro: 0, semConta: 0, semFachada: 0 });
     // conta que os dois enxergam: lida com o token do dono da farmácia
     expect(new Set(chamadas.filter((c) => c.conta === 'act_compartilhada').map((c) => c.token))).toEqual(new Set(['token-joao']));
     expect(new Set(chamadas.filter((c) => c.conta === 'act_do_victor').map((c) => c.token))).toEqual(new Set(['token-mathews']));
@@ -334,12 +334,42 @@ describe('Job de custo por resultado', () => {
     });
 
     const resumo = await custoResultadoService.sincronizarTodas();
-    expect(resumo).toEqual({ farmaciasOk: 1, farmaciasErro: 0, semConta: 2 });
+    expect(resumo).toEqual({ farmaciasOk: 1, farmaciasErro: 0, semConta: 2, semFachada: 0 });
     expect(new Set(chamadas.map((c) => c.conta))).toEqual(new Set(['act_com']));
 
     const ids = (await db.select().from(custoResultadoMeta)).map((r) => r.farmaciaId);
     expect(new Set(ids)).toEqual(new Set([f1.id]));
     expect(ids).not.toContain(f2.id);
     expect(ids).not.toContain(f3.id);
+  });
+
+  it('farmácia sem nome de fachada não é lida nem aparece no painel até preencherem', async () => {
+    const gestor = await gestorComToken();
+    const semNada  = await criarFarmacia(gestor.id, { nome: 'FARMACIA RIBEIRA LTDA' });
+    const emBranco = await criarFarmacia(gestor.id, { nome: 'DROGARIA AFRICA LTDA', nomeFachada: '   ' });
+    // sobra de leitura antiga: tem que sumir
+    await db.insert(custoResultadoMeta).values({ farmaciaId: semNada.id, janelaDias: 7, gasto: '10.00' });
+
+    const { chamadas } = simularMeta({ 'token-do-gestor': [
+      { id: 'act_r', nome: 'CA01 - [FARMACIA RIBEIRA LTDA - Drogaria Max Ribeira]' },
+      { id: 'act_a', nome: 'CA01 - [DROGARIA AFRICA LTDA - DROGALENE]' },
+    ] }, () => ({ data: [{ campaign_id: 'c1', spend: '30', actions: [{ action_type: WPP, value: '3' }] }] }));
+
+    expect(await custoResultadoService.sincronizarTodas())
+      .toEqual({ farmaciasOk: 0, farmaciasErro: 0, semConta: 0, semFachada: 2 });
+    expect(chamadas).toHaveLength(0);                                     // nem foi ao Meta
+    expect(await db.select().from(custoResultadoMeta)).toHaveLength(0);
+
+    // preencheu a fachada: na rodada seguinte aparece
+    await db.update(farmacias).set({ nomeFachada: 'Drogaria Max Ribeira' }).where(eq(farmacias.id, semNada.id));
+    expect((await custoResultadoService.sincronizarTodas()).farmaciasOk).toBe(1);
+    const lista = async () => ((await api('GET', '/api/custo-resultado', { token: gestor.token })).body as {
+      farmacias: Array<{ farmacia_id: number }> }).farmacias.map((x) => x.farmacia_id);
+    expect(await lista()).toEqual([semNada.id]);
+    expect(await lista()).not.toContain(emBranco.id);
+
+    // apagou a fachada: some do painel na hora, sem esperar o job
+    await db.update(farmacias).set({ nomeFachada: null }).where(eq(farmacias.id, semNada.id));
+    expect(await lista()).toEqual([]);
   });
 });

@@ -100,9 +100,12 @@ export class CustoResultadoRepository {
     );
   }
 
-  /** Linhas com o nome da farmácia. `gestorId` restringe às farmácias de um gestor. */
+  /**
+   * Linhas com o nome da farmácia. `gestorId` restringe às farmácias de um
+   * gestor. Farmácia sem nome de fachada não aparece, mesmo com leitura antiga.
+   */
   async listar(gestorId: number | null, farmaciaIds?: number[]): Promise<LinhaCusto[]> {
-    const filtros = [eq(farmacias.ativa, true)];
+    const filtros = [eq(farmacias.ativa, true), sql`btrim(coalesce(${farmacias.nomeFachada}, '')) <> ''`];
     if (gestorId !== null)  filtros.push(eq(farmacias.gestorId, gestorId));
     if (farmaciaIds?.length) filtros.push(inArray(farmacias.id, farmaciaIds));
 

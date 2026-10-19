@@ -18,8 +18,13 @@ const TENTATIVAS  = 3;
 
 const esperar = (ms: number) => ms > 0 ? new Promise<void>((r) => setTimeout(r, ms)) : Promise.resolve();
 
-/** `semConta`: farmácias ativas sem conta de anúncios legível por nenhum gestor conectado. */
-export interface ResumoExecucao { farmaciasOk: number; farmaciasErro: number; semConta: number }
+/**
+ * `semFachada`: farmácias ativas sem nome de fachada — ficam fora do painel.
+ * `semConta`: das que têm fachada, as sem conta de anúncios legível por nenhum gestor conectado.
+ */
+export interface ResumoExecucao { farmaciasOk: number; farmaciasErro: number; semConta: number; semFachada: number }
+
+const temFachada = (f: { nomeFachada: string | null }): boolean => !!f.nomeFachada?.trim();
 
 /** Um gestor conectado e as contas que o token dele enxerga. */
 interface TokenComContas { gestorId: number; token: string; contas: ContaParaVincular[] }
@@ -106,15 +111,19 @@ export class CustoResultadoService {
   async sincronizarTodas(agora: Date = new Date()): Promise<ResumoExecucao> {
     if (this.rodando) {
       logger.warn('Custo por resultado: rodada anterior ainda em andamento — ignorando');
-      return { farmaciasOk: 0, farmaciasErro: 0, semConta: 0 };
+      return { farmaciasOk: 0, farmaciasErro: 0, semConta: 0, semFachada: 0 };
     }
     this.rodando = true;
     try {
       const [farmacias, cadastradas, tokens] = await Promise.all([
         this.repo.farmaciasAtivas(), this.repo.contasCadastradas(), this.tokensConectados(),
       ]);
-      const leituras = montarLeituras(farmacias, cadastradas, tokens);
-      const semConta = farmacias.length - leituras.length;
+      // Farmácia sem nome de fachada não entra no painel até o gestor preencher
+      // (decisão do dono em 19/10/2026) — nem é lida no Meta.
+      const comFachada  = farmacias.filter(temFachada);
+      const semFachada  = farmacias.length - comFachada.length;
+      const leituras    = montarLeituras(comFachada, cadastradas, tokens);
+      const semConta    = comFachada.length - leituras.length;
 
       // Farmácia que não tem mais conta legível sai do painel (nada de número velho).
       await this.repo.manterSo(leituras.map((l) => l.farmaciaId));
@@ -134,8 +143,8 @@ export class CustoResultadoService {
       }
 
       await this.repo.registrarExecucao(farmaciasOk, farmaciasErro, agora);
-      logger.info({ farmaciasOk, farmaciasErro, semConta }, 'Custo por resultado: rodada concluída');
-      return { farmaciasOk, farmaciasErro, semConta };
+      logger.info({ farmaciasOk, farmaciasErro, semConta, semFachada }, 'Custo por resultado: rodada concluída');
+      return { farmaciasOk, farmaciasErro, semConta, semFachada };
     } finally {
       this.rodando = false;
     }
