@@ -1,45 +1,46 @@
 import { and, eq, inArray, isNotNull, notInArray, sql } from 'drizzle-orm';
 import {
-  custoResultadoMeta, custoResultadoMetaExecucao, farmacias, gestoresTrafego, metaTokens,
+  custoResultadoMeta, custoResultadoMetaExecucao, farmacias, gestoresTrafego,
 } from '../database/schema';
 import type { Gestor } from '../database/schema';
 import type { BancoDeDados } from '../compartilhado/tipos';
 import { JANELAS, type PeriodoJanela, type ResumoJanela } from './calculo';
 import type { FarmaciaParaVincular } from './vinculo';
 
-/** Farmácia ativa, com o que precisa para casar pelo nome e saber de quem é. */
+/** Farmácia ativa, com a conta de anúncios dela e o gestor dono. */
 export interface FarmaciaAtiva extends FarmaciaParaVincular {
-  gestorId: number | null;
+  gestorId:        number | null;
+  metaAdAccountId: string | null;
 }
 
 /** Gestor que conectou o Facebook — o token ainda pode estar vencido. */
 export type GestorConectado = Pick<Gestor, 'id' | 'metaAccessToken' | 'metaTokenExpiraEm'>;
 
-export type LinhaCusto = typeof custoResultadoMeta.$inferSelect & { farmaciaNome: string; gestorId: number | null };
+const CAMPOS_FARMACIA = {
+  id: farmacias.id, nome: farmacias.nome, nomeFachada: farmacias.nomeFachada,
+  gestorId: farmacias.gestorId, metaAdAccountId: farmacias.metaAdAccountId,
+};
+
+export type LinhaCusto =typeof custoResultadoMeta.$inferSelect & { farmaciaNome: string; gestorId: number | null };
 
 /** Acesso às tabelas custo_resultado_meta e custo_resultado_meta_execucao (migration 0039). */
 export class CustoResultadoRepository {
   constructor(private readonly db: BancoDeDados) {}
 
   async farmaciasAtivas(): Promise<FarmaciaAtiva[]> {
-    return this.db
-      .select({
-        id: farmacias.id, nome: farmacias.nome, nomeFachada: farmacias.nomeFachada, gestorId: farmacias.gestorId,
-      })
-      .from(farmacias)
+    return this.db.select(CAMPOS_FARMACIA).from(farmacias)
       .where(eq(farmacias.ativa, true))
       .orderBy(farmacias.id);
   }
 
-  /**
-   * Conta cadastrada à mão pelo admin (POST /api/ads/tokens). Quando existe,
-   * vale ela — e não o casamento pelo nome.
-   */
-  async contasCadastradas(): Promise<Map<number, string>> {
-    const rows = await this.db
-      .select({ farmaciaId: metaTokens.farmaciaId, adAccountId: metaTokens.adAccountId })
-      .from(metaTokens);
-    return new Map(rows.map((r) => [r.farmaciaId, r.adAccountId]));
+  /** Farmácias (ativas ou não) que já têm conta vinculada — cada conta tem um dono só. */
+  async farmaciasComConta(): Promise<FarmaciaAtiva[]> {
+    return this.db.select(CAMPOS_FARMACIA).from(farmacias).where(isNotNull(farmacias.metaAdAccountId));
+  }
+
+  async farmaciaParaVincular(id: number): Promise<FarmaciaAtiva | undefined> {
+    const [f] = await this.db.select(CAMPOS_FARMACIA).from(farmacias).where(eq(farmacias.id, id));
+    return f;
   }
 
   async gestoresConectados(): Promise<GestorConectado[]> {

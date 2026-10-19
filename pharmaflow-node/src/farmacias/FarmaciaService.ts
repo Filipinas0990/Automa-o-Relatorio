@@ -1,4 +1,5 @@
-import { NaoEncontrado, RequisicaoInvalida } from '../compartilhado/erros';
+import { Conflito, NaoEncontrado, RequisicaoInvalida } from '../compartilhado/erros';
+import { nomeVisivel } from '../database/schema';
 import type { Farmacia, FarmaciaRepository, NovaFarmacia } from './FarmaciaRepository';
 
 /** Corpo do cadastro/edição como o front manda (snake_case). */
@@ -17,6 +18,8 @@ export interface DadosFarmacia {
   meta_receita?: string;
   meta_leads_google?: number;
   meta_leads_meta?: number;
+  /** Conta de anúncios do Meta ("act_123" ou só "123"). null/"" desvincula. */
+  meta_ad_account_id?: string | null;
 }
 
 type Campo = [keyof DadosFarmacia, keyof NovaFarmacia];
@@ -51,10 +54,12 @@ export class FarmaciaService {
     // Obrigatório no cadastro novo: é o nome que vai para o criativo do grupo.
     // Os cadastros antigos ficam com null até alguém editá-los (migration 0025).
     if (!d.nome_fachada?.trim()) throw new RequisicaoInvalida('Campo "nome_fachada" é obrigatório.');
+    const contaMeta = await this.contaMetaLivre(d.meta_ad_account_id, null);
 
     return this.farmacias.criar({
       nome:        d.nome,
       nomeFachada: d.nome_fachada.trim(),
+      metaAdAccountId: contaMeta ?? null,
       fase:        d.fase === 'entrada' ? 'entrada' : 'ativo',
       gestorId:    d.gestor_id || null,
       temChatbot:  d.tem_chatbot !== false,
@@ -70,6 +75,7 @@ export class FarmaciaService {
     await this.exigir(id);
     const mudancas = this.copiar(d, CAMPOS_EDITAVEIS);
     if (d.nome_fachada !== undefined) mudancas.nomeFachada = d.nome_fachada?.trim() || null;
+    if (d.meta_ad_account_id !== undefined) mudancas.metaAdAccountId = await this.contaMetaLivre(d.meta_ad_account_id, id);
     await this.farmacias.atualizar(id, mudancas);
     return this.exigir(id);
   }
@@ -96,6 +102,25 @@ export class FarmaciaService {
       gestorId: d.gestor_id !== undefined ? d.gestor_id : atual.gestorId,
     });
     return this.exigir(id);
+  }
+
+  /**
+   * Conta de anúncios no formato "act_123", ou null para desvincular. Recusa
+   * conta que já é de outra farmácia: cada conta tem um dono só.
+   */
+  private async contaMetaLivre(valor: string | null | undefined, farmaciaId: number | null): Promise<string | null> {
+    const limpo = (valor ?? '').trim();
+    if (!limpo) return null;
+    const numero = limpo.replace(/^act_/i, '');
+    if (!/^\d{5,30}$/.test(numero)) {
+      throw new RequisicaoInvalida('Conta de anúncios inválida: use o ID da conta (ex.: act_123456789).');
+    }
+    const conta = `act_${numero}`;
+    const dono  = await this.farmacias.buscarPorContaMeta(conta);
+    if (dono && dono.id !== farmaciaId) {
+      throw new Conflito(`Essa conta de anúncios já é da farmácia "${nomeVisivel(dono)}".`);
+    }
+    return conta;
   }
 
   private async exigir(id: number): Promise<Farmacia> {

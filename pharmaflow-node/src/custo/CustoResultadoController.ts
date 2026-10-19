@@ -21,6 +21,16 @@ export class CustoResultadoController extends Controller {
     });
 
     /**
+     * Contas de anúncios para o cadastro da farmácia (só admin, como o
+     * cadastro). `farmacia_id` traz também a conta sugerida pelo nome.
+     * Consulta o Meta na hora com o token de cada gestor conectado.
+     */
+    app.get('/api/custo-resultado/contas', { preHandler: [autenticar, apenasAdmin] }, async (request) => {
+      const id = parseInt((request.query as { farmacia_id?: string }).farmacia_id ?? '', 10);
+      return this.service.contasDisponiveis(Number.isFinite(id) ? id : undefined);
+    });
+
+    /**
      * Força uma rodada agora (o job normal é o das 06:00). Só admin: percorre
      * todas as contas e consome o limite de requisições do Meta. Responde na
      * hora; a rodada segue em segundo plano.

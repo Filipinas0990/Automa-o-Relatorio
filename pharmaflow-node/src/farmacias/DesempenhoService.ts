@@ -98,6 +98,7 @@ export class DesempenhoService {
 
       resultado.push({
         id: fid, nome: r.farmacia, nome_fachada: r.nome_fachada ?? null,
+        meta_ad_account_id: r.meta_ad_account_id ?? null,
         status: labelStatus, nivel_alerta: r.nivel_alerta,
         fase: r.fase ?? 'ativo',
         telefone:    r.telefone    ?? null,

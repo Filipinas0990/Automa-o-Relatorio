@@ -50,6 +50,9 @@ export const farmacias = pgTable('farmacias', {
   metaReceita:      numeric('meta_receita',       { precision: 15, scale: 2 }),
   metaLeadsGoogle:  integer('meta_leads_google'),
   metaLeadsMeta:    integer('meta_leads_meta'),
+  // Conta de anúncios do Meta ("act_123", migration 0040). Uma por cliente; é a
+  // única que o custo por resultado lê. Null = farmácia fora do painel de custo.
+  metaAdAccountId:  varchar('meta_ad_account_id', { length: 40 }),
 });
 
 /**

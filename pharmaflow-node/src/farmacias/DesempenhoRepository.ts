@@ -27,7 +27,7 @@ export class DesempenhoRepository {
     const { rows } = await this.db.execute(sql`
       SELECT f.id AS farmacia_id, f.nome AS farmacia, f.nome_fachada, f.gestor_id, f.ativa, f.tem_chatbot,
              f.fase, f.telefone, f.responsavel, f.cidade,
-             f.meta_vendas, f.meta_receita, f.meta_leads_google, f.meta_leads_meta,
+             f.meta_vendas, f.meta_receita, f.meta_leads_google, f.meta_leads_meta, f.meta_ad_account_id,
              COALESCE(r.nivel_alerta, 'verde')    AS nivel_alerta,
              COALESCE(r.receita_total, 0)         AS receita_total,
              COALESCE(r.total_atendimentos, 0)    AS total_atendimentos,

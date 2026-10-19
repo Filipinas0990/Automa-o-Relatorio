@@ -1605,6 +1605,17 @@ CREATE TABLE public.custo_resultado_meta_execucao (
 
 
 --
+-- Conta de anúncios do Meta da farmácia (migration 0040 — adicionada à mão ao dump)
+--
+
+ALTER TABLE public.farmacias ADD COLUMN meta_ad_account_id character varying(40);
+
+CREATE UNIQUE INDEX farmacias_meta_ad_account_id_unico
+  ON public.farmacias (meta_ad_account_id)
+  WHERE meta_ad_account_id IS NOT NULL;
+
+
+--
 -- PostgreSQL database dump complete
 --
 

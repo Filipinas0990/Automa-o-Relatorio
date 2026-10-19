@@ -5,11 +5,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { db } from '../src/database/db';
-import { metaTokens, custoResultadoMeta, gestoresTrafego, farmacias } from '../src/database/schema';
+import { custoResultadoMeta, gestoresTrafego, farmacias } from '../src/database/schema';
 import { encrypt } from '../src/cripto';
 import { custoResultadoService } from '../src/composicao';
 import { periodoDaJanela, resumirCampanhas, agoraBrasilia, levaParaWhatsapp } from '../src/custo/calculo';
 import { vincularContas } from '../src/custo/vinculo';
+import { escolherSugerida } from '../src/custo/CustoResultadoService';
 import { api, criarGestor, criarFarmacia, limparBanco } from './helpers';
 
 // A chave do Fernet só existe no servidor; nos testes usamos uma fixa.
@@ -167,10 +168,10 @@ describe('Job de custo por resultado', () => {
     return g;
   }
 
-  /** Farmácia com a conta cadastrada à mão (meta_tokens). */
-  async function farmaciaComConta(gestorId: number, conta: string) {
-    const f = await criarFarmacia(gestorId, { nomeFachada: 'Fachada de teste' });
-    await db.insert(metaTokens).values({ farmaciaId: f.id, adAccountId: conta, pageId: 'p1' });
+  /** Farmácia com a conta de anúncios vinculada no cadastro. */
+  async function farmaciaComConta(gestorId: number | null, conta: string | null, opts: { nome?: string; nomeFachada?: string | null } = {}) {
+    const f = await criarFarmacia(gestorId as number, { nomeFachada: 'Fachada de teste', ...opts });
+    await db.update(farmacias).set({ metaAdAccountId: conta }).where(eq(farmacias.id, f.id));
     return f;
   }
 
@@ -232,29 +233,30 @@ describe('Job de custo por resultado', () => {
     expect(linha.erro).toBeNull();
   });
 
-  it('sem conta cadastrada: casa pelo nome e soma CA01 + CA02 da farmácia', async () => {
+  it('lê SÓ a conta vinculada: a CA02 que o token enxerga não entra, e sem vínculo a farmácia não é lida', async () => {
     const gestor = await gestorComToken();
-    const ribeira = await criarFarmacia(gestor.id, { nome: 'FARMACIA RIBEIRA LTDA', nomeFachada: 'Drogaria Max Ribeira' });
-    const outra   = await criarFarmacia(gestor.id, { nome: 'DROGARIA SEM CONTA NENHUMA', nomeFachada: 'Sem Conta' });
+    // mesmo nome da conta: sem vínculo, NÃO pode ser adivinhada pelo nome
+    const ribeira = await farmaciaComConta(gestor.id, 'act_r1', { nome: 'FARMACIA RIBEIRA LTDA' });
+    const semVinculo = await farmaciaComConta(gestor.id, null, { nome: 'DROGARIA AFRICA LTDA' });
 
-    simularMeta({ 'token-do-gestor': [
+    const { chamadas } = simularMeta({ 'token-do-gestor': [
       { id: 'act_r1', nome: 'CA01 - [FARMACIA RIBEIRA LTDA - Drogaria Max Ribeira]' },
       { id: 'act_r2', nome: 'CA02 - [FARMACIA RIBEIRA LTDA - Drogaria Max Ribeira]' },
-      { id: 'act_x',  nome: 'CA01 - [PHARMA CHATBOT]' },
+      { id: 'act_af', nome: 'CA01 - [DROGARIA AFRICA LTDA - DROGALENE]' },
     ] }, (conta) => ({ data: [
       { campaign_id: 'c1', spend: conta === 'act_r1' ? '100' : '50', actions: [{ action_type: WPP, value: '5' }] },
     ] }));
 
     const resumo = await custoResultadoService.sincronizarTodas();
     expect(resumo).toEqual({ farmaciasOk: 1, farmaciasErro: 0, semConta: 1, semFachada: 0 });
+    expect(new Set(chamadas.map((c) => c.conta))).toEqual(new Set(['act_r1']));
 
     const linhas = await db.select().from(custoResultadoMeta);
     expect(new Set(linhas.map((l) => l.farmaciaId))).toEqual(new Set([ribeira.id]));
-    expect(linhas.map((l) => l.farmaciaId)).not.toContain(outra.id);
+    expect(linhas.map((l) => l.farmaciaId)).not.toContain(semVinculo.id);
     const l7 = linhas.find((l) => l.janelaDias === 7)!;
-    expect(l7.gasto).toBe('150.00');                 // 100 (CA01) + 50 (CA02)
-    expect(l7.resultados).toBe(10);
-    expect(l7.custoPorResultado).toBe('15.00');
+    expect(l7.gasto).toBe('100.00');                 // só a CA01
+    expect(l7.resultados).toBe(5);
   });
 
   it('uma conta com erro não derruba as outras e mantém o último número bom', async () => {
@@ -367,8 +369,8 @@ describe('Job de custo por resultado', () => {
 
   it('farmácia sem nome de fachada não é lida nem aparece no painel até preencherem', async () => {
     const gestor = await gestorComToken();
-    const semNada  = await criarFarmacia(gestor.id, { nome: 'FARMACIA RIBEIRA LTDA' });
-    const emBranco = await criarFarmacia(gestor.id, { nome: 'DROGARIA AFRICA LTDA', nomeFachada: '   ' });
+    const semNada  = await farmaciaComConta(gestor.id, 'act_r', { nomeFachada: null });
+    const emBranco = await farmaciaComConta(gestor.id, 'act_a', { nomeFachada: '   ' });
     // sobra de leitura antiga: tem que sumir
     await db.insert(custoResultadoMeta).values({ farmaciaId: semNada.id, janelaDias: 7, gasto: '10.00' });
 
@@ -393,5 +395,78 @@ describe('Job de custo por resultado', () => {
     // apagou a fachada: some do painel na hora, sem esperar o job
     await db.update(farmacias).set({ nomeFachada: null }).where(eq(farmacias.id, semNada.id));
     expect(await lista()).toEqual([]);
+  });
+});
+
+describe('Conta de anúncios no cadastro da farmácia', () => {
+  beforeEach(async () => { await limparBanco(); });
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  it('sugere a CA01 entre as contas do cliente', () => {
+    expect(escolherSugerida([
+      { id: 'act_2', nome: 'CA02 - [JCJ DROGARIA LTDA - FARMA TOP BRASIL]' },
+      { id: 'act_1', nome: 'CA01 - [JCJ DROGARIA LTDA - FARMA TOP BRASIL]' },
+    ])).toBe('act_1');
+    expect(escolherSugerida([{ id: 'act_9', nome: 'CA02 - [X]' }])).toBe('act_9');
+    expect(escolherSugerida([{ id: 'act_10', nome: 'CA10 - [X]' }, { id: 'act_1', nome: '[CA-O1] - X' }])).toBe('act_1');
+    expect(escolherSugerida([])).toBeNull();
+  });
+
+  it('grava a conta normalizada (act_), desvincula com null e recusa conta inválida', async () => {
+    const admin = await criarGestor({ isAdmin: true });
+    const f = await criarFarmacia(admin.id, { nomeFachada: 'Fachada' });
+
+    expect((await api('PUT', `/api/farmacias/${f.id}`, { token: admin.token, body: { meta_ad_account_id: '123456789' } })).status).toBe(200);
+    let [linha] = await db.select().from(farmacias).where(eq(farmacias.id, f.id));
+    expect(linha.metaAdAccountId).toBe('act_123456789');
+
+    const invalida = await api('PUT', `/api/farmacias/${f.id}`, { token: admin.token, body: { meta_ad_account_id: 'CA01 JCJ' } });
+    expect(invalida.status).toBe(400);
+
+    expect((await api('PUT', `/api/farmacias/${f.id}`, { token: admin.token, body: { meta_ad_account_id: null } })).status).toBe(200);
+    [linha] = await db.select().from(farmacias).where(eq(farmacias.id, f.id));
+    expect(linha.metaAdAccountId).toBeNull();
+  });
+
+  it('uma conta tem um dono só: vincular a conta de outra farmácia dá 409', async () => {
+    const admin = await criarGestor({ isAdmin: true });
+    const a = await criarFarmacia(admin.id, { nomeFachada: 'Farmácia A' });
+    const b = await criarFarmacia(admin.id, { nomeFachada: 'Farmácia B' });
+
+    expect((await api('PUT', `/api/farmacias/${a.id}`, { token: admin.token, body: { meta_ad_account_id: 'act_555555' } })).status).toBe(200);
+    const r = await api('PUT', `/api/farmacias/${b.id}`, { token: admin.token, body: { meta_ad_account_id: 'act_555555' } });
+    expect(r.status).toBe(409);
+    expect((r.body as { detail: string }).detail).toContain('Farmácia A');
+    // regravar a mesma conta na própria farmácia não é conflito
+    expect((await api('PUT', `/api/farmacias/${a.id}`, { token: admin.token, body: { meta_ad_account_id: '555555' } })).status).toBe(200);
+  });
+
+  it('lista as contas dos gestores conectados com o dono de cada uma e sugere a CA01 livre; só admin', async () => {
+    const admin  = await criarGestor({ isAdmin: true });
+    const gestor = await criarGestor();
+    await db.update(gestoresTrafego).set({ metaAccessToken: encrypt('token-g') }).where(eq(gestoresTrafego.id, gestor.id));
+    const jcj  = await criarFarmacia(gestor.id, { nome: 'JCJ DROGARIA LTDA - FARMA TOP BRASIL', nomeFachada: 'Farma Top Brasil' });
+    const dona = await criarFarmacia(gestor.id, { nomeFachada: 'Drogavaz' });
+    await db.update(farmacias).set({ metaAdAccountId: 'act_vaz' }).where(eq(farmacias.id, dona.id));
+
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      const u = new URL(String(url));
+      expect(u.pathname).toContain('/me/adaccounts');
+      expect(u.searchParams.get('access_token')).toBe('token-g');
+      return resposta({ data: [
+        { id: 'act_j2', account_id: 'j2', name: 'CA02 - [JCJ DROGARIA LTDA - FARMA TOP BRASIL]', account_status: 1 },
+        { id: 'act_j1', account_id: 'j1', name: 'CA01 - [JCJ DROGARIA LTDA - FARMA TOP BRASIL]', account_status: 1 },
+        { id: 'act_vaz', account_id: 'vaz', name: 'CA01 - [JC MEDICAMENTOS LTDA - DROGAVAZ]', account_status: 1 },
+      ] });
+    }));
+
+    const r = await api('GET', `/api/custo-resultado/contas?farmacia_id=${jcj.id}`, { token: admin.token });
+    expect(r.status).toBe(200);
+    const body = r.body as { contas: Array<{ id: string; farmacia_id: number | null; farmacia_nome: string | null }>; sugerida: string };
+    expect(body.sugerida).toBe('act_j1');
+    expect(body.contas.find((c) => c.id === 'act_vaz')).toMatchObject({ farmacia_id: dona.id, farmacia_nome: 'Drogavaz' });
+    expect(body.contas.find((c) => c.id === 'act_j1')?.farmacia_id).toBeNull();
+
+    expect((await api('GET', '/api/custo-resultado/contas', { token: gestor.token })).status).toBe(403);
   });
 });

@@ -43,6 +43,12 @@ export class FarmaciaRepository {
       .orderBy(farmacias.nome);
   }
 
+  /** Farmácia (ativa ou não) que já usa esta conta de anúncios. */
+  async buscarPorContaMeta(adAccountId: string): Promise<Farmacia | undefined> {
+    const [f] = await this.db.select().from(farmacias).where(eq(farmacias.metaAdAccountId, adAccountId));
+    return f;
+  }
+
   async criar(dados: NovaFarmacia): Promise<Farmacia> {
     const [f] = await this.db.insert(farmacias).values(dados).returning();
     return f;

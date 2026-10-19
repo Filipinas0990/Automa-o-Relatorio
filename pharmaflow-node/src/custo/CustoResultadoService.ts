@@ -20,7 +20,8 @@ const esperar = (ms: number) => ms > 0 ? new Promise<void>((r) => setTimeout(r, 
 
 /**
  * `semFachada`: farmácias ativas sem nome de fachada — ficam fora do painel.
- * `semConta`: das que têm fachada, as sem conta de anúncios legível por nenhum gestor conectado.
+ * `semConta`: das que têm fachada, as sem conta vinculada ou cuja conta nenhum
+ * gestor conectado enxerga.
  */
 export interface ResumoExecucao { farmaciasOk: number; farmaciasErro: number; semConta: number; semFachada: number }
 
@@ -29,58 +30,47 @@ const temFachada = (f: { nomeFachada: string | null }): boolean => !!f.nomeFacha
 /** Um gestor conectado e as contas que o token dele enxerga. */
 interface TokenComContas { gestorId: number; token: string; contas: ContaParaVincular[] }
 
-/** O que ler de uma farmácia: cada conta dela com um token que a enxerga. */
-interface LeituraFarmacia {
-  farmaciaId: number;
-  contas:     Array<{ adAccountId: string; token: string }>;
+/** O que ler de uma farmácia: a conta dela e um token que a enxerga. */
+interface LeituraFarmacia { farmaciaId: number; adAccountId: string; token: string }
+
+/**
+ * Decide com qual token ler a conta vinculada de cada farmácia (uma conta por
+ * cliente, gravada no cadastro — migration 0040).
+ *
+ * Token: o do gestor da farmácia, se ele enxerga a conta; senão o de outro
+ * gestor conectado que enxerga (a conta de uma farmácia do Victor pode estar no
+ * token do Mathews). Conta que nenhum token enxerga não é lida.
+ */
+export function montarLeituras(farmacias: FarmaciaAtiva[], tokens: TokenComContas[]): LeituraFarmacia[] {
+  const quemEnxerga = new Map<string, TokenComContas[]>();
+  for (const t of tokens) {
+    for (const c of t.contas) quemEnxerga.set(c.id, [...(quemEnxerga.get(c.id) ?? []), t]);
+  }
+
+  return farmacias.flatMap((f) => {
+    if (!f.metaAdAccountId) return [];
+    const quem = quemEnxerga.get(f.metaAdAccountId) ?? [];
+    const t = quem.find((x) => x.gestorId === f.gestorId) ?? quem[0];
+    return t ? [{ farmaciaId: f.id, adAccountId: f.metaAdAccountId, token: t.token }] : [];
+  });
 }
 
 /**
- * Decide quais contas ler para cada farmácia e com qual token.
- *
- * - Conta cadastrada à mão (meta_tokens) vale sobre o casamento pelo nome.
- * - Senão, casa pelo nome (vinculo.ts) entre TODAS as contas que os gestores
- *   conectados enxergam — a conta da farmácia do Victor pode estar no token do
- *   Mathews.
- * - Token: o do gestor da farmácia, se ele enxerga a conta; senão o de outro
- *   gestor conectado que enxerga. Conta que nenhum token enxerga não é lida.
+ * Entre as contas que casaram pelo nome, a sugerida é a CA01 (a principal do
+ * cliente); sem CA01, a primeira.
  */
-export function montarLeituras(
-  farmacias: FarmaciaAtiva[], cadastradas: Map<number, string>, tokens: TokenComContas[],
-): LeituraFarmacia[] {
-  const nomesPorConta = new Map<string, ContaParaVincular>();
-  const quemEnxerga   = new Map<string, TokenComContas[]>();
-  for (const t of tokens) {
-    for (const c of t.contas) {
-      nomesPorConta.set(c.id, c);
-      quemEnxerga.set(c.id, [...(quemEnxerga.get(c.id) ?? []), t]);
-    }
-  }
-
-  const porNome = vincularContas(
-    [...nomesPorConta.values()],
-    farmacias.filter((f) => !cadastradas.has(f.id)),
-  );
-  if (porNome.semFarmacia.length) {
-    logger.info({ contas: porNome.semFarmacia.map((c) => `${c.id} ${c.nome}`) }, 'Custo por resultado: contas sem farmácia correspondente');
-  }
-
-  const leituras: LeituraFarmacia[] = [];
-  for (const f of farmacias) {
-    const contaManual = cadastradas.get(f.id);
-    const ids = contaManual ? [normalizarConta(contaManual)] : porNome.porFarmacia.get(f.id) ?? [];
-
-    const contas = ids.flatMap((adAccountId) => {
-      const quem = quemEnxerga.get(adAccountId) ?? [];
-      const t = quem.find((x) => x.gestorId === f.gestorId) ?? quem[0];
-      return t ? [{ adAccountId, token: t.token }] : [];
-    });
-    if (contas.length) leituras.push({ farmaciaId: f.id, contas });
-  }
-  return leituras;
+export function escolherSugerida(contas: ContaParaVincular[]): string | null {
+  const ca01 = contas.find((c) => /^\s*\[?\s*CA\s*-?\s*[O0]?1(?!\d)/i.test(c.nome));
+  return (ca01 ?? contas[0])?.id ?? null;
 }
 
-const normalizarConta = (id: string): string => id.startsWith('act_') ? id : `act_${id}`;
+/** Conta como aparece na lista do cadastro, e de qual farmácia ela já é. */
+export interface ContaDisponivel {
+  id:            string;
+  nome:          string;
+  farmacia_id:   number | null;
+  farmacia_nome: string | null;
+}
 
 interface PaginaInsights {
   data?:   InsightLinha[];
@@ -115,14 +105,12 @@ export class CustoResultadoService {
     }
     this.rodando = true;
     try {
-      const [farmacias, cadastradas, tokens] = await Promise.all([
-        this.repo.farmaciasAtivas(), this.repo.contasCadastradas(), this.tokensConectados(),
-      ]);
+      const [farmacias, tokens] = await Promise.all([this.repo.farmaciasAtivas(), this.tokensConectados()]);
       // Farmácia sem nome de fachada não entra no painel até o gestor preencher
       // (decisão do dono em 19/10/2026) — nem é lida no Meta.
       const comFachada  = farmacias.filter(temFachada);
       const semFachada  = farmacias.length - comFachada.length;
-      const leituras    = montarLeituras(comFachada, cadastradas, tokens);
+      const leituras    = montarLeituras(comFachada, tokens);
       const semConta    = comFachada.length - leituras.length;
 
       // Farmácia que não tem mais conta legível sai do painel (nada de número velho).
@@ -148,6 +136,37 @@ export class CustoResultadoService {
     } finally {
       this.rodando = false;
     }
+  }
+
+  /**
+   * Contas para o campo "Conta de anúncios Meta" do cadastro: todas as que os
+   * gestores conectados enxergam, cada uma com a farmácia que já a usa. Com
+   * `farmaciaId`, sugere a conta dessa farmácia pelo nome (CA01 primeiro),
+   * entre as que ainda não têm dono.
+   */
+  async contasDisponiveis(farmaciaId?: number): Promise<{ contas: ContaDisponivel[]; sugerida: string | null }> {
+    const [tokens, farmacias] = await Promise.all([this.tokensConectados(), this.repo.farmaciasComConta()]);
+    const donos = new Map(farmacias.map((f) => [f.metaAdAccountId, f]));
+
+    const porId = new Map<string, ContaParaVincular>();
+    for (const t of tokens) for (const c of t.contas) porId.set(c.id, c);
+    const contas = [...porId.values()]
+      .map((c) => {
+        const dono = donos.get(c.id);
+        return { id: c.id, nome: c.nome, farmacia_id: dono?.id ?? null, farmacia_nome: dono ? dono.nomeFachada || dono.nome : null };
+      })
+      .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+
+    let sugerida: string | null = null;
+    if (farmaciaId) {
+      const alvo = await this.repo.farmaciaParaVincular(farmaciaId);
+      const livres = contas.filter((c) => c.farmacia_id === null);
+      if (alvo) {
+        const casadas = vincularContas(livres, [alvo]).porFarmacia.get(alvo.id) ?? [];
+        sugerida = escolherSugerida(livres.filter((c) => casadas.includes(c.id)));
+      }
+    }
+    return { contas, sugerida };
   }
 
   /**
@@ -187,21 +206,15 @@ export class CustoResultadoService {
     return this.sincronizarTodas(agora);
   }
 
-  /**
-   * As contas da farmácia (CA01, CA02...) somadas, nas três janelas. Qualquer
-   * erro sobe e marca a farmácia como falha.
-   */
+  /** A conta da farmácia, nas três janelas. Qualquer erro sobe e marca a farmácia como falha. */
   private async sincronizarFarmacia(leitura: LeituraFarmacia, agora: Date): Promise<void> {
-    const campanhasWhatsapp = new Set<string>();
-    for (const c of leitura.contas) {
-      for (const id of await this.campanhasWhatsapp(c.adAccountId, c.token)) campanhasWhatsapp.add(id);
-    }
+    const { farmaciaId, adAccountId, token } = leitura;
+    const campanhasWhatsapp = await this.campanhasWhatsapp(adAccountId, token);
 
     for (const dias of JANELAS) {
       const periodo = periodoDaJanela(dias, agora);
-      const linhas: InsightLinha[] = [];
-      for (const c of leitura.contas) linhas.push(...await this.lerInsights(c.adAccountId, c.token, periodo));
-      await this.repo.salvar(leitura.farmaciaId, dias, periodo, resumirCampanhas(linhas, campanhasWhatsapp));
+      const linhas  = await this.lerInsights(adAccountId, token, periodo);
+      await this.repo.salvar(farmaciaId, dias, periodo, resumirCampanhas(linhas, campanhasWhatsapp));
     }
   }
 
