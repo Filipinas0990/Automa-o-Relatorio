@@ -13,6 +13,13 @@ export type Janela = typeof JANELAS[number];
 export const ACAO_WHATSAPP   = 'onsite_conversion.messaging_conversation_started_7d';
 export const ROTULO_WHATSAPP = 'Conversas no WhatsApp';
 
+/**
+ * Destino do conjunto que leva para o WhatsApp: "WHATSAPP" e também os de
+ * vários destinos que incluem o WhatsApp
+ * ("MESSAGING_INSTAGRAM_DIRECT_MESSENGER_WHATSAPP", "MESSAGING_MESSENGER_WHATSAPP"...).
+ */
+export const levaParaWhatsapp = (destino: string | undefined): boolean => !!destino?.includes('WHATSAPP');
+
 /** Linha do /insights no nível de campanha (a Graph API devolve tudo como string). */
 export interface InsightLinha {
   campaign_id?: string;

@@ -3,7 +3,7 @@ import { logger } from '../logger';
 import { metaReq, listarContasDeAnuncio } from '../meta/client';
 import { tokenProprioDo, msgTokenExpirado } from '../meta/tokenGestor';
 import {
-  JANELAS, periodoDaJanela, resumirCampanhas, agoraBrasilia, diaBrasilia,
+  JANELAS, periodoDaJanela, resumirCampanhas, agoraBrasilia, diaBrasilia, levaParaWhatsapp,
   type Janela, type InsightLinha,
 } from './calculo';
 import { vincularContas, type ContaParaVincular } from './vinculo';
@@ -222,7 +222,7 @@ export class CustoResultadoService {
       );
 
       for (const c of pagina.data ?? []) {
-        if (c.destination_type === 'WHATSAPP' && c.campaign_id) ids.add(c.campaign_id);
+        if (levaParaWhatsapp(c.destination_type) && c.campaign_id) ids.add(c.campaign_id);
       }
       after = pagina.paging?.next ? pagina.paging.cursors?.after : undefined;
     } while (after);

@@ -57,16 +57,18 @@ function chavesDa(f: FarmaciaParaVincular): string[][] {
 }
 
 /**
- * Quantas palavras da farmácia aparecem na conta — 0 se alguma chave não
- * aparece inteira. Ex.: "SAO JUDAS TADEU DE FRUTAL" só casa com conta que tenha
- * JUDAS, TADEU e FRUTAL.
+ * Quantas palavras da farmácia aparecem na conta, somando razão social e
+ * fantasia. Só conta a chave que aparece inteira: "SAO JUDAS TADEU DE FRUTAL"
+ * só pontua em conta que tenha JUDAS, TADEU e FRUTAL. Somar desempata quem
+ * bate nos dois nomes contra quem bate num só (ex.: "SANTA CURA LIMITADA" /
+ * "SANTA CURA" ganha de outra farmácia cujo fantasia é "SANTA CURA").
  */
 function pontos(chaves: string[][], conta: Set<string>): number {
-  let melhor = 0;
+  let total = 0;
   for (const chave of chaves) {
-    if (chave.every((p) => conta.has(p))) melhor = Math.max(melhor, chave.length);
+    if (chave.every((p) => conta.has(p))) total += chave.length;
   }
-  return melhor;
+  return total;
 }
 
 export interface ResultadoVinculo {

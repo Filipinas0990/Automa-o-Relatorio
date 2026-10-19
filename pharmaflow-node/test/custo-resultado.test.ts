@@ -8,7 +8,7 @@ import { db } from '../src/database/db';
 import { metaTokens, custoResultadoMeta, gestoresTrafego, farmacias } from '../src/database/schema';
 import { encrypt } from '../src/cripto';
 import { custoResultadoService } from '../src/composicao';
-import { periodoDaJanela, resumirCampanhas, agoraBrasilia } from '../src/custo/calculo';
+import { periodoDaJanela, resumirCampanhas, agoraBrasilia, levaParaWhatsapp } from '../src/custo/calculo';
 import { vincularContas } from '../src/custo/vinculo';
 import { api, criarGestor, criarFarmacia, limparBanco } from './helpers';
 
@@ -123,6 +123,28 @@ describe('Vínculo conta → farmácia pelo nome', () => {
     const ambigua = vincularContas(conta, [f(1, 'SILVA'), f(2, 'NOTURNA')]);
     expect(ambigua.porFarmacia.size).toBe(0);
     expect(ambigua.semFarmacia).toHaveLength(1);
+  });
+
+  it('quem bate na razão social E no fantasia ganha de quem bate só num deles', () => {
+    // caso real: a Santa Mônica estava com o fantasia "DROGARIA SANTA CURA"
+    const r = vincularContas(
+      [{ id: 'act_cura', nome: 'CA01 - [DROGARIA SANTA CURA LIMITADA - DROGARIA SANTA CURA]' }],
+      [f(43, 'FARMACIA SANTA MONICA LTDA - UNIDADE 1', 'DROGARIA SANTA CURA'),
+       f(76, ' DROGARIA SANTA CURA LIMITADA', 'DROGARIA SANTA CURA')],
+    );
+    expect(r.porFarmacia.get(76)).toEqual(['act_cura']);
+    expect(r.porFarmacia.has(43)).toBe(false);
+  });
+});
+
+describe('Destino WhatsApp do conjunto', () => {
+  it('conta o WhatsApp puro e os de vários destinos que incluem o WhatsApp', () => {
+    expect(levaParaWhatsapp('WHATSAPP')).toBe(true);
+    expect(levaParaWhatsapp('MESSAGING_INSTAGRAM_DIRECT_MESSENGER_WHATSAPP')).toBe(true);
+    expect(levaParaWhatsapp('MESSAGING_MESSENGER_WHATSAPP')).toBe(true);
+    expect(levaParaWhatsapp('WEBSITE')).toBe(false);
+    expect(levaParaWhatsapp('ON_POST')).toBe(false);
+    expect(levaParaWhatsapp(undefined)).toBe(false);
   });
 });
 
