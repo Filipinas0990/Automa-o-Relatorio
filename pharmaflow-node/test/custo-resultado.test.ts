@@ -9,10 +9,11 @@ import { metaTokens, custoResultadoMeta, gestoresTrafego } from '../src/database
 import { encrypt } from '../src/cripto';
 import { custoResultadoService } from '../src/composicao';
 import { periodoDaJanela, resumirCampanhas, agoraBrasilia } from '../src/custo/calculo';
+import { vincularContas } from '../src/custo/vinculo';
 import { api, criarGestor, criarFarmacia, limparBanco } from './helpers';
 
 // A chave do Fernet só existe no servidor; nos testes usamos uma fixa.
-process.env.FARMACIAS_KEY = Buffer.alloc(32, 7).toString('base64').replace(/+/g, '-').replace(///g, '_');
+process.env.FARMACIAS_KEY = Buffer.alloc(32, 7).toString('base64url');
 
 const WPP = 'onsite_conversion.messaging_conversation_started_7d';
 const resposta = (data: unknown) => new Response(JSON.stringify(data), { status: 200 });
@@ -82,6 +83,49 @@ describe('Resumo das campanhas (só WhatsApp)', () => {
   });
 });
 
+describe('Vínculo conta → farmácia pelo nome', () => {
+  const f = (id: number, nome: string, nomeFachada: string | null = null) => ({ id, nome, nomeFachada });
+
+  it('casa pela razão social ou pelo fantasia e junta CA01 e CA02 na mesma farmácia', () => {
+    const r = vincularContas([
+      { id: 'act_1', nome: 'CA01 - [FARMACIA RIBEIRA LTDA - Drogaria Max Ribeira]' },
+      { id: 'act_2', nome: 'CA02- [E. G. FARMA LTDA - FARMACIA ECONOMIZE]' },
+      { id: 'act_3', nome: 'CA01 - [E. G. FARMA LTDA - FARMACIA ECONOMIZE]' },
+    ], [f(10, 'FARMACIA RIBEIRA LTDA'), f(20, 'E. G. FARMA', 'FARMACIA ECONOMIZE')]);
+
+    expect(r.porFarmacia.get(10)).toEqual(['act_1']);
+    expect(r.porFarmacia.get(20)).toEqual(['act_2', 'act_3']);
+    expect(r.semFarmacia).toEqual([]);
+  });
+
+  it('palavra genérica sozinha não casa ("Drogaria Mais Saúde" ≠ qualquer conta com MAIS e SAUDE)', () => {
+    const r = vincularContas(
+      [{ id: 'act_1', nome: 'CA01 - [DROGARIA MAIS SAUDE POPULAR LTDA - Outra Coisa]' }],
+      [f(1, 'MAIS SAUDE COMERCIO DE MEDICAMENTOS', 'Drogaria Mais Saúde')],
+    );
+    expect(r.porFarmacia.size).toBe(0);
+    expect(r.semFarmacia.map((c) => c.id)).toEqual(['act_1']);
+  });
+
+  it('a chave tem que aparecer inteira na conta', () => {
+    const r = vincularContas(
+      [{ id: 'act_1', nome: 'CA01 - [ANDREIA TERESINHA LTDA - FARMÁCIA PREÇO BAIXO]' }],
+      [f(1, 'FARMACIA PRECO BAIXO DE CACHOEIRO DE ITAPEMIRIM')],
+    );
+    expect(r.porFarmacia.size).toBe(0);
+  });
+
+  it('vence a farmácia com mais palavras casadas; empate fica de fora', () => {
+    const conta = [{ id: 'act_1', nome: 'CA01 - [SILVA RIBEIRO LTDA - FARMACIA NOTURNA]' }];
+    expect(vincularContas(conta, [f(1, 'SILVA'), f(2, 'SILVA RIBEIRO')]).porFarmacia.get(2)).toEqual(['act_1']);
+    const empate = vincularContas(conta, [f(1, 'SILVA RIBEIRO'), f(2, 'Farmacia Noturna')]);
+    expect(empate.porFarmacia.size).toBe(1);       // RIBEIRO+SILVA (2) vence NOTURNA (1)
+    const ambigua = vincularContas(conta, [f(1, 'SILVA'), f(2, 'NOTURNA')]);
+    expect(ambigua.porFarmacia.size).toBe(0);
+    expect(ambigua.semFarmacia).toHaveLength(1);
+  });
+});
+
 describe('Job de custo por resultado', () => {
   beforeEach(async () => {
     await limparBanco();
@@ -101,10 +145,39 @@ describe('Job de custo por resultado', () => {
     return g;
   }
 
+  /** Farmácia com a conta cadastrada à mão (meta_tokens). */
   async function farmaciaComConta(gestorId: number, conta: string) {
     const f = await criarFarmacia(gestorId);
     await db.insert(metaTokens).values({ farmaciaId: f.id, adAccountId: conta, pageId: 'p1' });
     return f;
+  }
+
+  /**
+   * Meta simulado. `contas`: token → contas que ele enxerga em /me/adaccounts.
+   * `insights` responde o /insights (recebe a conta e o token usados).
+   */
+  function simularMeta(
+    contas: Record<string, Array<string | { id: string; nome: string }>>,
+    insights: (conta: string, token: string, u: URL) => unknown = () => ({ data: [] }),
+  ) {
+    const chamadas: Array<{ conta: string; token: string; caminho: string }> = [];
+    const fn = vi.fn(async (url: string) => {
+      const u = new URL(String(url));
+      const token = u.searchParams.get('access_token')!;
+      expect(token).not.toBe('token-geral-de-teste');                       // nunca o geral
+      if (u.pathname.endsWith('/me/adaccounts')) {
+        return resposta({ data: (contas[token] ?? []).map((c) => {
+          const { id, nome } = typeof c === 'string' ? { id: c, nome: c } : c;
+          return { id, account_id: id.replace('act_', ''), name: nome, account_status: 1 };
+        }) });
+      }
+      const conta = u.pathname.split('/')[2];
+      chamadas.push({ conta, token, caminho: u.pathname });
+      if (u.pathname.endsWith('/adsets')) return resposta(ADSETS);
+      return resposta(insights(conta, token, u));
+    });
+    vi.stubGlobal('fetch', fn);
+    return { fn, chamadas };
   }
 
   it('grava as 3 janelas e a rota devolve o custo por resultado', async () => {
@@ -112,23 +185,20 @@ describe('Job de custo por resultado', () => {
     const f = await farmaciaComConta(gestor.id, 'act_111');
 
     const periodosPedidos: string[] = [];
-    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
-      const u = new URL(String(url));
-      expect(u.searchParams.get('access_token')).toBe('token-do-gestor');   // nunca o geral
-      if (u.pathname.endsWith('/act_111/adsets')) return resposta(ADSETS);
-      expect(u.pathname).toContain('/act_111/insights');
+    const { chamadas } = simularMeta({ 'token-do-gestor': ['act_111'] }, (_c, _t, u) => {
       expect(u.searchParams.get('level')).toBe('campaign');
       periodosPedidos.push(u.searchParams.get('time_range')!);
-      return resposta({ data: [
+      return { data: [
         { campaign_id: 'c1', spend: '200', clicks: '40', impressions: '900', actions: [{ action_type: WPP, value: '8' }] },
         // campanha de site: não pode entrar no custo
         { campaign_id: 'c-site', spend: '999', actions: [{ action_type: 'lead', value: '50' }] },
-      ] });
-    }));
+      ] };
+    });
 
     const agora = new Date('2026-10-18T09:00:00Z');
     const resumo = await custoResultadoService.sincronizarTodas(agora);
-    expect(resumo).toEqual({ farmaciasOk: 1, farmaciasErro: 0, semToken: 0 });
+    expect(resumo).toEqual({ farmaciasOk: 1, farmaciasErro: 0, semConta: 0 });
+    expect(new Set(chamadas.map((c) => c.conta))).toEqual(new Set(['act_111']));
     expect(periodosPedidos.map((p) => JSON.parse(p).until)).toEqual(['2026-10-17', '2026-10-17', '2026-10-17']);
 
     const r = await api('GET', '/api/custo-resultado', { token: gestor.token });
@@ -140,24 +210,45 @@ describe('Job de custo por resultado', () => {
     expect(linha.erro).toBeNull();
   });
 
+  it('sem conta cadastrada: casa pelo nome e soma CA01 + CA02 da farmácia', async () => {
+    const gestor = await gestorComToken();
+    const ribeira = await criarFarmacia(gestor.id, { nome: 'FARMACIA RIBEIRA LTDA' });
+    const outra   = await criarFarmacia(gestor.id, { nome: 'DROGARIA SEM CONTA NENHUMA' });
+
+    simularMeta({ 'token-do-gestor': [
+      { id: 'act_r1', nome: 'CA01 - [FARMACIA RIBEIRA LTDA - Drogaria Max Ribeira]' },
+      { id: 'act_r2', nome: 'CA02 - [FARMACIA RIBEIRA LTDA - Drogaria Max Ribeira]' },
+      { id: 'act_x',  nome: 'CA01 - [PHARMA CHATBOT]' },
+    ] }, (conta) => ({ data: [
+      { campaign_id: 'c1', spend: conta === 'act_r1' ? '100' : '50', actions: [{ action_type: WPP, value: '5' }] },
+    ] }));
+
+    const resumo = await custoResultadoService.sincronizarTodas();
+    expect(resumo).toEqual({ farmaciasOk: 1, farmaciasErro: 0, semConta: 1 });
+
+    const linhas = await db.select().from(custoResultadoMeta);
+    expect(new Set(linhas.map((l) => l.farmaciaId))).toEqual(new Set([ribeira.id]));
+    expect(linhas.map((l) => l.farmaciaId)).not.toContain(outra.id);
+    const l7 = linhas.find((l) => l.janelaDias === 7)!;
+    expect(l7.gasto).toBe('150.00');                 // 100 (CA01) + 50 (CA02)
+    expect(l7.resultados).toBe(10);
+    expect(l7.custoPorResultado).toBe('15.00');
+  });
+
   it('uma conta com erro não derruba as outras e mantém o último número bom', async () => {
     const gestor = await gestorComToken();
     const boa  = await farmaciaComConta(gestor.id, 'act_ok');
     const ruim = await farmaciaComConta(gestor.id, 'act_ruim');
 
     let falhar = false;
-    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
-      if (String(url).includes('act_ruim') && falhar) {
-        return resposta({ error: { message: 'sem permissão', code: 200 } });
-      }
-      if (String(url).includes('/adsets')) return resposta(ADSETS);
-      return resposta({ data: [{ campaign_id: 'c1', spend: '100', actions: [{ action_type: WPP, value: '4' }] }] });
-    }));
+    simularMeta({ 'token-do-gestor': ['act_ok', 'act_ruim'] }, (conta) => (conta === 'act_ruim' && falhar)
+      ? { error: { message: 'sem permissão', code: 200 } }
+      : { data: [{ campaign_id: 'c1', spend: '100', actions: [{ action_type: WPP, value: '4' }] }] });
 
     await custoResultadoService.sincronizarTodas();
     falhar = true;
     const resumo = await custoResultadoService.sincronizarTodas();
-    expect(resumo).toEqual({ farmaciasOk: 1, farmaciasErro: 1, semToken: 0 });
+    expect(resumo).toEqual({ farmaciasOk: 1, farmaciasErro: 1, semConta: 0 });
 
     const [linha7] = await db.select().from(custoResultadoMeta)
       .where(eq(custoResultadoMeta.farmaciaId, ruim.id));
@@ -171,30 +262,29 @@ describe('Job de custo por resultado', () => {
   it('só roda a partir das 06:00 de Brasília e uma vez por dia', async () => {
     const gestor = await gestorComToken();
     await farmaciaComConta(gestor.id, 'act_222');
-    // 1 chamada de conjuntos + 3 de insights (7, 15 e 30 dias)
-    const fetchFalso = vi.fn(async () => resposta({ data: [] }));
-    vi.stubGlobal('fetch', fetchFalso);
+    // 1 listagem de contas + 1 de conjuntos + 3 de insights (7, 15 e 30 dias)
+    const { fn } = simularMeta({ 'token-do-gestor': ['act_222'] });
 
     // 05:59 em Brasília (08:59 UTC) — ainda não
     expect(await custoResultadoService.rodarSeForAHora(new Date('2026-10-18T08:59:00Z'))).toBeNull();
-    expect(fetchFalso).not.toHaveBeenCalled();
+    expect(fn).not.toHaveBeenCalled();
 
     // 06:00 — roda
     const agora = new Date('2026-10-18T09:00:00Z');
-    expect(await custoResultadoService.rodarSeForAHora(agora)).toEqual({ farmaciasOk: 1, farmaciasErro: 0, semToken: 0 });
-    expect(fetchFalso).toHaveBeenCalledTimes(4);
+    expect(await custoResultadoService.rodarSeForAHora(agora)).toEqual({ farmaciasOk: 1, farmaciasErro: 0, semConta: 0 });
+    expect(fn).toHaveBeenCalledTimes(5);
 
     // mesmo dia, mais tarde — não repete
     expect(await custoResultadoService.rodarSeForAHora(new Date('2026-10-18T15:00:00Z'))).toBeNull();
-    expect(fetchFalso).toHaveBeenCalledTimes(4);
+    expect(fn).toHaveBeenCalledTimes(5);
   });
 
   it('gestor comum só vê as farmácias dele; sincronizar é só admin', async () => {
-    const a = await gestorComToken();
-    const b = await gestorComToken();
+    const a = await gestorComToken('token-a');
+    const b = await gestorComToken('token-b');
     const fa = await farmaciaComConta(a.id, 'act_a');
     const fb = await farmaciaComConta(b.id, 'act_b');
-    vi.stubGlobal('fetch', vi.fn(async () => resposta({ data: [] })));
+    simularMeta({ 'token-a': ['act_a'], 'token-b': ['act_b'] });
     await custoResultadoService.sincronizarTodas();
 
     const r = await api('GET', '/api/custo-resultado', { token: a.token });
@@ -206,32 +296,50 @@ describe('Job de custo por resultado', () => {
     expect((await api('POST', '/api/custo-resultado/sincronizar', { token: a.token })).status).toBe(403);
   });
 
-  it('gestor sem token (ou com token vencido) não é lido e não aparece — mesmo com token geral no servidor', async () => {
-    const comToken = await gestorComToken();
-    const semToken = await criarGestor();                                   // nunca conectou o Facebook
-    const vencido  = await gestorComToken('token-velho', new Date(Date.now() - 60_000));
-    const f1 = await farmaciaComConta(comToken.id, 'act_com');
-    const f2 = await farmaciaComConta(semToken.id, 'act_sem');
-    const f3 = await farmaciaComConta(vencido.id,  'act_vencido');
+  it('lê com o token do gestor da farmácia; se ele não conectou, com o de outro gestor que enxerga a conta', async () => {
+    const joao    = await gestorComToken('token-joao');
+    const mathews = await gestorComToken('token-mathews');
+    const victor  = await criarGestor();                                   // nunca conectou o Facebook
+    const doJoao   = await farmaciaComConta(joao.id, 'act_compartilhada');
+    const doVictor = await farmaciaComConta(victor.id, 'act_do_victor');
 
-    // sobra de uma leitura antiga da farmácia que agora ficou sem token
-    await db.insert(custoResultadoMeta).values({ farmaciaId: f2.id, janelaDias: 7, gasto: '10.00' });
-
-    const contasLidas = new Set<string>();
-    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
-      const u = new URL(String(url));
-      contasLidas.add(u.pathname.split('/')[2]);
-      if (u.pathname.endsWith('/adsets')) return resposta(ADSETS);
-      return resposta({ data: [{ campaign_id: 'c1', spend: '50', actions: [{ action_type: WPP, value: '5' }] }] });
-    }));
+    const { chamadas } = simularMeta({
+      'token-joao':    ['act_compartilhada'],
+      'token-mathews': ['act_compartilhada', 'act_do_victor'],
+    });
 
     const resumo = await custoResultadoService.sincronizarTodas();
-    expect(resumo).toEqual({ farmaciasOk: 1, farmaciasErro: 0, semToken: 2 });
-    expect([...contasLidas]).toEqual(['act_com']);                          // o Meta só foi chamado para quem tem token
+    expect(resumo).toEqual({ farmaciasOk: 2, farmaciasErro: 0, semConta: 0 });
+    // conta que os dois enxergam: lida com o token do dono da farmácia
+    expect(new Set(chamadas.filter((c) => c.conta === 'act_compartilhada').map((c) => c.token))).toEqual(new Set(['token-joao']));
+    expect(new Set(chamadas.filter((c) => c.conta === 'act_do_victor').map((c) => c.token))).toEqual(new Set(['token-mathews']));
+
+    const ids = new Set((await db.select().from(custoResultadoMeta)).map((r) => r.farmaciaId));
+    expect(ids).toEqual(new Set([doJoao.id, doVictor.id]));
+  });
+
+  it('conta que nenhum token conectado enxerga não é lida (nem com o token geral) e a sobra antiga é apagada', async () => {
+    const comToken = await gestorComToken();
+    const vencido  = await gestorComToken('token-velho', new Date(Date.now() - 60_000));
+    const f1 = await farmaciaComConta(comToken.id, 'act_com');
+    const f2 = await farmaciaComConta(comToken.id, 'act_invisivel');
+    const f3 = await farmaciaComConta(vencido.id,  'act_vencido');
+
+    // sobra de uma leitura antiga da farmácia que agora ficou sem conta legível
+    await db.insert(custoResultadoMeta).values({ farmaciaId: f2.id, janelaDias: 7, gasto: '10.00' });
+
+    const { chamadas } = simularMeta({
+      'token-do-gestor': ['act_com'],
+      'token-velho':     ['act_vencido'],                                   // vencido: nem é consultado
+    });
+
+    const resumo = await custoResultadoService.sincronizarTodas();
+    expect(resumo).toEqual({ farmaciasOk: 1, farmaciasErro: 0, semConta: 2 });
+    expect(new Set(chamadas.map((c) => c.conta))).toEqual(new Set(['act_com']));
 
     const ids = (await db.select().from(custoResultadoMeta)).map((r) => r.farmaciaId);
     expect(new Set(ids)).toEqual(new Set([f1.id]));
-    expect(ids).not.toContain(f2.id);                                       // a sobra antiga foi apagada
+    expect(ids).not.toContain(f2.id);
     expect(ids).not.toContain(f3.id);
   });
 });

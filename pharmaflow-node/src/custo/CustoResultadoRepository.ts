@@ -1,18 +1,19 @@
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull, notInArray, sql } from 'drizzle-orm';
 import {
   custoResultadoMeta, custoResultadoMetaExecucao, farmacias, gestoresTrafego, metaTokens,
 } from '../database/schema';
 import type { Gestor } from '../database/schema';
 import type { BancoDeDados } from '../compartilhado/tipos';
 import { JANELAS, type PeriodoJanela, type ResumoJanela } from './calculo';
+import type { FarmaciaParaVincular } from './vinculo';
 
-/** Farmácia ativa com conta de anúncios, e o gestor cujo token faz a leitura. */
-export interface ContaParaSincronizar {
-  farmaciaId:  number;
-  nome:        string;
-  adAccountId: string;
-  gestor:      Pick<Gestor, 'id' | 'metaAccessToken' | 'metaTokenExpiraEm'> | null;
+/** Farmácia ativa, com o que precisa para casar pelo nome e saber de quem é. */
+export interface FarmaciaAtiva extends FarmaciaParaVincular {
+  gestorId: number | null;
 }
+
+/** Gestor que conectou o Facebook — o token ainda pode estar vencido. */
+export type GestorConectado = Pick<Gestor, 'id' | 'metaAccessToken' | 'metaTokenExpiraEm'>;
 
 export type LinhaCusto = typeof custoResultadoMeta.$inferSelect & { farmaciaNome: string; gestorId: number | null };
 
@@ -20,30 +21,37 @@ export type LinhaCusto = typeof custoResultadoMeta.$inferSelect & { farmaciaNome
 export class CustoResultadoRepository {
   constructor(private readonly db: BancoDeDados) {}
 
-  async contasParaSincronizar(): Promise<ContaParaSincronizar[]> {
-    const rows = await this.db
+  async farmaciasAtivas(): Promise<FarmaciaAtiva[]> {
+    return this.db
       .select({
-        farmaciaId:  farmacias.id,
-        nome:        farmacias.nome,
-        adAccountId: metaTokens.adAccountId,
-        gestorId:    gestoresTrafego.id,
-        token:       gestoresTrafego.metaAccessToken,
-        expira:      gestoresTrafego.metaTokenExpiraEm,
+        id: farmacias.id, nome: farmacias.nome, nomeFachada: farmacias.nomeFachada, gestorId: farmacias.gestorId,
       })
       .from(farmacias)
-      .innerJoin(metaTokens, eq(metaTokens.farmaciaId, farmacias.id))
-      .leftJoin(gestoresTrafego, eq(gestoresTrafego.id, farmacias.gestorId))
       .where(eq(farmacias.ativa, true))
       .orderBy(farmacias.id);
+  }
 
-    return rows.map((r) => ({
-      farmaciaId:  r.farmaciaId,
-      nome:        r.nome,
-      adAccountId: r.adAccountId,
-      gestor: r.gestorId == null ? null : {
-        id: r.gestorId, metaAccessToken: r.token, metaTokenExpiraEm: r.expira,
-      },
-    }));
+  /**
+   * Conta cadastrada à mão pelo admin (POST /api/ads/tokens). Quando existe,
+   * vale ela — e não o casamento pelo nome.
+   */
+  async contasCadastradas(): Promise<Map<number, string>> {
+    const rows = await this.db
+      .select({ farmaciaId: metaTokens.farmaciaId, adAccountId: metaTokens.adAccountId })
+      .from(metaTokens);
+    return new Map(rows.map((r) => [r.farmaciaId, r.adAccountId]));
+  }
+
+  async gestoresConectados(): Promise<GestorConectado[]> {
+    return this.db
+      .select({
+        id: gestoresTrafego.id,
+        metaAccessToken: gestoresTrafego.metaAccessToken,
+        metaTokenExpiraEm: gestoresTrafego.metaTokenExpiraEm,
+      })
+      .from(gestoresTrafego)
+      .where(isNotNull(gestoresTrafego.metaAccessToken))
+      .orderBy(gestoresTrafego.id);
   }
 
   /** Grava (sobrescrevendo) o resultado de uma janela e limpa o erro anterior. */
@@ -82,10 +90,14 @@ export class CustoResultadoRepository {
       });
   }
 
-  /** Apaga as leituras de farmácias que deixaram de poder ser lidas (gestor sem token). */
-  async limparFarmacias(farmaciaIds: number[]): Promise<void> {
-    if (!farmaciaIds.length) return;
-    await this.db.delete(custoResultadoMeta).where(inArray(custoResultadoMeta.farmaciaId, farmaciaIds));
+  /**
+   * Apaga as leituras de toda farmácia fora desta lista — as que deixaram de
+   * poder ser lidas (conta sumiu dos tokens conectados, farmácia inativada).
+   */
+  async manterSo(farmaciaIds: number[]): Promise<void> {
+    await this.db.delete(custoResultadoMeta).where(
+      farmaciaIds.length ? notInArray(custoResultadoMeta.farmaciaId, farmaciaIds) : undefined,
+    );
   }
 
   /** Linhas com o nome da farmácia. `gestorId` restringe às farmácias de um gestor. */
@@ -109,8 +121,8 @@ export class CustoResultadoRepository {
     return row ?? null;
   }
 
-  async registrarExecucao(farmaciasOk: number, farmaciasErro: number): Promise<void> {
-    const valores = { executadoEm: new Date(), farmaciasOk, farmaciasErro };
+  async registrarExecucao(farmaciasOk: number, farmaciasErro: number, executadoEm: Date = new Date()): Promise<void> {
+    const valores = { executadoEm, farmaciasOk, farmaciasErro };
     await this.db.insert(custoResultadoMetaExecucao)
       .values({ id: 1, ...valores })
       .onConflictDoUpdate({ target: custoResultadoMetaExecucao.id, set: valores });

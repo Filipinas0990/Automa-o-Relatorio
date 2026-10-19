@@ -1,12 +1,13 @@
 import type { Gestor } from '../database/schema';
 import { logger } from '../logger';
-import { metaReq } from '../meta/client';
+import { metaReq, listarContasDeAnuncio } from '../meta/client';
 import { tokenProprioDo, msgTokenExpirado } from '../meta/tokenGestor';
 import {
   JANELAS, periodoDaJanela, resumirCampanhas, agoraBrasilia, diaBrasilia,
   type Janela, type InsightLinha,
 } from './calculo';
-import type { ContaParaSincronizar, CustoResultadoRepository, LinhaCusto } from './CustoResultadoRepository';
+import { vincularContas, type ContaParaVincular } from './vinculo';
+import type { CustoResultadoRepository, FarmaciaAtiva, LinhaCusto } from './CustoResultadoRepository';
 
 /** Hora (Brasília) a partir da qual a rodada do dia pode acontecer. */
 export const HORA_DO_JOB = 6;
@@ -17,7 +18,64 @@ const TENTATIVAS  = 3;
 
 const esperar = (ms: number) => ms > 0 ? new Promise<void>((r) => setTimeout(r, ms)) : Promise.resolve();
 
-export interface ResumoExecucao { farmaciasOk: number; farmaciasErro: number; semToken: number }
+/** `semConta`: farmácias ativas sem conta de anúncios legível por nenhum gestor conectado. */
+export interface ResumoExecucao { farmaciasOk: number; farmaciasErro: number; semConta: number }
+
+/** Um gestor conectado e as contas que o token dele enxerga. */
+interface TokenComContas { gestorId: number; token: string; contas: ContaParaVincular[] }
+
+/** O que ler de uma farmácia: cada conta dela com um token que a enxerga. */
+interface LeituraFarmacia {
+  farmaciaId: number;
+  contas:     Array<{ adAccountId: string; token: string }>;
+}
+
+/**
+ * Decide quais contas ler para cada farmácia e com qual token.
+ *
+ * - Conta cadastrada à mão (meta_tokens) vale sobre o casamento pelo nome.
+ * - Senão, casa pelo nome (vinculo.ts) entre TODAS as contas que os gestores
+ *   conectados enxergam — a conta da farmácia do Victor pode estar no token do
+ *   Mathews.
+ * - Token: o do gestor da farmácia, se ele enxerga a conta; senão o de outro
+ *   gestor conectado que enxerga. Conta que nenhum token enxerga não é lida.
+ */
+export function montarLeituras(
+  farmacias: FarmaciaAtiva[], cadastradas: Map<number, string>, tokens: TokenComContas[],
+): LeituraFarmacia[] {
+  const nomesPorConta = new Map<string, ContaParaVincular>();
+  const quemEnxerga   = new Map<string, TokenComContas[]>();
+  for (const t of tokens) {
+    for (const c of t.contas) {
+      nomesPorConta.set(c.id, c);
+      quemEnxerga.set(c.id, [...(quemEnxerga.get(c.id) ?? []), t]);
+    }
+  }
+
+  const porNome = vincularContas(
+    [...nomesPorConta.values()],
+    farmacias.filter((f) => !cadastradas.has(f.id)),
+  );
+  if (porNome.semFarmacia.length) {
+    logger.info({ contas: porNome.semFarmacia.map((c) => `${c.id} ${c.nome}`) }, 'Custo por resultado: contas sem farmácia correspondente');
+  }
+
+  const leituras: LeituraFarmacia[] = [];
+  for (const f of farmacias) {
+    const contaManual = cadastradas.get(f.id);
+    const ids = contaManual ? [normalizarConta(contaManual)] : porNome.porFarmacia.get(f.id) ?? [];
+
+    const contas = ids.flatMap((adAccountId) => {
+      const quem = quemEnxerga.get(adAccountId) ?? [];
+      const t = quem.find((x) => x.gestorId === f.gestorId) ?? quem[0];
+      return t ? [{ adAccountId, token: t.token }] : [];
+    });
+    if (contas.length) leituras.push({ farmaciaId: f.id, contas });
+  }
+  return leituras;
+}
+
+const normalizarConta = (id: string): string => id.startsWith('act_') ? id : `act_${id}`;
 
 interface PaginaInsights {
   data?:   InsightLinha[];
@@ -40,49 +98,69 @@ export class CustoResultadoService {
     private readonly repo: CustoResultadoRepository,
     /** Pausa entre farmácias, para não estourar o limite de requisições do Meta. */
     private readonly pausaEntreContasMs: number = Number(process.env.CUSTO_META_PAUSA_MS ?? 1500),
+    /** Contas de anúncio que um token enxerga (no Meta, /me/adaccounts). */
+    private readonly listarContas: (token: string) => Promise<ContaParaVincular[]> = listarContasDeAnuncio,
   ) {}
 
   /** Lê e grava todas as farmácias com conta de anúncios. Uma falhar não para as outras. */
   async sincronizarTodas(agora: Date = new Date()): Promise<ResumoExecucao> {
     if (this.rodando) {
       logger.warn('Custo por resultado: rodada anterior ainda em andamento — ignorando');
-      return { farmaciasOk: 0, farmaciasErro: 0, semToken: 0 };
+      return { farmaciasOk: 0, farmaciasErro: 0, semConta: 0 };
     }
     this.rodando = true;
     try {
-      const todas = await this.repo.contasParaSincronizar();
+      const [farmacias, cadastradas, tokens] = await Promise.all([
+        this.repo.farmaciasAtivas(), this.repo.contasCadastradas(), this.tokensConectados(),
+      ]);
+      const leituras = montarLeituras(farmacias, cadastradas, tokens);
+      const semConta = farmacias.length - leituras.length;
+
+      // Farmácia que não tem mais conta legível sai do painel (nada de número velho).
+      await this.repo.manterSo(leituras.map((l) => l.farmaciaId));
+
       let farmaciasOk = 0, farmaciasErro = 0;
-
-      // Cada gestor lê com o PRÓPRIO token. Farmácia cujo gestor não conectou o
-      // Facebook (ou cuja conexão expirou) não é lida e não aparece no painel:
-      // o que havia de leituras antigas dela é apagado.
-      const contas: Array<{ conta: ContaParaSincronizar; token: string }> = [];
-      const semToken: number[] = [];
-      for (const conta of todas) {
-        const token = tokenProprioDo(conta.gestor);
-        if (token) contas.push({ conta, token }); else semToken.push(conta.farmaciaId);
-      }
-      await this.repo.limparFarmacias(semToken);
-
-      for (const [i, { conta, token }] of contas.entries()) {
+      for (const [i, leitura] of leituras.entries()) {
         if (i > 0) await esperar(this.pausaEntreContasMs);
         try {
-          await this.sincronizarConta(conta, token, agora);
+          await this.sincronizarFarmacia(leitura, agora);
           farmaciasOk++;
         } catch (err) {
           farmaciasErro++;
           const msg = (err as Error).message;
-          logger.error({ farmaciaId: conta.farmaciaId, err: msg }, 'Custo por resultado: falha ao ler a conta');
-          await this.repo.registrarErro(conta.farmaciaId, msg);
+          logger.error({ farmaciaId: leitura.farmaciaId, err: msg }, 'Custo por resultado: falha ao ler a conta');
+          await this.repo.registrarErro(leitura.farmaciaId, msg);
         }
       }
 
-      await this.repo.registrarExecucao(farmaciasOk, farmaciasErro);
-      logger.info({ farmaciasOk, farmaciasErro, semToken: semToken.length }, 'Custo por resultado: rodada concluída');
-      return { farmaciasOk, farmaciasErro, semToken: semToken.length };
+      await this.repo.registrarExecucao(farmaciasOk, farmaciasErro, agora);
+      logger.info({ farmaciasOk, farmaciasErro, semConta }, 'Custo por resultado: rodada concluída');
+      return { farmaciasOk, farmaciasErro, semConta };
     } finally {
       this.rodando = false;
     }
+  }
+
+  /**
+   * Contas de anúncio que cada gestor conectado enxerga. Só tokens próprios —
+   * NUNCA o token geral do servidor. Gestor cujo token falhou fica de fora
+   * (as contas dele podem estar no token de outro).
+   */
+  private async tokensConectados(): Promise<TokenComContas[]> {
+    const gestores = await this.repo.gestoresConectados();
+    const resultado: TokenComContas[] = [];
+
+    for (const g of gestores) {
+      const token = tokenProprioDo(g);
+      if (!token) continue;
+      try {
+        const contas = await this.comRetentativa(() => this.listarContas(token));
+        resultado.push({ gestorId: g.id, token, contas });
+      } catch (err) {
+        logger.warn({ gestorId: g.id, err: (err as Error).message }, 'Custo por resultado: não deu para listar as contas do gestor');
+      }
+    }
+    return resultado;
   }
 
   /**
@@ -100,14 +178,21 @@ export class CustoResultadoService {
     return this.sincronizarTodas(agora);
   }
 
-  /** Uma conta, as três janelas. Qualquer erro sobe e marca a farmácia como falha. */
-  private async sincronizarConta(conta: ContaParaSincronizar, token: string, agora: Date): Promise<void> {
-    const campanhasWhatsapp = await this.campanhasWhatsapp(conta.adAccountId, token);
+  /**
+   * As contas da farmácia (CA01, CA02...) somadas, nas três janelas. Qualquer
+   * erro sobe e marca a farmácia como falha.
+   */
+  private async sincronizarFarmacia(leitura: LeituraFarmacia, agora: Date): Promise<void> {
+    const campanhasWhatsapp = new Set<string>();
+    for (const c of leitura.contas) {
+      for (const id of await this.campanhasWhatsapp(c.adAccountId, c.token)) campanhasWhatsapp.add(id);
+    }
 
     for (const dias of JANELAS) {
       const periodo = periodoDaJanela(dias, agora);
-      const linhas  = await this.lerInsights(conta.adAccountId, token, periodo);
-      await this.repo.salvar(conta.farmaciaId, dias, periodo, resumirCampanhas(linhas, campanhasWhatsapp));
+      const linhas: InsightLinha[] = [];
+      for (const c of leitura.contas) linhas.push(...await this.lerInsights(c.adAccountId, c.token, periodo));
+      await this.repo.salvar(leitura.farmaciaId, dias, periodo, resumirCampanhas(linhas, campanhasWhatsapp));
     }
   }
 
