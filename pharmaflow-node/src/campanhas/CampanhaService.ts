@@ -8,6 +8,11 @@ import type { MetaToken } from '../meta/types';
 
 // ── Tipos do payload que vem do wizard ────────────────────────────────────────
 
+/** O conjunto original usava Público Advantage+ e o gestor mudou idade/gênero. */
+const AVISO_ADVANTAGE =
+  'O conjunto original usa Público Advantage+, que não aceita idade fixa. Para respeitar a idade e o gênero que você escolheu, '
+  + 'o conjunto novo ficou com público manual (Advantage+ desligado). O conjunto original não mudou.';
+
 export interface PublicarCampanhaInput {
   /** Token do Meta resolvido pela rota (gestor ou geral). Nunca vem do cliente. */
   accessToken?: string;
@@ -491,6 +496,7 @@ export class CampanhaService {
       // e o conjunto foi duplicado, só que por outro caminho. A mensagem crua do
       // Meta fica no log; aqui interessa o resultado.
       avisos.push('Conjunto duplicado. O Meta recusou a cópia direta, então criamos um conjunto novo com a mesma configuração e publicamos os anúncios nele. O conjunto original não foi alterado e segue rodando.');
+      if (novo.advantageDesligado) avisos.push(AVISO_ADVANTAGE);
       if (novo.placementsAutomaticos) {
         avisos.push('Os posicionamentos do conjunto original não foram aceitos pelo Meta; o conjunto novo ficou com posicionamentos automáticos (Advantage+). Público, idade e localização seguem iguais.');
       }
@@ -499,13 +505,14 @@ export class CampanhaService {
     // 2) Aplica o que o gestor revisou na etapa de público/orçamento.
     if (!configAplicada) {
       try {
-        await atualizarConjunto(accessToken, novoConjuntoId, {
+        const r = await atualizarConjunto(accessToken, novoConjuntoId, {
           nome:                    nomeNovo,
           orcamentoDiarioCentavos: input.orcamento.diarioCentavos ?? undefined,
           dataInicio:              input.orcamento.dataInicio,
           dataFim:                 input.orcamento.dataFim,
           publico:                 input.publico,
         });
+        if (r.advantageDesligado) avisos.push(AVISO_ADVANTAGE);
       } catch (e) {
         // A cópia já existe; sem isso ela roda com a config herdada do original.
         const msg = (e as Error).message;

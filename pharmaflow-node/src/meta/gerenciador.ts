@@ -53,6 +53,8 @@ export interface ConjuntoMeta {
    * muda a localização), então a tela mostra só para conferência.
    */
   localizacao:     LocalizacaoConjunto;
+  /** Público Advantage+: idade/gênero são só sugestão (ver aplicarPublico). */
+  advantageAudience: boolean;
 }
 
 // Meta: genders [1]=homens, [2]=mulheres, ausente/ambos = todos
@@ -135,7 +137,10 @@ export async function listarConjuntosDaConta(
       id: string; name?: string; effective_status?: string;
       daily_budget?: string; optimization_goal?: string; destination_type?: string;
       start_time?: string; end_time?: string;
-      targeting?: { age_min?: number; age_max?: number; genders?: number[]; geo_locations?: GeoMeta };
+      targeting?: {
+        age_min?: number; age_max?: number; genders?: number[]; geo_locations?: GeoMeta;
+        targeting_automation?: { advantage_audience?: number };
+      };
       campaign?: { id?: string; name?: string; daily_budget?: string; lifetime_budget?: string };
     }>;
   }>('GET', `/${adAccountId}/adsets?fields=${FIELDS}&limit=100`, accessToken);
@@ -166,6 +171,7 @@ export async function listarConjuntosDaConta(
         dataInicio:      soData(a.start_time),
         dataFim:         soData(a.end_time),
         localizacao:     resumirLocalizacao(a.targeting?.geo_locations),
+        advantageAudience: a.targeting?.targeting_automation?.advantage_audience === 1,
       };
     });
 }
@@ -210,6 +216,48 @@ function hojeSaoPaulo(): string {
  * substitui o objeto inteiro, então enviar só idade/gênero apagaria a
  * geolocalização e a chamada seria rejeitada.
  */
+type PublicoRevisado = { genero: 'todos' | 'homens' | 'mulheres'; idadeMin: number; idadeMax: number };
+
+const GENEROS_META: Record<string, number[]> = { todos: [1, 2], homens: [1], mulheres: [2] };
+
+/**
+ * Aplica a idade/gênero revisados pelo gestor ao targeting de um conjunto.
+ *
+ * Só mexe se algo MUDOU — reenviar o público igual é risco à toa. E o caso que
+ * quebrava: conjunto com Público Advantage+ (`advantage_audience: 1`) trata a
+ * idade como "sugestão" (`age_range`) e recusa limite rígido ("faixa etária
+ * inválida", visto em 20/10/2026). Decisão do dono: se o gestor mudou a idade
+ * ou o gênero, a CÓPIA passa a público manual (Advantage+ desligado) e a idade
+ * vale exata. O conjunto original não é tocado. Validado no Meta (validate_only).
+ */
+export function aplicarPublico(
+  targeting: Record<string, unknown>,
+  publico:   PublicoRevisado,
+): { targeting: Record<string, unknown>; mudou: boolean; advantageDesligado: boolean } {
+  const generos = targeting.genders as number[] | undefined;
+  const generoAtual = !generos?.length || generos.length > 1 ? 'todos' : generos[0] === 1 ? 'homens' : 'mulheres';
+  const mudou =
+    publico.idadeMin !== (targeting.age_min ?? 18) ||
+    publico.idadeMax !== (targeting.age_max ?? 65) ||
+    publico.genero !== generoAtual;
+  if (!mudou) return { targeting, mudou: false, advantageDesligado: false };
+
+  const novo: Record<string, unknown> = {
+    ...targeting,
+    age_min: publico.idadeMin,
+    age_max: publico.idadeMax,
+    genders: GENEROS_META[publico.genero] ?? [1, 2],
+  };
+  // A faixa "sugerida" antiga conflita com a idade nova — sai sempre.
+  delete novo.age_range;
+
+  const automacao = targeting.targeting_automation as { advantage_audience?: number } | undefined;
+  const advantageDesligado = automacao?.advantage_audience === 1;
+  if (advantageDesligado) novo.targeting_automation = { advantage_audience: 0 };
+
+  return { targeting: normalizarTargeting(novo), mudou: true, advantageDesligado };
+}
+
 export async function atualizarConjunto(
   accessToken: string,
   conjuntoId:  string,
@@ -218,10 +266,11 @@ export async function atualizarConjunto(
     orcamentoDiarioCentavos?: number;
     dataInicio?:              string;
     dataFim?:                 string | null;
-    publico?: { genero: 'todos' | 'homens' | 'mulheres'; idadeMin: number; idadeMax: number };
+    publico?: PublicoRevisado;
   },
-): Promise<void> {
+): Promise<{ advantageDesligado: boolean }> {
   const body: Record<string, unknown> = {};
+  let advantageDesligado = false;
 
   if (dados.nome)                    body.name         = dados.nome.slice(0, 100);
   // Orçamento só vai se o conjunto TEM orçamento próprio — ver mais abaixo.
@@ -249,19 +298,16 @@ export async function atualizarConjunto(
   }
 
   if (dados.publico) {
-    const GENEROS_META: Record<string, number[]> = {
-      todos: [1, 2], homens: [1], mulheres: [2],
-    };
-    body.targeting = normalizarTargeting({
-      ...(atual.targeting ?? {}),
-      age_min: dados.publico.idadeMin,
-      age_max: dados.publico.idadeMax,
-      genders: GENEROS_META[dados.publico.genero] ?? [1, 2],
-    });
+    const r = aplicarPublico(atual.targeting ?? {}, dados.publico);
+    if (r.mudou) {
+      body.targeting = r.targeting;
+      advantageDesligado = r.advantageDesligado;
+    }
   }
 
-  if (!Object.keys(body).length) return;   // nada mudou
+  if (!Object.keys(body).length) return { advantageDesligado: false };   // nada mudou
   await metaReq('POST', `/${conjuntoId}`, accessToken, body);
+  return { advantageDesligado };
 }
 
 export interface RecriarConjuntoOpcoes {
@@ -273,7 +319,7 @@ export interface RecriarConjuntoOpcoes {
   orcamentoDiarioCentavos?: number;
   dataInicio?:              string;
   dataFim?:                 string | null;
-  publico?: { genero: 'todos' | 'homens' | 'mulheres'; idadeMin: number; idadeMax: number };
+  publico?: PublicoRevisado;
 }
 
 /**
@@ -299,7 +345,7 @@ export async function recriarConjunto(
   adAccountId:      string,
   conjuntoOrigemId: string,
   opcoes:           RecriarConjuntoOpcoes,
-): Promise<{ conjuntoId: string; placementsAutomaticos: boolean }> {
+): Promise<{ conjuntoId: string; placementsAutomaticos: boolean; advantageDesligado: boolean }> {
   const CAMPOS = 'name,campaign_id,optimization_goal,billing_event,bid_strategy,bid_amount,'
     + 'destination_type,promoted_object,targeting,daily_budget,start_time,end_time';
 
@@ -312,12 +358,12 @@ export async function recriarConjunto(
 
   if (!origem.campaign_id) throw new Error('Não consegui ler a campanha do conjunto de origem.');
 
-  const targeting: Record<string, unknown> = { ...(origem.targeting ?? {}) };
+  let targeting: Record<string, unknown> = { ...(origem.targeting ?? {}) };
+  let advantageDesligado = false;
   if (opcoes.publico) {
-    const GENEROS_META: Record<string, number[]> = { todos: [1, 2], homens: [1], mulheres: [2] };
-    targeting.age_min = opcoes.publico.idadeMin;
-    targeting.age_max = opcoes.publico.idadeMax;
-    targeting.genders = GENEROS_META[opcoes.publico.genero] ?? [1, 2];
+    const r = aplicarPublico(targeting, opcoes.publico);
+    targeting = r.targeting;
+    advantageDesligado = r.advantageDesligado;
   }
   const targetingFiel = normalizarTargeting(targeting);
 
@@ -350,7 +396,7 @@ export async function recriarConjunto(
 
   try {
     const res = await metaReq<{ id: string }>('POST', `/${adAccountId}/adsets`, accessToken, body);
-    return { conjuntoId: res.id, placementsAutomaticos: false };
+    return { conjuntoId: res.id, placementsAutomaticos: false, advantageDesligado };
   } catch (e) {
     const msg = (e as Error).message;
     if (msg === 'META_TOKEN_EXPIRADO') throw e;
@@ -367,7 +413,7 @@ export async function recriarConjunto(
       const res = await metaReq<{ id: string }>(
         'POST', `/${adAccountId}/adsets`, accessToken, { ...body, targeting: semPlacement },
       );
-      return { conjuntoId: res.id, placementsAutomaticos: true };
+      return { conjuntoId: res.id, placementsAutomaticos: true, advantageDesligado };
     } catch (e2) {
       // O erro que interessa ao gestor é o primeiro — sem posicionamento a
       // recusa costuma ser de outra coisa, e mostrar a segunda confunde.
