@@ -80,5 +80,34 @@ export async function listarPaginasDaConta(
     await coletar(`/${adAccountId}/promote_pages?fields=${CAMPOS}&limit=200`);
   }
 
+  // Página que não está ligada ao BM (comum: o cliente criou a página no perfil
+  // pessoal e só deu acesso ao gestor). O Gerenciador do Meta a oferece porque
+  // olha as páginas da PESSOA — aqui ela sumia e o wizard travava em "nenhuma
+  // página" (Farmácia Compra Certa, 20/10/2026). Duas fontes, da mais certeira
+  // para a mais ampla:
+  //  1) as páginas que os conjuntos desta conta já usam (promoted_object);
+  //  2) as páginas que o dono do token administra (me/accounts).
+  if (!encontradas.size) {
+    try {
+      const conjuntos = await metaReq<{ data?: Array<{ promoted_object?: { page_id?: string } }> }>(
+        'GET', `/${adAccountId}/adsets?fields=promoted_object&limit=50`, accessToken,
+      );
+      const ids = [...new Set((conjuntos.data ?? []).map((c) => c.promoted_object?.page_id).filter(Boolean))] as string[];
+      for (const id of ids) {
+        try {
+          const bruta = await metaReq<PaginaBruta>('GET', `/${id}?fields=${CAMPOS}`, accessToken);
+          if (bruta?.id && !encontradas.has(bruta.id)) encontradas.set(bruta.id, converter(bruta));
+        } catch (e) {
+          logger.warn({ err: (e as Error).message, pagina: id }, 'Página usada pela conta não pôde ser lida');
+        }
+      }
+    } catch (e) {
+      logger.warn({ err: (e as Error).message }, 'Falha ao ler as páginas dos conjuntos da conta');
+    }
+  }
+  if (!encontradas.size) {
+    await coletar(`/me/accounts?fields=${CAMPOS}&limit=200`);
+  }
+
   return [...encontradas.values()].sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
 }
