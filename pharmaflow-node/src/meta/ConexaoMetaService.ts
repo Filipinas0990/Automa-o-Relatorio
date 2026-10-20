@@ -35,8 +35,12 @@ const ESCOPOS_OBRIGATORIOS = ['ads_management', 'pages_manage_ads', 'pages_show_
 /** Sem expires_in o Meta não informou prazo: assume os 60 dias usuais. */
 const VALIDADE_PADRAO_SEG = 60 * 86_400;
 
+/** Token colado que vence antes disso é "curto": tenta trocar ou avisa o gestor. */
+const CURTO_SEG = 7 * 86_400;
+
 interface DebugToken {
   is_valid?: boolean;
+  app_id?: string;
   type?: string;
   expires_at?: number;
   data_access_expires_at?: number;
@@ -108,8 +112,13 @@ export class ConexaoMetaService {
    * Alternativa ao botão: o gestor cola um token que ele mesmo gerou no Facebook
    * (de qualquer app). Validado antes de guardar — válido, com as permissões
    * de publicar, e com a validade real informada pelo Meta.
+   *
+   * Token curto (o do Graph Explorer vale ~2 h) gerado pelo NOSSO app é trocado
+   * pelo de ~60 dias, como no botão. De outro app não dá para trocar (o Meta
+   * exige o segredo do app que gerou): grava e devolve `aviso`, senão o gestor
+   * some do painel de custo no dia seguinte sem saber por quê.
    */
-  async conectarPorToken(gestorId: number, bruto: string): Promise<{ nome: string; expira_em: string | null }> {
+  async conectarPorToken(gestorId: number, bruto: string): Promise<{ nome: string; expira_em: string | null; aviso: string | null }> {
     const token = bruto.trim();
     if (!/^EA[A-Za-z0-9]{40,}$/.test(token)) {
       throw new RequisicaoInvalida('Isso não parece um token do Facebook (começa com "EA").');
@@ -127,11 +136,27 @@ export class ConexaoMetaService {
       const eu = await this.quemE(token);
       // expires_at = 0 → não vence (usuário do sistema); vale então o prazo de acesso a dados, se houver.
       const vence = d.expires_at ? d.expires_at : (d.data_access_expires_at ?? 0);
-      const expira = vence ? new Date(vence * 1000) : null;
-      await this.gravar(gestorId, token, expira, eu);
+      let guardar = token;
+      let expira = vence ? new Date(vence * 1000) : null;
+      let aviso: string | null = null;
 
-      logger.info({ gestorId, metaUsuario: eu.id, tipo: d.type }, 'Token do Facebook colado pelo gestor');
-      return { nome: eu.name, expira_em: expira ? expira.toISOString() : null };
+      const curto = !!d.expires_at && d.expires_at * 1000 - Date.now() < CURTO_SEG * 1000;
+      if (curto) {
+        const longo = await this.trocarPorLongo(token, d.app_id);
+        if (longo) {
+          guardar = longo.token;
+          expira  = longo.expira;
+        } else {
+          const horas = Math.max(1, Math.round((d.expires_at! * 1000 - Date.now()) / 3_600_000));
+          aviso = `Este token vence em ${horas < 48 ? `${horas} h` : `${Math.round(horas / 24)} dias`} e não dá para estendê-lo `
+            + '(foi gerado por outro app). Use o botão "Conectar com Facebook" ou gere um token de longa duração.';
+        }
+      }
+      await this.gravar(gestorId, guardar, expira, eu);
+
+      logger.info({ gestorId, metaUsuario: eu.id, tipo: d.type, estendido: guardar !== token, aviso: !!aviso },
+        'Token do Facebook colado pelo gestor');
+      return { nome: eu.name, expira_em: expira ? expira.toISOString() : null, aviso };
     } catch (err) {
       if (err instanceof ErroAplicacao) throw err;
       throw new RequisicaoInvalida(`Não consegui validar o token no Facebook: ${(err as Error).message}`);
@@ -155,6 +180,21 @@ export class ConexaoMetaService {
     await this.gestores.atualizar(gestorId, {
       metaAccessToken: null, metaTokenExpiraEm: null, metaUsuarioId: null, metaUsuarioNome: null,
     });
+  }
+
+  /** Token de ~60 dias no lugar do curto — só se ele foi gerado pelo nosso app. Falhou: null. */
+  private async trocarPorLongo(token: string, appDoToken?: string): Promise<{ token: string; expira: Date } | null> {
+    const { appId, appSecret } = this.config;
+    if (!this.configurado || appDoToken !== appId) return null;
+    try {
+      const longo = await this.graph.get<{ access_token: string; expires_in?: number }>('/oauth/access_token', {
+        grant_type: 'fb_exchange_token', client_id: appId, client_secret: appSecret, fb_exchange_token: token,
+      });
+      return { token: longo.access_token, expira: new Date(Date.now() + (longo.expires_in ?? VALIDADE_PADRAO_SEG) * 1000) };
+    } catch (err) {
+      logger.warn({ err: (err as Error).message }, 'Não deu para estender o token colado');
+      return null;
+    }
   }
 
   private quemE(token: string) {
