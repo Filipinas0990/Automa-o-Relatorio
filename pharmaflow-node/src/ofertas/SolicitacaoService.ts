@@ -11,6 +11,11 @@ export interface ProdutosDoCatalogo {
   listarProdutos(): Promise<Array<{ id: number; nome: string; categoria: string | null; ativo: boolean }>>;
 }
 
+/** Os produtos que a farmácia mandou para o espaço dela (ver ProdutoClienteService). */
+export interface ProdutosDoEspaco {
+  listar(farmaciaId: number): Promise<Array<{ id: number; nome: string }>>;
+}
+
 export interface EnvioDoDono {
   farmacia_id?: number | string;
   produtos?:    unknown;
@@ -26,6 +31,7 @@ export class SolicitacaoService {
     private readonly solicitacoes: SolicitacaoRepository,
     private readonly farmacias: FarmaciaRepository,
     private readonly catalogo: ProdutosDoCatalogo,
+    private readonly espaco: ProdutosDoEspaco,
   ) {}
 
   /**
@@ -45,7 +51,16 @@ export class SolicitacaoService {
     const enviadoPor = (b?.enviado_por ?? '').trim().slice(0, 120);
     if (enviadoPor.length < 2) throw new RequisicaoInvalida('Informe o seu nome para enviar a lista.');
 
-    const nomes = new Map((await this.catalogo.listarProdutos()).map((p) => [p.id, p.nome]));
+    // O espaço de produtos próprios só existe no link de cliente: no legado a
+    // farmácia vem do corpo, e lá não há o que buscar.
+    const [catalogo, doEspaco] = await Promise.all([
+      this.catalogo.listarProdutos(),
+      link.farmacia ? this.espaco.listar(farmaciaId) : [],
+    ]);
+    const nomes = new Map<number, string>([
+      ...catalogo.map((p): [number, string] => [p.id, p.nome]),
+      ...doEspaco.map((p): [number, string] => [ListaDoDono.idDoCliente(p.id), p.nome]),
+    ]);
     const produtos = ListaDoDono.paraGuardar(escolhas, nomes);
 
     const solicitacao = await this.solicitacoes.criar({

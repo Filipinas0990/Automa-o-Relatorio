@@ -107,6 +107,31 @@ describe('Produtos do cliente pelo link', () => {
     expect(r.body.itens[0]).toMatchObject({ nome: 'Produto do A', farmacia_id: fa.id, farmacia: 'Farmácia do A' });
   });
 
+  it('produto do cliente entra na lista enviada (id negativo) e o cliente cai como "respondeu"', async () => {
+    const g = await criarGestor();
+    const f = await criarFarmacia(g.id);
+    const outra = await criarFarmacia(g.id);
+    const token = await linkDoCliente(g.token, f.id);
+    const meu = (await enviar(token, 'Protetor Solar FPS 50')).body.id;
+    const deOutro = (await enviar(await linkDoCliente(g.token, outra.id), 'Do vizinho')).body.id;
+
+    const envio = await api('POST', `/api/publico/ofertas/${token}`, {
+      body: {
+        produtos: [{ id: -meu, preco: '39,90' }, { id: -deOutro, preco: '1,00' }],
+        enviado_por: 'Seu Zé',
+      },
+    });
+    expect(envio.status).toBe(201);
+
+    const carteira = await api('GET', '/api/ofertas/carteira', { token: g.token });
+    const linha = carteira.body.find((c: { farmacia_id: number }) => c.farmacia_id === f.id);
+    expect(linha.respondeu).toBe(true);
+    // O produto de outra farmácia não entra, mesmo mandando o id dele.
+    expect(linha.solicitacao.produtos).toEqual([
+      { id: -meu, nome: 'Protetor Solar FPS 50', preco: '39,90', preco_de: null, origem: 'cliente' },
+    ]);
+  });
+
   it('recusa arquivo que não é imagem e produto sem nome', async () => {
     const g = await criarGestor();
     const f = await criarFarmacia(g.id);

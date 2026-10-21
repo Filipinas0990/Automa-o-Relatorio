@@ -10,11 +10,14 @@ export type ProdutoEnviado = number | { id: number; preco?: string | null; preco
  * porque o catálogo pode mudar depois do envio.
  */
 export interface ProdutoSolicitado {
+  /** Negativo = produto que o próprio cliente mandou (ver `ListaDoDono.idDoCliente`). */
   id:        number;
   nome:      string;
   preco?:    string | null;
   /** Preço antigo (riscado na arte) quando o dono ligou o "de/por". */
   preco_de?: string | null;
+  /** 'cliente' quando a foto é do espaço do cliente (produtos_cliente), não do banco de imagens. */
+  origem?:   'cliente';
 }
 
 interface Escolha {
@@ -48,11 +51,26 @@ export class ListaDoDono {
       .map((p) => (p.preco ? p : { ...p, precoDe: null }));
   }
 
-  /** Só os produtos que existem no catálogo, com o nome de agora. */
+  /**
+   * Produto do espaço do cliente entra na lista com o id NEGATIVO (-id de
+   * produtos_cliente). Assim ele nunca colide com um id do catálogo, e quem lê
+   * a lista (passo 3 do disparo) separa os dois pelo sinal.
+   */
+  static idDoCliente(produtoClienteId: number): number {
+    return -produtoClienteId;
+  }
+
+  /**
+   * Só os produtos que existem — no catálogo ou no espaço do cliente (`nomes`
+   * já traz estes com o id negativo) —, com o nome de agora.
+   */
   static paraGuardar(escolhas: Escolha[], nomes: Map<number, string>): ProdutoSolicitado[] {
     return escolhas
       .filter((p) => nomes.has(p.id))
-      .map((p) => ({ id: p.id, nome: nomes.get(p.id) as string, preco: p.preco, preco_de: p.precoDe }));
+      .map((p) => ({
+        id: p.id, nome: nomes.get(p.id) as string, preco: p.preco, preco_de: p.precoDe,
+        ...(p.id < 0 ? { origem: 'cliente' as const } : {}),
+      }));
   }
 
   /** Lê o JSON guardado na solicitação; JSON quebrado vira lista vazia. */
