@@ -6,6 +6,8 @@ import type { CarteiraService } from './CarteiraService';
 import type { LinkOfertaService } from './LinkOfertaService';
 import { ListaDoDono } from './ListaDoDono';
 import type { SolicitacaoService } from './SolicitacaoService';
+import { LIMITE_PRODUTOS_CLIENTE } from './ProdutoClienteService';
+import type { ProdutoClienteService } from './ProdutoClienteService';
 
 /** Rotas do gestor para as ofertas que os clientes mandam (/api/ofertas/*). */
 export class OfertaController extends Controller {
@@ -14,6 +16,7 @@ export class OfertaController extends Controller {
     private readonly solicitacoes: SolicitacaoService,
     private readonly carteira: CarteiraService,
     private readonly auth: Autenticador,
+    private readonly produtosCliente: ProdutoClienteService,
   ) {
     super();
   }
@@ -104,6 +107,46 @@ export class OfertaController extends Controller {
       await this.solicitacoes.mudarStatus(req.user, parseInt(req.params.id, 10), req.body?.status);
       return { ok: true };
     });
+
+    /** Vitrine: tudo o que os clientes da carteira mandaram pelo link, com quem mandou. */
+    app.get('/api/ofertas/produtos-clientes', comAuth, async (req) => {
+      const itens = await this.produtosCliente.daCarteira(req.user);
+      return {
+        limite: LIMITE_PRODUTOS_CLIENTE,
+        itens:  itens.map((p) => ({
+          id:               p.id,
+          nome:             p.nome,
+          criado_em:        p.criadoEm,
+          farmacia_id:      p.farmaciaId,
+          farmacia:         p.farmacia,
+          farmacia_visivel: p.farmaciaVisivel,
+          cidade:           p.cidade,
+        })),
+      };
+    });
+
+    /** Os produtos que o cliente mandou pelo link (foto + nome), até o limite. */
+    app.get<{ Params: { farmaciaId: string } }>('/api/ofertas/clientes/:farmaciaId/produtos', comAuth, async (req) => {
+      const farmaciaId = await this.produtosCliente.farmaciaDoGestor(req.user, parseInt(req.params.farmaciaId, 10));
+      const itens = await this.produtosCliente.listar(farmaciaId);
+      return {
+        limite: LIMITE_PRODUTOS_CLIENTE,
+        itens:  itens.map((p) => ({ id: p.id, nome: p.nome, criado_em: p.criadoEm })),
+      };
+    });
+
+    app.get<{ Params: { farmaciaId: string; id: string } }>(
+      '/api/ofertas/clientes/:farmaciaId/produtos/:id/imagem',
+      comAuth,
+      async (req, reply) => {
+        const farmaciaId = await this.produtosCliente.farmaciaDoGestor(req.user, parseInt(req.params.farmaciaId, 10));
+        const foto = await this.produtosCliente.foto(farmaciaId, parseInt(req.params.id, 10));
+        return reply
+          .header('Content-Type', foto.mime)
+          .header('Cache-Control', 'private, max-age=86400')
+          .send(Buffer.from(foto.imagemB64, 'base64'));
+      },
+    );
 
     /** Total para o badge do menu. */
     app.get('/api/ofertas/pendentes', comAuth, async (req) => {

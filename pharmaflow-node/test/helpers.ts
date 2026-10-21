@@ -10,7 +10,7 @@ import { db } from '../src/database/db';
 import { app } from '../src/api';
 import {
   gestoresTrafego, farmacias, catalogoProdutos, catalogoCategorias,
-  linksOferta, solicitacoesOferta,
+  linksOferta, solicitacoesOferta, produtosCliente,
   disparosGrupo, disparosGrupoLog, gestorWhatsapp, whatsappConfig,
   contasAnuncioCache, contasAnuncioCacheSync, custoResultadoMetaExecucao,
 } from '../src/database/schema';
@@ -131,7 +131,7 @@ export async function api(
 /** Zera as tabelas que os testes escrevem. Chamar no beforeEach. */
 export async function limparBanco(): Promise<void> {
   await db.execute(sql`
-    TRUNCATE ${disparosGrupoLog}, ${disparosGrupo}, ${solicitacoesOferta},
+    TRUNCATE ${disparosGrupoLog}, ${disparosGrupo}, ${solicitacoesOferta}, ${produtosCliente},
              ${linksOferta}, ${gestorWhatsapp}, ${whatsappConfig}, ${catalogoProdutos},
              ${catalogoCategorias}, ${contasAnuncioCache}, ${contasAnuncioCacheSync}, ${custoResultadoMetaExecucao},
              ${farmacias}, ${gestoresTrafego}

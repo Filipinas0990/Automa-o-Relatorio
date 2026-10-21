@@ -82,6 +82,8 @@ import { SolicitacaoService } from './ofertas/SolicitacaoService';
 import { CarteiraService } from './ofertas/CarteiraService';
 import { OfertaPublicaController } from './ofertas/OfertaPublicaController';
 import { OfertaController } from './ofertas/OfertaController';
+import { ProdutoClienteRepository } from './ofertas/ProdutoClienteRepository';
+import { ProdutoClienteService } from './ofertas/ProdutoClienteService';
 
 const segredoJwt  = lerSegredoJwt();
 const hashSenha   = new HashSenha();
@@ -228,8 +230,13 @@ const linkOfertaService = new LinkOfertaService(
   process.env.OFERTAS_URL_BASE || process.env.FRONTEND_URL || 'http://localhost:5173',
 );
 const solicitacaoService = new SolicitacaoService(solicitacaoRepository, farmaciaRepository, catalogo);
+// Espaço de até 30 produtos (foto + nome) que cada cliente manda pelo link.
+const produtoClienteRepository = new ProdutoClienteRepository(db);
+const produtoClienteService = new ProdutoClienteService(
+  produtoClienteRepository, farmaciaRepository, produtoClienteRepository,
+);
 export const ofertaPublicaController = new OfertaPublicaController(
-  linkOfertaService, solicitacaoService, farmaciaRepository, catalogo,
+  linkOfertaService, solicitacaoService, farmaciaRepository, catalogo, produtoClienteService,
 );
 export const ofertaController = new OfertaController(
   linkOfertaService, solicitacaoService,
@@ -237,6 +244,7 @@ export const ofertaController = new OfertaController(
   // estrutura — mesmo truque do ProdutoRepository acima, sem adaptador.
   new CarteiraService(farmaciaRepository, solicitacaoRepository, linkOfertaService, disparoRepository),
   autenticador,
+  produtoClienteService,
 );
 
 // ── Disparo em grupos de WhatsApp (continuação) ───────────────────────────────

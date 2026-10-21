@@ -468,6 +468,18 @@ export const solicitacoesOferta = pgTable('solicitacoes_oferta', {
   atendidaEm:     timestamp('atendida_em', { withTimezone: true }),
 });
 
+// Produtos que o próprio cliente manda pelo link de ofertas (migration 0041).
+// No máximo 30 por farmácia — o gatilho produtos_cliente_limite garante no banco.
+export const produtosCliente = pgTable('produtos_cliente', {
+  id:         serial('id').primaryKey(),
+  farmaciaId: integer('farmacia_id').notNull().references(() => farmacias.id),
+  nome:       varchar('nome', { length: 120 }).notNull(),
+  // foto em base64 (sem o prefixo data:)
+  imagemB64:  text('imagem_b64').notNull(),
+  mime:       varchar('mime', { length: 40 }).notNull().default('image/jpeg'),
+  criadoEm:   timestamp('criado_em', { withTimezone: true }).defaultNow(),
+});
+
 // ── Tipos inferidos do schema (usados pela API) ────────────────────
 
 export type Gestor          = typeof gestoresTrafego.$inferSelect;
@@ -485,6 +497,7 @@ export type CatalogoCategoria = typeof catalogoCategorias.$inferSelect;
 export type GestorWhatsapp  = typeof gestorWhatsapp.$inferSelect;
 export type LinkOferta        = typeof linksOferta.$inferSelect;
 export type SolicitacaoOferta = typeof solicitacoesOferta.$inferSelect;
+export type ProdutoCliente    = typeof produtosCliente.$inferSelect;
 export type DisparoGrupo    = typeof disparosGrupo.$inferSelect;
 export type GrupoCache      = typeof gruposCache.$inferSelect;
 export type HorarioDisparo  = typeof horariosDisparo.$inferSelect;
