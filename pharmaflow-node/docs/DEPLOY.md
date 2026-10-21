@@ -28,7 +28,7 @@ cd /opt/pharmaflow
 ### 2. Baixar as atualizações do repositório
 
 ```bash
-git pull origin main
+      git pull origin main
 ```
 
 ### 3. Compilar o TypeScript no host
@@ -72,11 +72,17 @@ Pressione `Ctrl+C` para sair dos logs sem parar o container.
 
 ```bash
 cd /opt/pharmaflow
+
 git pull origin main
+
 cd pharmaflow-node
+
 node --max-old-space-size=2048 node_modules/.bin/tsc --skipLibCheck
+
 cd /opt/pharmaflow
+
 docker compose up -d --build api
+
 docker compose logs -f api
 ```
 
