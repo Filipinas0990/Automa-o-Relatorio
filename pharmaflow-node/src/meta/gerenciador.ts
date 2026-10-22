@@ -192,11 +192,18 @@ const CAMPOS_PLACEMENT = [
  * recusado, o Meta exige `explore` na mesma lista.
  */
 function normalizarTargeting(targeting: Record<string, unknown>): Record<string, unknown> {
-  const ig = targeting.instagram_positions;
+  const limpo: Record<string, unknown> = { ...targeting };
+  // Campos que o Meta ainda DEVOLVE na leitura de conjunto antigo, mas recusa na
+  // escrita: `targeting_optimization` foi removido ("Não é necessário definir um
+  // valor para o campo targeting_optimization porque ele foi removido", #1870197,
+  // 22/10/2026) — a recriação do conjunto quebrava com ele.
+  delete limpo.targeting_optimization;
+
+  const ig = limpo.instagram_positions;
   if (Array.isArray(ig) && ig.includes('explore_home') && !ig.includes('explore')) {
-    return { ...targeting, instagram_positions: [...ig, 'explore'] };
+    limpo.instagram_positions = [...ig, 'explore'];
   }
-  return targeting;
+  return limpo;
 }
 
 /** Tira os posicionamentos do targeting — o conjunto passa a usar Advantage+. */
