@@ -11,6 +11,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "importar-catalogo": "ts-node src/importar-catalogo.ts",
+    "importar-coleta": "ts-node src/importar-coleta.ts",
     "senha-banco": "ts-node src/gerar-senha-banco.ts"
   },
   "dependencies": {

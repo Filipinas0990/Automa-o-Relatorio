@@ -75,6 +75,8 @@ import { AdsController } from './ads/AdsController';
 import { CustoResultadoRepository } from './custo/CustoResultadoRepository';
 import { CustoResultadoService } from './custo/CustoResultadoService';
 import { CustoResultadoController } from './custo/CustoResultadoController';
+import { ColetaRepository } from './coleta/ColetaRepository';
+import { ImportacaoColetaService } from './coleta/ImportacaoColetaService';
 import { LinkOfertaRepository } from './ofertas/LinkOfertaRepository';
 import { SolicitacaoRepository } from './ofertas/SolicitacaoRepository';
 import { LinkOfertaService } from './ofertas/LinkOfertaService';
@@ -150,6 +152,10 @@ export const adsController = new AdsController(
 // ── Custo por resultado do Meta (job das 06:00 + rota de leitura) ─────────────
 export const custoResultadoService = new CustoResultadoService(new CustoResultadoRepository(db));
 export const custoResultadoController = new CustoResultadoController(custoResultadoService, autenticador);
+
+// ── Coleta do PharmaChatbot (importa o arquivo agregado do engine-prod) ───────
+const coletaRepository = new ColetaRepository(db);
+export const importacaoColetaService = new ImportacaoColetaService(coletaRepository, coletaRepository);
 
 // ── Ranking ───────────────────────────────────────────────────────────────────
 export const rankingController = new RankingController(

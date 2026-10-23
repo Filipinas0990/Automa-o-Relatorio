@@ -1668,3 +1668,11 @@ CREATE TRIGGER produtos_cliente_limite
 
 \unrestrict 27LJIeJrFfOQkM6jSWK28auRAmqVa6zPbbDtUc4a6sB2UqePSyuqTqd8P06GRhh
 
+
+-- 0042: vínculo com a empresa no PharmaChatbot
+ALTER TABLE public.farmacias ADD COLUMN pc_tenant character varying(40);
+ALTER TABLE public.farmacias ADD COLUMN pc_company_id bigint;
+
+CREATE UNIQUE INDEX farmacias_pc_empresa_unica
+  ON public.farmacias (pc_tenant, pc_company_id)
+  WHERE pc_tenant IS NOT NULL AND pc_company_id IS NOT NULL;

@@ -1,6 +1,6 @@
 import {
   pgTable, pgView, primaryKey,
-  serial, integer, varchar, text, boolean, timestamp, date, numeric,
+  serial, integer, bigint, varchar, text, boolean, timestamp, date, numeric,
 } from 'drizzle-orm/pg-core';
 
 // ── Re-export para conveniência ───────────────────────────────────────────────
@@ -53,6 +53,10 @@ export const farmacias = pgTable('farmacias', {
   // Conta de anúncios do Meta ("act_123", migration 0040). Uma por cliente; é a
   // única que o custo por resultado lê. Null = farmácia fora do painel de custo.
   metaAdAccountId:  varchar('meta_ad_account_id', { length: 40 }),
+  // Empresa no PharmaChatbot (migration 0042): tenant + company_id. É de onde
+  // saem atendimentos, vendas e receita. Null = farmácia fora da coleta.
+  pcTenant:         varchar('pc_tenant', { length: 40 }),
+  pcCompanyId:      bigint('pc_company_id', { mode: 'number' }),
 });
 
 /**

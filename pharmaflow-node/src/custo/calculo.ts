@@ -50,7 +50,7 @@ function dataBrasilia(d: Date): string {
   }).format(d);
 }
 
-function somarDias(data: string, dias: number): string {
+export function somarDias(data: string, dias: number): string {
   const d = new Date(`${data}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() + dias);
   return d.toISOString().slice(0, 10);
