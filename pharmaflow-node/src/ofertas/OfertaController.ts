@@ -148,6 +148,17 @@ export class OfertaController extends Controller {
       },
     );
 
+    /** O gestor exclui um produto do cliente — libera a vaga no espaço dele. */
+    app.delete<{ Params: { farmaciaId: string; id: string } }>(
+      '/api/ofertas/clientes/:farmaciaId/produtos/:id',
+      comAuth,
+      async (req) => {
+        const farmaciaId = await this.produtosCliente.farmaciaDoGestor(req.user, parseInt(req.params.farmaciaId, 10));
+        await this.produtosCliente.excluir(farmaciaId, parseInt(req.params.id, 10));
+        return { ok: true };
+      },
+    );
+
     /** Total para o badge do menu. */
     app.get('/api/ofertas/pendentes', comAuth, async (req) => {
       return { total: await this.solicitacoes.pendentes(req.user) };

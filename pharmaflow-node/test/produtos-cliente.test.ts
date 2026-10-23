@@ -93,6 +93,18 @@ describe('Produtos do cliente pelo link', () => {
     expect((await api('GET', `/api/ofertas/clientes/${fb.id}/produtos`, { token: a.token })).status).toBe(403);
   });
 
+  it('gestor exclui produto do cliente da carteira dele, e só dela', async () => {
+    const a = await criarGestor();
+    const b = await criarGestor();
+    const fa = await criarFarmacia(a.id);
+    const id = (await enviar(await linkDoCliente(a.token, fa.id), 'Produto do A')).body.id;
+    const rota = `/api/ofertas/clientes/${fa.id}/produtos/${id}`;
+
+    expect((await api('DELETE', rota, { token: b.token })).status).toBe(403);
+    expect((await api('DELETE', rota, { token: a.token })).status).toBe(200);
+    expect((await api('GET', `/api/ofertas/clientes/${fa.id}/produtos`, { token: a.token })).body.itens).toHaveLength(0);
+  });
+
   it('a vitrine do gestor mostra quem enviou e só os clientes da carteira dele', async () => {
     const a = await criarGestor();
     const b = await criarGestor();
