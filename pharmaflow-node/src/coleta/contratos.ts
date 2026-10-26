@@ -34,7 +34,7 @@ export interface ArquivoColeta {
   linhas:      LinhaColeta[];
 }
 
-/** Farmácia ativa com empresa vinculada no PharmaChatbot. */
+/** Farmácia com empresa vinculada no PharmaChatbot (ativa ou não no painel). */
 export interface FarmaciaVinculada {
   id:              number;
   nome:            string;

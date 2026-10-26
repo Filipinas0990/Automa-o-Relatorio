@@ -20,10 +20,9 @@ export class ColetaRepository implements LeitorDeVinculos, GravadorDeColetas {
         metaLeadsGoogle: farmacias.metaLeadsGoogle, metaLeadsMeta: farmacias.metaLeadsMeta,
       })
       .from(farmacias)
-      .where(and(
-        eq(farmacias.ativa, true), eq(farmacias.fase, 'ativo'),
-        isNotNull(farmacias.pcTenant), isNotNull(farmacias.pcCompanyId),
-      ));
+      // Entra na coleta quem tem empresa vinculada, mesmo inativa ou em "entrada"
+      // no painel: muitas inativas seguem com chatbot rodando (decisão do dono, 26/10).
+      .where(and(isNotNull(farmacias.pcTenant), isNotNull(farmacias.pcCompanyId)));
     return linhas.map((f) => ({
       ...f,
       tenant: f.tenant!,
