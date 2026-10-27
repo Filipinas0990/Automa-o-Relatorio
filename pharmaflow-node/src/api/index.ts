@@ -7,7 +7,7 @@ import { iniciarSchedulerWhatsApp } from '../scheduler';
 import {
   authController, gestorController, farmaciaController, painelController,
   rankingController, googleController, conexaoMetaController,
-  agendaController, reuniaoController, dashboardController, acaoController,
+  agendaController, reuniaoController, dashboardController,
   ofertaPublicaController, ofertaController, catalogoController, whatsappController,
   campanhaController, disparoController, adsController, adsService, custoResultadoController,
 } from '../composicao';
@@ -52,7 +52,6 @@ app.register(conexaoMetaController.plugin);
 app.register(agendaController.plugin);
 app.register(reuniaoController.plugin);
 app.register(dashboardController.plugin);
-app.register(acaoController.plugin);
 // Ofertas: as rotas PÚBLICAS (/api/publico/ofertas/*) usam o token do link como credencial
 app.register(ofertaPublicaController.plugin);
 app.register(ofertaController.plugin);

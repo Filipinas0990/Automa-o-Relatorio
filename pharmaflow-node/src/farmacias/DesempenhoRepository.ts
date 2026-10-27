@@ -4,7 +4,7 @@ import type { LinhaCanal } from './AgregadorCanais';
 
 /**
  * Leituras de desempenho das farmácias: ranking da última coleta, vendas por
- * canal, ações do mês e evolução semanal.
+ * canal e evolução semanal.
  *
  * `gestorId` null = todas as farmácias (visão do admin).
  */
@@ -75,20 +75,6 @@ export class DesempenhoRepository {
       WHERE f.ativa = TRUE ${this.doGestor(gestorId)}
       GROUP BY latest.farmacia_id, cc.canal
       ORDER BY latest.farmacia_id, total_atendimentos DESC
-    `);
-    return rows;
-  }
-
-  /** Ações não canceladas do mês (`AAAA-MM`), uma linha por farmácia participante. */
-  async acoesDoMes(mes: string): Promise<Linha[]> {
-    const { rows } = await this.db.execute(sql`
-      SELECT fa.farmacia_id,
-             a.id, a.nome, a.tipo, a.status, a.cor
-      FROM farmacia_acoes fa
-      JOIN acoes a ON a.id = fa.acao_id
-      WHERE a.mes_referencia = ${mes}
-        AND a.status != 'cancelada'
-      ORDER BY fa.farmacia_id, a.nome
     `);
     return rows;
   }

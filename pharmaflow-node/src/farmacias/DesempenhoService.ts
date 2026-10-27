@@ -14,14 +14,6 @@ export interface FiltrosDesempenho {
   fase?: string;
 }
 
-interface AcaoResumida {
-  id: number;
-  nome: string;
-  tipo: string;
-  status: string;
-  cor: string | null;
-}
-
 const ROTULO_ALERTA: Record<string, string> = { verde: 'Ativa', amarelo: 'Atencao', vermelho: 'Alerta' };
 
 /** Indicadores das farmácias: painel geral, listagem com metas e evolução semanal. */
@@ -72,16 +64,15 @@ export class DesempenhoService {
     };
   }
 
-  /** Farmácias ativas com ranking, metas, canais e as ações do mês de cada uma. */
+  /** Farmácias ativas com ranking, metas e canais de cada uma. */
   async listar(quem: Gestor, filtros: FiltrosDesempenho) {
     const gestorId = this.escopo(quem, filtros);
     const dias     = this.dias(filtros);
     const { status, busca } = filtros;
 
-    const [rows, canais, acoes] = await Promise.all([
+    const [rows, canais] = await Promise.all([
       this.desempenho.farmaciasComRanking(dias, gestorId, filtros.fase || null),
       this.canaisPorFarmacia(dias, gestorId),
-      this.acoesPorFarmacia(),
     ]);
 
     const resultado = [];
@@ -122,7 +113,6 @@ export class DesempenhoService {
         ...this.avaliarMeta(receitaAtual, vendasAtual, metaR, metaV),
         tem_chatbot: r.tem_chatbot !== false,
         canais: canais.get(fid)?.resumo() ?? [],
-        acoes_ativas: acoes.get(fid) ?? [],
       });
     }
     return resultado;
@@ -159,20 +149,6 @@ export class DesempenhoService {
       const fid = parseInt(linha.farmacia_id);
       if (!porFarmacia.has(fid)) porFarmacia.set(fid, new AgregadorCanais());
       porFarmacia.get(fid)!.somar(linha);
-    }
-    return porFarmacia;
-  }
-
-  private async acoesPorFarmacia(): Promise<Map<number, AcaoResumida[]>> {
-    const agora = new Date();
-    const mes = `${agora.getFullYear()}-${String(agora.getMonth() + 1).padStart(2, '0')}`;
-    const porFarmacia = new Map<number, AcaoResumida[]>();
-    for (const a of await this.desempenho.acoesDoMes(mes)) {
-      const fid = parseInt(a.farmacia_id);
-      if (!porFarmacia.has(fid)) porFarmacia.set(fid, []);
-      porFarmacia.get(fid)!.push({
-        id: parseInt(a.id), nome: a.nome, tipo: a.tipo, status: a.status, cor: a.cor ?? null,
-      });
     }
     return porFarmacia;
   }

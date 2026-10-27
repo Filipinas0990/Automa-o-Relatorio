@@ -45,10 +45,6 @@ import { ReuniaoController } from './reunioes/ReuniaoController';
 import { DashboardRepository } from './dashboard/DashboardRepository';
 import { DashboardService } from './dashboard/DashboardService';
 import { DashboardController } from './dashboard/DashboardController';
-import { AcaoRepository } from './acoes/AcaoRepository';
-import { ParticipacaoRepository } from './acoes/ParticipacaoRepository';
-import { AcaoService } from './acoes/AcaoService';
-import { AcaoController } from './acoes/AcaoController';
 import { WhatsappRepository } from './whatsapp/WhatsappRepository';
 import { ClienteEvolution } from './whatsapp/ClienteEvolution';
 import { WhatsappService } from './whatsapp/WhatsappService';
@@ -200,12 +196,6 @@ export const reuniaoController = new ReuniaoController(
 // ── Dashboard ─────────────────────────────────────────────────────────────────
 export const dashboardController = new DashboardController(
   new DashboardService(new DashboardRepository(db)), autenticador,
-);
-
-// ── Ações de marketing ────────────────────────────────────────────────────────
-export const acaoController = new AcaoController(
-  new AcaoService(new AcaoRepository(db), new ParticipacaoRepository(db), farmaciaRepository),
-  autenticador,
 );
 
 // ── Campanhas (Meta Ads) ──────────────────────────────────────────────────────
