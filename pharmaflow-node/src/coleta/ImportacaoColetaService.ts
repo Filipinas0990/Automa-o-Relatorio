@@ -1,8 +1,7 @@
 import { calcularScore } from '../processor/score';
-import { AgregadorCanais } from '../farmacias/AgregadorCanais';
 import { JANELAS, somarDias, type Janela } from '../custo/calculo';
 import { RequisicaoInvalida } from '../compartilhado/erros';
-import type { Metricas } from '../types';
+import { metricas, porOrigem, somar } from './metricas';
 import type {
   ArquivoColeta, EmpresaSemVinculo, FarmaciaVinculada, GravadorDeColetas, ImportadorDeJanelas,
   LeitorDeVinculos, LinhaColeta, NovoCanal, ResumoImportacao,
@@ -10,9 +9,6 @@ import type {
 
 const chave = (tenant: string, companyId: number) => `${tenant}#${companyId}`;
 const arredondar = (n: number) => Math.round(n * 100) / 100;
-
-/** Totais de uma origem numa janela. */
-interface Totais { atendimentos: number; vendas: number; receita: number }
 
 /**
  * Transforma o arquivo agregado do engine-prod em coletas do painel: para
@@ -104,39 +100,6 @@ export class ImportacaoColetaService implements ImportadorDeJanelas {
       atingiuMetaMeta:      metaLeads(farmacia.metaLeadsMeta, mAtual.clientesFacebook),
     }, canais);
   }
-}
-
-/** Soma as linhas por origem crua (o arquivo pode repetir origem em páginas diferentes). */
-function porOrigem(linhas: LinhaColeta[]): Map<string, Totais> {
-  const m = new Map<string, Totais>();
-  for (const l of linhas) {
-    const t = m.get(l.origem) ?? { atendimentos: 0, vendas: 0, receita: 0 };
-    t.atendimentos += l.atendimentos;
-    t.vendas += l.vendas;
-    t.receita += l.receita;
-    m.set(l.origem, t);
-  }
-  return m;
-}
-
-function somar(lista: Totais[]): Totais {
-  return lista.reduce((s, t) => ({
-    atendimentos: s.atendimentos + t.atendimentos, vendas: s.vendas + t.vendas, receita: s.receita + t.receita,
-  }), { atendimentos: 0, vendas: 0, receita: 0 });
-}
-
-/** Entradas do score: atendimentos por canal padronizado (Google, Meta, Grupos) + totais. */
-function metricas(origens: Map<string, Totais>): Metricas {
-  const canal = (nome: string) => somar([...origens.entries()]
-    .filter(([origem]) => AgregadorCanais.nomePadrao(origem) === nome).map(([, t]) => t)).atendimentos;
-  const total = somar([...origens.values()]);
-  return {
-    clientesGoogle:       canal('Google'),
-    clientesFacebook:     canal('Meta'),
-    clientesGruposOferta: canal('Grupos'),
-    vendasRealizadas:     total.vendas,
-    receitaTotal:         total.receita,
-  };
 }
 
 const DATA = /^\d{4}-\d{2}-\d{2}$/;

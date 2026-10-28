@@ -2,6 +2,15 @@ import { sql } from 'drizzle-orm';
 import type { BancoDeDados, Linha } from '../compartilhado/tipos';
 import type { LinhaCanal } from './AgregadorCanais';
 
+/** Soma de uma origem de uma farmácia num intervalo da coleta diária. */
+export type LinhaDiariaSomada = {
+  farmacia_id:  number;
+  origem:       string;
+  atendimentos: number;
+  vendas:       number;
+  receita:      number;
+}
+
 /**
  * Leituras de desempenho das farmácias: ranking da última coleta, vendas por
  * canal e evolução semanal.
@@ -77,6 +86,42 @@ export class DesempenhoRepository {
       ORDER BY latest.farmacia_id, total_atendimentos DESC
     `);
     return rows;
+  }
+
+  /** Farmácias ativas do escopo, sem números — o período livre soma os dias à parte. */
+  async farmaciasDoEscopo(gestorId: string | null, fase: string | null): Promise<Linha[]> {
+    const faseSql = fase ? sql`AND f.fase = ${fase}` : sql``;
+    const { rows } = await this.db.execute(sql`
+      SELECT f.id AS farmacia_id, f.nome AS farmacia, f.nome_fachada, f.gestor_id, f.ativa, f.tem_chatbot,
+             f.fase, f.telefone, f.responsavel, f.cidade,
+             f.meta_vendas, f.meta_receita, f.meta_leads_google, f.meta_leads_meta, f.meta_ad_account_id
+      FROM farmacias f
+      WHERE f.ativa = TRUE ${this.doGestor(gestorId)} ${faseSql}
+    `);
+    return rows;
+  }
+
+  /** Soma da coleta dia a dia no intervalo, por farmácia e origem. */
+  async somaDiaria(inicio: string, fim: string, gestorId: string | null): Promise<LinhaDiariaSomada[]> {
+    const { rows } = await this.db.execute<LinhaDiariaSomada>(sql`
+      SELECT cd.farmacia_id, cd.origem,
+             SUM(cd.atendimentos)::int AS atendimentos,
+             SUM(cd.vendas)::int       AS vendas,
+             SUM(cd.receita)::float8   AS receita
+      FROM coleta_diaria cd
+      JOIN farmacias f ON f.id = cd.farmacia_id
+      WHERE cd.dia BETWEEN ${inicio} AND ${fim} AND f.ativa = TRUE ${this.doGestor(gestorId)}
+      GROUP BY cd.farmacia_id, cd.origem
+    `);
+    return rows;
+  }
+
+  /** Primeiro e último dia com coleta gravada (limites do seletor de período). */
+  async periodoDisponivel(): Promise<{ primeiro_dia: string | null; ultimo_dia: string | null }> {
+    const { rows } = await this.db.execute<{ primeiro_dia: string | null; ultimo_dia: string | null }>(sql`
+      SELECT MIN(dia)::text AS primeiro_dia, MAX(dia)::text AS ultimo_dia FROM coleta_diaria
+    `);
+    return rows[0] ?? { primeiro_dia: null, ultimo_dia: null };
   }
 
   async evolucaoSemanal(farmaciaId: number, dias: number): Promise<Linha[]> {

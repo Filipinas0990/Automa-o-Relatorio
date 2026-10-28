@@ -22,6 +22,11 @@ export class FarmaciaController extends Controller {
       return this.desempenho.listar(request.user, request.query as FiltrosDesempenho);
     });
 
+    // Primeiro e último dia com coleta — limites do seletor "mês fechado / de-até"
+    app.get('/api/farmacias/periodo-disponivel', { preHandler: autenticar }, async () => {
+      return this.desempenho.periodoDisponivel();
+    });
+
     app.get('/api/farmacias/:id/evolucao', { preHandler: autenticar }, async (request) => {
       const { dias } = request.query as { dias?: string };
       return this.desempenho.evolucao(request.user, this.idDaRota(request.params), dias);
