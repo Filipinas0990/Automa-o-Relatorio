@@ -4,7 +4,7 @@ import { JANELAS, somarDias, type Janela } from '../custo/calculo';
 import { RequisicaoInvalida } from '../compartilhado/erros';
 import type { Metricas } from '../types';
 import type {
-  ArquivoColeta, EmpresaSemVinculo, FarmaciaVinculada, GravadorDeColetas,
+  ArquivoColeta, EmpresaSemVinculo, FarmaciaVinculada, GravadorDeColetas, ImportadorDeJanelas,
   LeitorDeVinculos, LinhaColeta, NovoCanal, ResumoImportacao,
 } from './contratos';
 
@@ -20,7 +20,7 @@ interface Totais { atendimentos: number; vendas: number; receita: number }
  * período, os canais e o score de criticidade (comparando com o período
  * anterior de mesmo tamanho).
  */
-export class ImportacaoColetaService {
+export class ImportacaoColetaService implements ImportadorDeJanelas {
   constructor(
     private readonly vinculos: LeitorDeVinculos,
     private readonly gravador: GravadorDeColetas,

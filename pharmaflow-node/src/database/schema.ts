@@ -103,6 +103,19 @@ export const coletaCanais = pgTable('coleta_canais', {
   receitaVendas: numeric('receita_vendas', { precision: 15, scale: 2 }).default('0'),
 });
 
+/** Números de um dia, por origem (migration 0043). Qualquer período sai daqui. */
+export const coletaDiaria = pgTable('coleta_diaria', {
+  farmaciaId:   integer('farmacia_id').notNull().references(() => farmacias.id, { onDelete: 'cascade' }),
+  dia:          date('dia').notNull(),
+  origem:       varchar('origem', { length: 80 }).notNull(),
+  atendimentos: integer('atendimentos').default(0).notNull(),
+  vendas:       integer('vendas').default(0).notNull(),
+  receita:      numeric('receita', { precision: 15, scale: 2 }).default('0').notNull(),
+  atualizadoEm: timestamp('atualizado_em', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.farmaciaId, t.dia, t.origem] }),
+}));
+
 // ── Views (existem no banco — só mapeamos para usar com sql``) ────────────────
 
 export const vwRankingAtual = pgView('vw_ranking_atual', {
