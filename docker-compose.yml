@@ -1,0 +1,44 @@
+services:
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: farmacia_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-farmacia_monitor}
+      POSTGRES_USER: ${POSTGRES_USER:-farmacia}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-farmacia123}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./sql/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      # Publicado só no loopback do host — o Postgres NÃO fica exposto à internet.
+      # A API acessa pela rede interna do Docker (postgres:5432), não por esta porta.
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-farmacia} -d ${POSTGRES_DB:-farmacia_monitor}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: ./pharmaflow-node
+    container_name: farmacia_api
+    restart: unless-stopped
+    # Permite o container (rede bridge) alcançar serviços no host — ex.: o motor
+    # de disparo (campanhas) que roda em network_mode:host na porta 3000.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-farmacia}:${POSTGRES_PASSWORD:-farmacia123}@postgres:5432/${POSTGRES_DB:-farmacia_monitor}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:

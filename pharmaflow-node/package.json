@@ -1,0 +1,41 @@
+{
+  "name": "pharmaflow-node",
+  "version": "2.0.0",
+  "description": "PharmaFlow - Sistema de monitoramento de farmácias",
+  "main": "dist/api/index.js",
+  "scripts": {
+    "build": "node --max-old-space-size=2048 ./node_modules/typescript/bin/tsc --skipLibCheck",
+    "start": "node dist/api/index.js",
+    "dev": "ts-node src/api/index.ts",
+    "seed": "ts-node src/seed.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "importar-catalogo": "ts-node src/importar-catalogo.ts",
+    "importar-coleta": "ts-node src/importar-coleta.ts",
+    "senha-banco": "ts-node src/gerar-senha-banco.ts"
+  },
+  "dependencies": {
+    "@fastify/cors": "^9.0.1",
+    "@fastify/formbody": "^7.4.0",
+    "bcrypt": "^5.1.1",
+    "dotenv": "^16.4.5",
+    "drizzle-orm": "^0.31.2",
+    "fastify": "^4.28.1",
+    "googleapis": "^172.0.0",
+    "jsonwebtoken": "^9.0.2",
+    "openai": "^6.44.0",
+    "pg": "^8.11.5",
+    "pino": "^8.21.0",
+    "pino-pretty": "^11.2.1"
+  },
+  "devDependencies": {
+    "@types/bcrypt": "^5.0.2",
+    "@types/jsonwebtoken": "^9.0.6",
+    "@types/node": "^20.14.0",
+    "@types/pg": "^8.11.6",
+    "drizzle-kit": "^0.22.4",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.5.2",
+    "vitest": "^4.1.10"
+  }
+}

@@ -1,0 +1,44 @@
+# ── Credenciais — NUNCA commitar ──────────────────────────
+.env
+config/farmacias.json
+logs/
+
+# ── Python ────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# ── Playwright / Debug ────────────────────────────────────
+debug_*.png
+logs/
+
+# ── Banco local ───────────────────────────────────────────
+*.db
+*.sqlite3
+
+# ── Docker ────────────────────────────────────────────────
+postgres_data/
+
+# ── IDEs ──────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── Claude Code ───────────────────────────────────────────
+.claude/
+
+# ── OS ────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+node_modules
+
