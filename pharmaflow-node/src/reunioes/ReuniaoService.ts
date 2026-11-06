@@ -102,7 +102,14 @@ export class ReuniaoService {
     const mudancas: Partial<NovaReuniao> = {};
     if (d.titulo          !== undefined) mudancas.titulo         = d.titulo;
     if (d.descricao       !== undefined) mudancas.descricao      = d.descricao;
-    if (d.data_reuniao    !== undefined) mudancas.dataReuniao    = new Date(d.data_reuniao);
+    if (d.data_reuniao    !== undefined) {
+      mudancas.dataReuniao = new Date(d.data_reuniao);
+      // Reagendou: os avisos de WhatsApp valem para o novo horário
+      if (mudancas.dataReuniao.getTime() !== new Date(atual.dataReuniao).getTime()) {
+        mudancas.whatsappNotificadoEm = null;
+        mudancas.whatsappAviso5minEm  = null;
+      }
+    }
     if (d.duracao_minutos !== undefined) mudancas.duracaoMinutos = num(d.duracao_minutos);
     if (d.local           !== undefined) mudancas.local          = d.local;
     if (d.link_meet       !== undefined) mudancas.linkMeet       = d.link_meet;

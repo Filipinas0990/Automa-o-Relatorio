@@ -78,6 +78,66 @@ async function verificarENotificar(): Promise<void> {
   }
 }
 
+// ── Aviso 5 minutos antes ─────────────────────────────────────────────────────
+
+function montarAviso5min(params: { titulo: string; dataReuniao: Date }): string {
+  const { titulo, dataReuniao } = params;
+  const { hora } = formatarDataHoraBR(dataReuniao);
+
+  return [
+    'Olá! ⏰',
+    '',
+    `Nossa reunião começa em *5 minutos* (às ${hora}):`,
+    '',
+    `📋 *${titulo}*`,
+    '',
+    'Até já! 😊',
+  ].join('\n');
+}
+
+/** Conexão (tela Conexões) que envia o aviso de 5 minutos — casa pelo nome ou pela instância. */
+const CONEXAO_AVISO_5MIN = 'KAIO';
+
+async function instanciaDoAviso5min(): Promise<string | null> {
+  const alvo = CONEXAO_AVISO_5MIN.toLowerCase();
+  const configs = await whatsappRepository.listConfigs();
+  const config = configs.find(c =>
+    (c.nome ?? '').trim().toLowerCase() === alvo || c.instanceName.trim().toLowerCase() === alvo,
+  );
+  return config?.instanceName ?? null;
+}
+
+async function verificarEAvisar5min(): Promise<void> {
+  const reunioes = await whatsappRepository.buscarReunioesPara5min();
+  if (!reunioes.length) return;
+
+  // Sem a conexão KAIO não envia por outra: o aviso fica pendente e tenta no próximo minuto
+  const instancia = await instanciaDoAviso5min();
+  if (!instancia) {
+    logger.warn({ conexao: CONEXAO_AVISO_5MIN }, 'Conexão do aviso de 5 minutos não encontrada — aviso não enviado');
+    return;
+  }
+
+  logger.info({ total: reunioes.length }, 'Scheduler: reuniões começando em 5 minutos');
+
+  for (const row of reunioes) {
+    const id       = Number(row.id);
+    const telefone = String(row.telefone);
+
+    const mensagem = montarAviso5min({
+      titulo:      String(row.titulo),
+      dataReuniao: new Date(String(row.data_reuniao)),
+    });
+
+    const enviado = await whatsappService.enviarMensagem(telefone, mensagem, instancia);
+
+    if (enviado) {
+      await whatsappRepository.marcarAviso5minEnviado(id);
+      logger.info({ reuniaoId: id, telefone }, 'Aviso de 5 minutos enviado e registrado');
+    }
+  }
+}
+
 // ── Disparos agendados em grupos ──────────────────────────────────────────────
 
 /**
@@ -137,6 +197,10 @@ export function iniciarSchedulerWhatsApp(): void {
   setInterval(() => {
     verificarENotificar().catch(err =>
       logger.error({ err }, 'Erro no scheduler de notificações WhatsApp'),
+    );
+
+    verificarEAvisar5min().catch(err =>
+      logger.error({ err }, 'Erro no scheduler do aviso de 5 minutos'),
     );
 
     verificarDisparosAgendados().catch(err =>

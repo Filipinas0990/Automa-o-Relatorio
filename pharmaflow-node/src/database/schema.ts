@@ -175,6 +175,9 @@ export const reunioes = pgTable('reunioes', {
   // Rastreia envio da notificação WhatsApp (5h antes) — null = ainda não enviada
   whatsappNotificadoEm: timestamp('whatsapp_notificado_em', { withTimezone: true }),
 
+  // Rastreia o aviso "começa em 5 minutos" (migration 0044) — null = ainda não enviado
+  whatsappAviso5minEm:  timestamp('whatsapp_aviso_5min_em', { withTimezone: true }),
+
   criadoEm:       timestamp('criado_em',    { withTimezone: true }).defaultNow(),
   atualizadoEm:   timestamp('atualizado_em',{ withTimezone: true }).defaultNow(),
 });

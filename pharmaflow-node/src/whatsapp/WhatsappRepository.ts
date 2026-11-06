@@ -123,4 +123,42 @@ export class WhatsappRepository {
       .set({ whatsappNotificadoEm: new Date() })
       .where(eq(reunioes.id, reuniaoId));
   }
+
+  /**
+   * Reuniões que começam nos próximos 5 minutos e ainda não receberam o aviso.
+   * A janela vai de "agora" até +5min: o scheduler roda a cada minuto, então a
+   * reunião entra no primeiro tique depois de faltar 5 minutos. Reunião criada
+   * em cima da hora (faltando 3 min, por ex.) também recebe — ainda é útil.
+   */
+  async buscarReunioesPara5min() {
+    const agora     = new Date();
+    const limiteFim = new Date(agora.getTime() + 5 * 60_000);
+
+    const { rows } = await this.db.execute(sql`
+      SELECT
+        r.id,
+        r.titulo,
+        r.data_reuniao,
+        r.telefone
+      FROM reunioes r
+      WHERE r.status IN ('agendada', 'confirmada')
+        AND r.whatsapp_aviso_5min_em IS NULL
+        AND r.data_reuniao >  ${agora.toISOString()}::timestamptz
+        AND r.data_reuniao <= ${limiteFim.toISOString()}::timestamptz
+        AND r.telefone IS NOT NULL
+        AND r.telefone <> ''
+    `);
+    return rows as {
+      id:           unknown;
+      titulo:       unknown;
+      data_reuniao: unknown;
+      telefone:     unknown;
+    }[];
+  }
+
+  async marcarAviso5minEnviado(reuniaoId: number): Promise<void> {
+    await this.db.update(reunioes)
+      .set({ whatsappAviso5minEm: new Date() })
+      .where(eq(reunioes.id, reuniaoId));
+  }
 }

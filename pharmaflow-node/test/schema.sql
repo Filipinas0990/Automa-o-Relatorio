@@ -686,6 +686,7 @@ CREATE TABLE public.reunioes (
     google_event_id character varying(255),
     observacoes text,
     whatsapp_notificado_em timestamp with time zone,
+    whatsapp_aviso_5min_em timestamp with time zone,
     criado_em timestamp with time zone DEFAULT now(),
     atualizado_em timestamp with time zone DEFAULT now()
 );
