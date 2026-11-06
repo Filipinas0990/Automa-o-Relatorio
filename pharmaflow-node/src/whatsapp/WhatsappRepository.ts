@@ -139,16 +139,21 @@ export class WhatsappRepository {
         r.id,
         r.titulo,
         r.data_reuniao,
-        -- A tela de agendar não pede telefone: sem número na reunião, vale o
-        -- telefone da farmácia (o mesmo do botão "Abrir WhatsApp")
-        COALESCE(NULLIF(TRIM(r.telefone), ''), NULLIF(TRIM(f.telefone), '')) AS telefone
+        -- O campo "WhatsApp" da tela de agendar grava o número digitado como
+        -- link (https://wa.me/55DDDNUMERO) em link_meet; é dele que sai o número
+        COALESCE(
+          NULLIF(TRIM(r.telefone), ''),
+          substring(lower(r.link_meet) from 'wa\\.me/\\+?([0-9]+)')
+        ) AS telefone
       FROM reunioes r
-      JOIN farmacias f ON f.id = r.farmacia_id
       WHERE r.status IN ('agendada', 'confirmada')
         AND r.whatsapp_aviso_5min_em IS NULL
         AND r.data_reuniao >  ${agora.toISOString()}::timestamptz
         AND r.data_reuniao <= ${limiteFim.toISOString()}::timestamptz
-        AND COALESCE(NULLIF(TRIM(r.telefone), ''), NULLIF(TRIM(f.telefone), '')) IS NOT NULL
+        AND COALESCE(
+          NULLIF(TRIM(r.telefone), ''),
+          substring(lower(r.link_meet) from 'wa\\.me/\\+?([0-9]+)')
+        ) IS NOT NULL
     `);
     return rows as {
       id:           unknown;
