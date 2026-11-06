@@ -175,7 +175,7 @@ export const reunioes = pgTable('reunioes', {
   // Rastreia envio da notificação WhatsApp (5h antes) — null = ainda não enviada
   whatsappNotificadoEm: timestamp('whatsapp_notificado_em', { withTimezone: true }),
 
-  // Rastreia o aviso "começa em 5 minutos" (migration 0044) — null = ainda não enviado
+  // Rastreia o aviso "começa em 5 minutos" (migration 0045) — null = ainda não enviado
   whatsappAviso5minEm:  timestamp('whatsapp_aviso_5min_em', { withTimezone: true }),
 
   criadoEm:       timestamp('criado_em',    { withTimezone: true }).defaultNow(),
@@ -363,7 +363,7 @@ export const disparosGrupo = pgTable('disparos_grupo', {
   // campanha. false = acabaram os produtos, acabou a campanha (migration 0035).
   repetirProdutos: boolean('repetir_produtos').default(false).notNull(),
   // false (padrão) = nada sai em sábado/domingo. true = o gestor liberou o fim
-  // de semana ao criar esta campanha (migration 0044).
+  // de semana ao criar esta campanha (migration 0045).
   permitirFimDeSemana: boolean('permitir_fim_de_semana').default(false).notNull(),
   // JSON: [{ id, nome }] — quais produtos do catálogo geraram esses criativos.
   // Alimenta o filtro "Recentes" do passo 3 (migration 0029). Null nos antigos.

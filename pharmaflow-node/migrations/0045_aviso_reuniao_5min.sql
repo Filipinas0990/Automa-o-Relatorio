@@ -1,4 +1,4 @@
--- Migration 0044: Aviso WhatsApp 5 minutos antes da reunião
+-- Migration 0045: Aviso WhatsApp 5 minutos antes da reunião
 -- Coluna própria (separada do lembrete de 5h) para não enviar o aviso duas vezes.
 -- null = aviso ainda não enviado
 
