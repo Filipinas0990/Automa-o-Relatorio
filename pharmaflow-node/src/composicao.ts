@@ -84,6 +84,7 @@ import { OfertaPublicaController } from './ofertas/OfertaPublicaController';
 import { OfertaController } from './ofertas/OfertaController';
 import { ProdutoClienteRepository } from './ofertas/ProdutoClienteRepository';
 import { ProdutoClienteService } from './ofertas/ProdutoClienteService';
+import { AvisoN8n, SemAviso } from './ofertas/AvisoN8n';
 
 const segredoJwt  = lerSegredoJwt();
 const hashSenha   = new HashSenha();
@@ -234,6 +235,11 @@ const linkOfertaService = new LinkOfertaService(
 const produtoClienteRepository = new ProdutoClienteRepository(db);
 const solicitacaoService = new SolicitacaoService(
   solicitacaoRepository, farmaciaRepository, catalogo, produtoClienteRepository,
+  // Lista recebida pelo link → webhook do n8n → item no Monday do gestor.
+  // Sem a URL no .env, a integração fica desligada.
+  process.env.N8N_WEBHOOK_OFERTAS_URL
+    ? new AvisoN8n(process.env.N8N_WEBHOOK_OFERTAS_URL, process.env.N8N_WEBHOOK_OFERTAS_SEGREDO || undefined)
+    : new SemAviso(),
 );
 const produtoClienteService = new ProdutoClienteService(
   produtoClienteRepository, farmaciaRepository, produtoClienteRepository,

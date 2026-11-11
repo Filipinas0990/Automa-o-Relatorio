@@ -1,9 +1,10 @@
-import type { Gestor, SolicitacaoOferta } from '../database/schema';
+import type { Farmacia, Gestor, SolicitacaoOferta } from '../database/schema';
 import { NaoEncontrado, Proibido, RequisicaoInvalida } from '../compartilhado/erros';
 import { logger } from '../logger';
 import type { FarmaciaRepository } from '../farmacias/FarmaciaRepository';
 import type { LinkAberto } from './LinkOfertaService';
 import { ListaDoDono } from './ListaDoDono';
+import type { ProdutoSolicitado } from './ListaDoDono';
 import type { SolicitacaoRepository } from './SolicitacaoRepository';
 
 /** O que a parte de ofertas precisa saber do catálogo. */
@@ -14,6 +15,23 @@ export interface ProdutosDoCatalogo {
 /** Os produtos que a farmácia mandou para o espaço dela (ver ProdutoClienteService). */
 export interface ProdutosDoEspaco {
   listar(farmaciaId: number): Promise<Array<{ id: number; nome: string }>>;
+}
+
+/** O que sai para fora quando um cliente envia a lista pelo link (ver AvisoN8n). */
+export interface ListaRecebida {
+  solicitacao: SolicitacaoOferta;
+  gestor:      Pick<Gestor, 'id' | 'nome' | 'email'>;
+  farmacia:    Farmacia;
+  produtos:    ProdutoSolicitado[];
+}
+
+/**
+ * Avisa um sistema externo (hoje, o webhook do n8n que cria o item no Monday)
+ * que chegou uma lista nova. Contrato: NUNCA rejeita — falha de quem recebe o
+ * aviso é registrada no log e não pode impedir o cliente de enviar a lista.
+ */
+export interface AvisoDeListaRecebida {
+  avisar(lista: ListaRecebida): Promise<void>;
 }
 
 export interface EnvioDoDono {
@@ -32,6 +50,7 @@ export class SolicitacaoService {
     private readonly farmacias: FarmaciaRepository,
     private readonly catalogo: ProdutosDoCatalogo,
     private readonly espaco: ProdutosDoEspaco,
+    private readonly aviso: AvisoDeListaRecebida,
   ) {}
 
   /**
@@ -70,7 +89,24 @@ export class SolicitacaoService {
       { solicitacaoId: solicitacao.id, gestorId: gestor.id, farmaciaId, total: produtos.length },
       'Nova solicitação de oferta recebida pelo link público',
     );
+
+    // Sem await: o cliente não espera o n8n/Monday responder (e o proxy da
+    // Vercel corta a resposta que demora). A lista já está salva aqui.
+    void this.avisarSemTravar(solicitacao, link, farmaciaId, produtos);
     return solicitacao;
+  }
+
+  private async avisarSemTravar(
+    solicitacao: SolicitacaoOferta, link: LinkAberto, farmaciaId: number, produtos: ProdutoSolicitado[],
+  ): Promise<void> {
+    try {
+      const farmacia = link.farmacia ?? await this.farmacias.buscarPorId(farmaciaId);
+      if (!farmacia) return;
+      await this.aviso.avisar({ solicitacao, gestor: link.gestor, farmacia, produtos });
+    } catch (err) {
+      // O contrato diz que o aviso não rejeita; isto cobre a busca da farmácia.
+      logger.error({ err, solicitacaoId: solicitacao.id }, 'Falha ao preparar o aviso da lista recebida');
+    }
   }
 
   listar(quem: Gestor) {

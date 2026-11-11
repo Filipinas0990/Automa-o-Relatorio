@@ -4,7 +4,8 @@ import type { LinkOferta } from '../database/schema';
 import type { BancoDeDados } from '../compartilhado/tipos';
 
 export interface LinkResolvido {
-  gestor:     { id: number; nome: string; isAdmin: boolean };
+  /** `email` é só para uso interno (aviso ao n8n); a rota pública devolve apenas o nome. */
+  gestor:     { id: number; nome: string; email: string; isAdmin: boolean };
   /** null = link legado, em que o dono ainda escolhe a farmácia numa lista. */
   farmaciaId: number | null;
 }
@@ -44,6 +45,7 @@ export class LinkOfertaRepository {
       .select({
         id:         gestoresTrafego.id,
         nome:       gestoresTrafego.nome,
+        email:      gestoresTrafego.email,
         isAdmin:    gestoresTrafego.isAdmin,
         farmaciaId: linksOferta.farmaciaId,
       })
@@ -56,6 +58,6 @@ export class LinkOfertaRepository {
       ));
 
     if (!row) return null;
-    return { gestor: { id: row.id, nome: row.nome, isAdmin: row.isAdmin }, farmaciaId: row.farmaciaId };
+    return { gestor: { id: row.id, nome: row.nome, email: row.email, isAdmin: row.isAdmin }, farmaciaId: row.farmaciaId };
   }
 }
