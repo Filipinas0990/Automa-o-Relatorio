@@ -1,6 +1,7 @@
 import { logger } from '../logger';
 import { ErroAplicacao, RequisicaoInvalida, NaoEncontrado, Proibido, Conflito, FalhaExterna, Indisponivel } from '../compartilhado/erros';
 import type { DisparoGrupo, DisparoGrupoLog } from '../database/schema';
+import { gestorDoEscopo, type QuemPede } from '../compartilhado/Escopo';
 import type { ClienteEvolution } from '../whatsapp/ClienteEvolution';
 import type { WhatsappRepository } from '../whatsapp/WhatsappRepository';
 import type { SolicitacaoRepository } from '../ofertas/SolicitacaoRepository';
@@ -476,8 +477,8 @@ export class DisparoService {
   }
 
   /** Para cada grupo, as farmácias com campanha ainda rodando nele (ver DisparoRepository.donosDeGrupos). */
-  async donosDeGrupos(gestorId: number, jids: string[]) {
-    return this.disparos.donosDeGrupos(gestorId, jids);
+  async donosDeGrupos(quem: QuemPede, jids: string[]) {
+    return this.disparos.donosDeGrupos(gestorDoEscopo(quem), jids);
   }
 
   // ── Envio ────────────────────────────────────────────────────────────────
@@ -731,7 +732,8 @@ export class DisparoService {
    * Reúne as validações que antes moravam na rota (ver histórico de
    * disparos/routes.ts) — inclusive a trava de grupo de outro cliente.
    */
-  async criar(gestorId: number, b: CriarDisparoBody): Promise<ResultadoCriacaoDisparo> {
+  async criar(quem: QuemPede, b: CriarDisparoBody): Promise<ResultadoCriacaoDisparo> {
+    const gestorId = quem.id;
     const midias = Array.isArray(b.midias) ? b.midias.filter((m) => m?.b64) : [];
 
     // Só id e nome: o corpo do disparo já carrega dezenas de MB de imagem,
@@ -800,11 +802,12 @@ export class DisparoService {
     }
 
     // A solicitação precisa ser do próprio gestor — senão dava para marcar
-    // como atendida o pedido de um cliente de outro gestor.
+    // como atendida o pedido de um cliente de outro gestor. O admin alcança
+    // todas: ele vê o pedido de qualquer gestor na carteira e pode atendê-lo.
     let solicitacaoId: number | null = null;
     if (b.solicitacao_id) {
       const s = await this.solicitacoes.buscarPorId(Number(b.solicitacao_id));
-      if (s && s.gestorId === gestorId) solicitacaoId = s.id;
+      if (s && (quem.isAdmin || s.gestorId === gestorId)) solicitacaoId = s.id;
     }
 
     // Horários fixos do dia. Guardamos só com 2 ou mais: com um só, quem
@@ -858,7 +861,8 @@ export class DisparoService {
     const farmaciaEscolhida = b.farmacia_id ? Number(b.farmacia_id) : null;
     if (farmaciaEscolhida && !b.confirmar_grupo_de_outro_cliente) {
       const jids  = b.grupos.map((g) => g.jid).filter(Boolean);
-      const donos = await this.disparos.donosDeGrupos(gestorId, jids);
+      // Admin confere contra as campanhas de TODOS os gestores.
+      const donos = await this.disparos.donosDeGrupos(gestorDoEscopo(quem), jids);
       const alheios = donos.filter((d) => d.farmaciaId !== farmaciaEscolhida);
 
       if (alheios.length > 0) {
@@ -943,33 +947,36 @@ export class DisparoService {
 
   // ── Consulta e cancelamento ──────────────────────────────────────────────
 
-  async listar(gestorId: number): Promise<DisparoGrupo[]> {
-    return this.disparos.listarDisparos(gestorId);
+  /** Admin vê os disparos de TODOS os gestores. */
+  async listar(quem: QuemPede) {
+    return this.disparos.listarDisparos(gestorDoEscopo(quem));
   }
 
-  async ultimosProdutos(gestorId: number, farmaciaId: number) {
-    return this.disparos.ultimosProdutosDaFarmacia(gestorId, farmaciaId);
+  async ultimosProdutos(quem: QuemPede, farmaciaId: number) {
+    return this.disparos.ultimosProdutosDaFarmacia(gestorDoEscopo(quem), farmaciaId);
   }
 
-  private async exigirDoGestor(gestorId: number, id: number): Promise<DisparoGrupo> {
+  /** O disparo é de quem pede — ou quem pede é admin, que alcança todos. */
+  private async exigirDoGestor(quem: QuemPede, id: number): Promise<DisparoGrupo> {
     const disparo = await this.disparos.getDisparo(id);
     if (!disparo) throw new NaoEncontrado('Disparo não encontrado');
-    if (disparo.gestorId !== gestorId) throw new Proibido('Este disparo não pertence a você');
+    if (!quem.isAdmin && disparo.gestorId !== quem.id) throw new Proibido('Este disparo não pertence a você');
     return disparo;
   }
 
-  async detalhar(gestorId: number, id: number): Promise<DisparoGrupo> {
-    return this.exigirDoGestor(gestorId, id);
+  async detalhar(quem: QuemPede, id: number): Promise<DisparoGrupo & { gestorNome: string | null }> {
+    const disparo = await this.exigirDoGestor(quem, id);
+    return { ...disparo, gestorNome: await this.disparos.nomeDoGestor(disparo.gestorId) };
   }
 
-  async logs(gestorId: number, id: number): Promise<DisparoGrupoLog[]> {
-    const disparo = await this.exigirDoGestor(gestorId, id);
+  async logs(quem: QuemPede, id: number): Promise<DisparoGrupoLog[]> {
+    const disparo = await this.exigirDoGestor(quem, id);
     return this.disparos.logsDoDisparo(disparo.id);
   }
 
   /** Cancela um agendamento. Devolve o pedido para a fila quando não sobra campanha viva. */
-  async cancelar(gestorId: number, id: number): Promise<void> {
-    const disparo = await this.exigirDoGestor(gestorId, id);
+  async cancelar(quem: QuemPede, id: number): Promise<void> {
+    const disparo = await this.exigirDoGestor(quem, id);
 
     await this.disparos.atualizarDisparo(disparo.id, { status: 'cancelado', proximoEnvio: null });
 

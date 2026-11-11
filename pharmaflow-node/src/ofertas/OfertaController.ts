@@ -35,6 +35,8 @@ export class OfertaController extends Controller {
         id:          s.id,
         farmacia_id: s.farmaciaId,
         farmacia:    s.farmacia,
+        gestor_id:   s.gestorId,
+        gestor:      s.gestorNome,
         produtos:    ListaDoDono.ler(s.produtosJson),
         enviado_por: s.enviadoPor,
         status:      s.status,
@@ -61,6 +63,7 @@ export class OfertaController extends Controller {
         respondeu:        Boolean(pendente),
         solicitacao: pendente ? {
           id:          pendente.id,
+          gestor:      pendente.gestorNome,
           produtos:    ListaDoDono.ler(pendente.produtosJson),
           enviado_por: pendente.enviadoPor,
           criado_em:   pendente.criadoEm,
@@ -69,6 +72,7 @@ export class OfertaController extends Controller {
         // que a linha tira o que mostrar.
         ultima_solicitacao: ultima ? {
           id:          ultima.id,
+          gestor:      ultima.gestorNome,
           produtos:    ListaDoDono.ler(ultima.produtosJson),
           enviado_por: ultima.enviadoPor,
           status:      ultima.status,
@@ -77,6 +81,7 @@ export class OfertaController extends Controller {
         } : null,
         campanha: campanha ? {
           id:            campanha.id,
+          gestor:        campanha.gestorNome,
           status:        campanha.status,
           agendado_para: campanha.agendadoPara,
           proximo_envio: campanha.proximoEnvio,

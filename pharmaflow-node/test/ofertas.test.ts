@@ -161,6 +161,32 @@ describe('Isolamento entre gestores', () => {
     expect((await api('GET', '/api/ofertas/pendentes', { token: b.token })).body.total).toBe(0);
   });
 
+  it('o admin vê as listas que chegaram para TODOS os gestores, com o nome do gestor', async () => {
+    const admin = await criarGestor({ isAdmin: true });
+    const a = await criarGestor({ nome: 'Ana' });
+    const b = await criarGestor({ nome: 'Bruno' });
+    const fa = await criarFarmacia(a.id);
+    const fb = await criarFarmacia(b.id);
+    await criarSolicitacao(a.id, fa.id);
+    await criarSolicitacao(b.id, fb.id);
+
+    const lista = await api('GET', '/api/ofertas/solicitacoes', { token: admin.token });
+    expect(lista.body).toHaveLength(2);
+    expect(lista.body.map((s: { gestor: string }) => s.gestor).sort()).toEqual(['Ana', 'Bruno']);
+
+    expect((await api('GET', '/api/ofertas/pendentes', { token: admin.token })).body.total).toBe(2);
+
+    // Na carteira do admin, a farmácia da Ana aparece como "respondeu"
+    const carteira = await api('GET', '/api/ofertas/carteira', { token: admin.token });
+    const linha = carteira.body.find((c: { farmacia_id: number }) => c.farmacia_id === fa.id);
+    expect(linha.respondeu).toBe(true);
+    expect(linha.solicitacao.gestor).toBe('Ana');
+
+    // E a última escolha do cliente também chega para o admin
+    const ultima = await api('GET', `/api/ofertas/ultima-escolha/${fa.id}`, { token: admin.token });
+    expect(ultima.body).not.toBeNull();
+  });
+
   it('exige autenticação nas rotas do gestor', async () => {
     expect((await api('GET', '/api/ofertas/solicitacoes')).status).toBe(401);
     expect((await api('GET', '/api/ofertas/carteira')).status).toBe(401);

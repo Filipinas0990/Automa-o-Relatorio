@@ -1,4 +1,5 @@
 import type { Farmacia, Gestor } from '../database/schema';
+import { gestorDoEscopo } from '../compartilhado/Escopo';
 import type { FarmaciaRepository } from '../farmacias/FarmaciaRepository';
 import type { LinkOfertaService } from './LinkOfertaService';
 import type { SolicitacaoComFarmacia, SolicitacaoRepository } from './SolicitacaoRepository';
@@ -10,11 +11,13 @@ export interface CampanhaResumo {
   proximoEnvio: Date | null;
   ultimoEnvio:  Date | null;
   criadoEm:     Date | null;
+  /** Quem programou — o admin vê campanha de todos os gestores. */
+  gestorNome:   string | null;
 }
 
 /** O que a carteira precisa saber dos disparos. */
 export interface CampanhasDosClientes {
-  ultimaCampanhaPorFarmacia(gestorId: number): Promise<Map<number, CampanhaResumo>>;
+  ultimaCampanhaPorFarmacia(gestorId: number | null): Promise<Map<number, CampanhaResumo>>;
 }
 
 export interface LinhaCarteira {
@@ -47,14 +50,17 @@ export class CarteiraService {
   ) {}
 
   async doGestor(quem: Gestor): Promise<LinhaCarteira[]> {
-    // Admin vê todas — senão o pedido que chegou pelo link dele ficaria órfão.
+    // Admin vê TUDO: todas as farmácias, as listas que chegaram para qualquer
+    // gestor e a campanha que qualquer gestor programou. O link continua o do
+    // próprio admin — é ele quem manda para o cliente.
+    const escopo = gestorDoEscopo(quem);
     const [lista, solicitacoes] = await Promise.all([
-      this.farmacias.listarAtivas(quem.isAdmin ? null : quem.id),
-      this.solicitacoes.listarDoGestor(quem.id),
+      this.farmacias.listarAtivas(escopo),
+      this.solicitacoes.listarDoGestor(escopo),
     ]);
     const [links, campanhas] = await Promise.all([
       this.links.daCarteira(quem.id, lista.map((f) => f.id)),
-      this.campanhas.ultimaCampanhaPorFarmacia(quem.id),
+      this.campanhas.ultimaCampanhaPorFarmacia(escopo),
     ]);
 
     return lista.map((farmacia) => {

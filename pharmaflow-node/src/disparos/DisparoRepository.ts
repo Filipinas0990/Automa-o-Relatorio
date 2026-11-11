@@ -1,7 +1,7 @@
 import { and, eq, lte, desc, sql, notInArray } from 'drizzle-orm';
 import {
   gestorWhatsapp, disparosGrupo, disparosGrupoLog, gruposCache, gruposCacheSync,
-  horariosDisparo, farmacias,
+  horariosDisparo, farmacias, gestoresTrafego,
 } from '../database/schema';
 import type {
   GestorWhatsapp, DisparoGrupo, GrupoCache, HorarioDisparo,
@@ -80,14 +80,14 @@ export class DisparoRepository {
    * relevante quanto o que já foi.
    */
   async ultimosProdutosDaFarmacia(
-    gestorId:   number,
+    gestorId:   number | null,
     farmaciaId: number,
   ): Promise<{ produtosJson: string; criadoEm: Date | null } | null> {
     const [row] = await this.db
       .select({ produtosJson: disparosGrupo.produtosJson, criadoEm: disparosGrupo.criadoEm })
       .from(disparosGrupo)
       .where(and(
-        eq(disparosGrupo.gestorId, gestorId),
+        gestorId === null ? undefined : eq(disparosGrupo.gestorId, gestorId),
         eq(disparosGrupo.farmaciaId, farmaciaId),
         sql`${disparosGrupo.produtosJson} IS NOT NULL`,
         sql`${disparosGrupo.status} <> 'cancelado'`,
@@ -105,13 +105,14 @@ export class DisparoRepository {
    * pedido dele. Cancelada não conta — não vai ao ar, e o pedido volta para a
    * fila. `DISTINCT ON` para não trazer o histórico inteiro e reduzir no Node.
    */
-  async ultimaCampanhaPorFarmacia(gestorId: number): Promise<Map<number, {
+  async ultimaCampanhaPorFarmacia(gestorId: number | null): Promise<Map<number, {
     id:           number;
     status:       string;
     agendadoPara: Date | null;
     proximoEnvio: Date | null;
     ultimoEnvio:  Date | null;
     criadoEm:     Date | null;
+    gestorNome:   string | null;
   }>> {
     const resultado = await this.db.execute<{
       farmacia_id:   number;
@@ -121,12 +122,15 @@ export class DisparoRepository {
       proximo_envio: string | null;
       ultimo_envio:  string | null;
       criado_em:     string | null;
+      gestor_nome:   string | null;
     }>(sql`
       SELECT DISTINCT ON (d.farmacia_id)
              d.farmacia_id, d.id, d.status,
-             d.agendado_para, d.proximo_envio, d.ultimo_envio, d.criado_em
+             d.agendado_para, d.proximo_envio, d.ultimo_envio, d.criado_em,
+             g.nome AS gestor_nome
       FROM ${disparosGrupo} d
-      WHERE d.gestor_id = ${gestorId}
+      LEFT JOIN ${gestoresTrafego} g ON g.id = d.gestor_id
+      WHERE ${gestorId === null ? sql`TRUE` : sql`d.gestor_id = ${gestorId}`}
         AND d.farmacia_id IS NOT NULL
         AND d.status <> 'cancelado'
       ORDER BY d.farmacia_id, d.criado_em DESC
@@ -141,6 +145,7 @@ export class DisparoRepository {
       proximoEnvio: data(r.proximo_envio),
       ultimoEnvio:  data(r.ultimo_envio),
       criadoEm:     data(r.criado_em),
+      gestorNome:   r.gestor_nome,
     }]));
   }
 
@@ -183,7 +188,7 @@ export class DisparoRepository {
    * encerrado.
    */
   async donosDeGrupos(
-    gestorId: number,
+    gestorId: number | null,
     jids:     string[],
   ): Promise<{ jid: string; farmaciaId: number; nome: string; nomeFachada: string | null }[]> {
     if (jids.length === 0) return [];
@@ -200,7 +205,7 @@ export class DisparoRepository {
       FROM ${disparosGrupo} d
       JOIN ${farmacias} f ON f.id = d.farmacia_id
       CROSS JOIN LATERAL jsonb_array_elements(d.grupos_json::jsonb) el
-      WHERE d.gestor_id = ${gestorId}
+      WHERE ${gestorId === null ? sql`TRUE` : sql`d.gestor_id = ${gestorId}`}
         AND d.status IN ('agendado', 'enviando')
         AND (d.repetir_ate IS NULL OR d.repetir_ate > now())
         AND el->>'jid' IN (${lista})
@@ -220,12 +225,47 @@ export class DisparoRepository {
     return row ?? null;
   }
 
-  /** Disparos do gestor, mais recentes primeiro. */
-  async listarDisparos(gestorId: number): Promise<DisparoGrupo[]> {
-    return this.db.select().from(disparosGrupo)
-      .where(eq(disparosGrupo.gestorId, gestorId))
+  /**
+   * Disparos do gestor, mais recentes primeiro, com QUEM programou.
+   * `gestorId` null = de todos os gestores (admin).
+   *
+   * NÃO traz `midias_json` (as imagens em base64, dezenas de MB por disparo):
+   * a lista só precisa da contagem, que o Postgres calcula.
+   */
+  async listarDisparos(gestorId: number | null) {
+    return this.db
+      .select({
+        id:                  disparosGrupo.id,
+        gestorId:            disparosGrupo.gestorId,
+        gestorNome:          gestoresTrafego.nome,
+        titulo:              disparosGrupo.titulo,
+        mensagem:            disparosGrupo.mensagem,
+        farmaciaId:          disparosGrupo.farmaciaId,
+        gruposJson:          disparosGrupo.gruposJson,
+        totalMidias:         sql<number>`COALESCE(json_array_length(${disparosGrupo.midiasJson}::json), 0)::int`,
+        quando:              disparosGrupo.quando,
+        repetir:             disparosGrupo.repetir,
+        status:              disparosGrupo.status,
+        agendadoPara:        disparosGrupo.agendadoPara,
+        proximoEnvio:        disparosGrupo.proximoEnvio,
+        repetirAte:          disparosGrupo.repetirAte,
+        repetirProdutos:     disparosGrupo.repetirProdutos,
+        permitirFimDeSemana: disparosGrupo.permitirFimDeSemana,
+        ultimoEnvio:         disparosGrupo.ultimoEnvio,
+        criadoEm:            disparosGrupo.criadoEm,
+      })
+      .from(disparosGrupo)
+      .leftJoin(gestoresTrafego, eq(gestoresTrafego.id, disparosGrupo.gestorId))
+      .where(gestorId === null ? undefined : eq(disparosGrupo.gestorId, gestorId))
       .orderBy(desc(disparosGrupo.criadoEm))
-      .limit(100);
+      .limit(gestorId === null ? 300 : 100);
+  }
+
+  /** Nome do gestor — o detalhe do disparo mostra quem programou. */
+  async nomeDoGestor(gestorId: number): Promise<string | null> {
+    const [row] = await this.db.select({ nome: gestoresTrafego.nome })
+      .from(gestoresTrafego).where(eq(gestoresTrafego.id, gestorId));
+    return row?.nome ?? null;
   }
 
   /** Agendados cuja hora já chegou — usado pelo scheduler. */

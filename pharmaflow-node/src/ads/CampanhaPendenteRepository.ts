@@ -66,12 +66,12 @@ export class CampanhaPendenteRepository {
     return row ?? null;
   }
 
-  /** Lista campanhas PUBLICADAS da semana atual das farmácias do gestor */
-  async getCampanhasPorGestor(gestorId: number) {
+  /** Lista campanhas PUBLICADAS da semana atual das farmácias do gestor (null = todas, admin) */
+  async getCampanhasPorGestor(gestorId: number | null) {
     const farms = await this.db
       .select({ id: farmacias.id, nome: farmacias.nome })
       .from(farmacias)
-      .where(eq(farmacias.gestorId, gestorId));
+      .where(gestorId === null ? undefined : eq(farmacias.gestorId, gestorId));
 
     if (farms.length === 0) return [];
 

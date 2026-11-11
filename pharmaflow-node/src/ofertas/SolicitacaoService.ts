@@ -1,6 +1,7 @@
 import type { Farmacia, Gestor, SolicitacaoOferta } from '../database/schema';
 import { NaoEncontrado, Proibido, RequisicaoInvalida } from '../compartilhado/erros';
 import { logger } from '../logger';
+import { gestorDoEscopo } from '../compartilhado/Escopo';
 import type { FarmaciaRepository } from '../farmacias/FarmaciaRepository';
 import type { LinkAberto } from './LinkOfertaService';
 import { ListaDoDono } from './ListaDoDono';
@@ -109,14 +110,15 @@ export class SolicitacaoService {
     }
   }
 
+  /** Admin vê as listas que chegaram para TODOS os gestores. */
   listar(quem: Gestor) {
-    return this.solicitacoes.listarDoGestor(quem.id);
+    return this.solicitacoes.listarDoGestor(gestorDoEscopo(quem));
   }
 
-  /** O que este cliente escolheu da última vez pelo link deste gestor. */
+  /** O que este cliente escolheu da última vez pelo link deste gestor (admin: de qualquer um). */
   async ultimaEscolha(quem: Gestor, farmaciaId: number): Promise<SolicitacaoOferta | null> {
     if (!Number.isFinite(farmaciaId)) throw new RequisicaoInvalida('Farmácia inválida');
-    return this.solicitacoes.ultimaDaFarmacia(quem.id, farmaciaId);
+    return this.solicitacoes.ultimaDaFarmacia(gestorDoEscopo(quem), farmaciaId);
   }
 
   /** Admin alcança todas — a carteira dele também lista todas as farmácias. */
@@ -130,7 +132,7 @@ export class SolicitacaoService {
 
   /** Total para o badge do menu. */
   pendentes(quem: Gestor): Promise<number> {
-    return this.solicitacoes.contarPendentes(quem.id);
+    return this.solicitacoes.contarPendentes(gestorDoEscopo(quem));
   }
 
   private async farmaciaEscolhida(link: LinkAberto, bruto: unknown): Promise<number> {

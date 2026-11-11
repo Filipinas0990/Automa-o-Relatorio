@@ -60,7 +60,7 @@ export class AdsController extends Controller {
      * Lista todas as campanhas das farmácias do gestor logado.
      */
     app.get('/api/ads/campanhas', comAuth, async (req, reply) => {
-      return reply.send(await this.service.getCampanhasDoGestor(req.user.id));
+      return reply.send(await this.service.getCampanhasDoGestor(req.user));
     });
 
     /**

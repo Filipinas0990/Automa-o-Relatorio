@@ -1,5 +1,5 @@
 import { and, eq, desc, sql } from 'drizzle-orm';
-import { solicitacoesOferta, farmacias } from '../database/schema';
+import { solicitacoesOferta, farmacias, gestoresTrafego } from '../database/schema';
 import type { SolicitacaoOferta } from '../database/schema';
 import type { BancoDeDados } from '../compartilhado/tipos';
 
@@ -24,13 +24,18 @@ export class SolicitacaoRepository {
     return row ?? null;
   }
 
-  /** Solicitações do gestor, mais recentes primeiro (até 200), com o nome da farmácia. */
-  listarDoGestor(gestorId: number) {
+  /**
+   * Solicitações do gestor, mais recentes primeiro, com o nome da farmácia e
+   * de QUEM recebeu a lista. `gestorId` null = todos os gestores (admin).
+   */
+  listarDoGestor(gestorId: number | null) {
     return this.db
       .select({
         id:           solicitacoesOferta.id,
         farmaciaId:   solicitacoesOferta.farmaciaId,
         farmacia:     farmacias.nome,
+        gestorId:     solicitacoesOferta.gestorId,
+        gestorNome:   gestoresTrafego.nome,
         produtosJson: solicitacoesOferta.produtosJson,
         enviadoPor:   solicitacoesOferta.enviadoPor,
         status:       solicitacoesOferta.status,
@@ -39,21 +44,22 @@ export class SolicitacaoRepository {
       })
       .from(solicitacoesOferta)
       .innerJoin(farmacias, eq(farmacias.id, solicitacoesOferta.farmaciaId))
-      .where(eq(solicitacoesOferta.gestorId, gestorId))
+      .innerJoin(gestoresTrafego, eq(gestoresTrafego.id, solicitacoesOferta.gestorId))
+      .where(gestorId === null ? undefined : eq(solicitacoesOferta.gestorId, gestorId))
       .orderBy(desc(solicitacoesOferta.criadoEm))
-      .limit(200);
+      .limit(gestorId === null ? 500 : 200);
   }
 
   /**
    * A última lista que este cliente mandou pelo link deste gestor — em
    * qualquer status, menos 'descartada' (lista excluída não volta a
    * pré-marcar o passo 3). Um gestor não enxerga o que o cliente mandou pelo
-   * link de outro.
+   * link de outro. `gestorId` null = de qualquer gestor (admin).
    */
-  async ultimaDaFarmacia(gestorId: number, farmaciaId: number): Promise<SolicitacaoOferta | null> {
+  async ultimaDaFarmacia(gestorId: number | null, farmaciaId: number): Promise<SolicitacaoOferta | null> {
     const [row] = await this.db.select().from(solicitacoesOferta)
       .where(and(
-        eq(solicitacoesOferta.gestorId, gestorId),
+        gestorId === null ? undefined : eq(solicitacoesOferta.gestorId, gestorId),
         eq(solicitacoesOferta.farmaciaId, farmaciaId),
         sql`${solicitacoesOferta.status} <> 'descartada'`,
       ))
@@ -69,11 +75,15 @@ export class SolicitacaoRepository {
       .where(eq(solicitacoesOferta.id, id));
   }
 
-  async contarPendentes(gestorId: number): Promise<number> {
+  /** `gestorId` null = pendentes de todos os gestores (badge do admin). */
+  async contarPendentes(gestorId: number | null): Promise<number> {
     const [row] = await this.db
       .select({ total: sql<number>`count(*)::int` })
       .from(solicitacoesOferta)
-      .where(and(eq(solicitacoesOferta.gestorId, gestorId), eq(solicitacoesOferta.status, 'pendente')));
+      .where(and(
+        gestorId === null ? undefined : eq(solicitacoesOferta.gestorId, gestorId),
+        eq(solicitacoesOferta.status, 'pendente'),
+      ));
     return row?.total ?? 0;
   }
 }

@@ -2,6 +2,7 @@ import { uploadImagem, criarAdCreative } from '../meta/criativo';
 import { criarCampanhaCompleta } from '../meta/campanha';
 import { listarContasDeAnuncio, type ContaAnuncio } from '../meta/client';
 import { logger } from '../logger';
+import { gestorDoEscopo, type QuemPede } from '../compartilhado/Escopo';
 import type { FarmaciaRepository } from '../farmacias/FarmaciaRepository';
 import type { GestorRepository } from '../gestores/GestorRepository';
 import type { InterpretadorIA, HistoricoMensagem } from '../ai/InterpretadorIA';
@@ -448,7 +449,8 @@ export class AdsService {
   }
 
   /** Lista as campanhas de todas as farmácias vinculadas ao gestor */
-  async getCampanhasDoGestor(gestorId: number) {
-    return this.campanhasPendentes.getCampanhasPorGestor(gestorId);
+  /** Admin vê as campanhas das farmácias de todos os gestores. */
+  async getCampanhasDoGestor(quem: QuemPede) {
+    return this.campanhasPendentes.getCampanhasPorGestor(gestorDoEscopo(quem));
   }
 }

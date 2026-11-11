@@ -256,6 +256,71 @@ describe('Isolamento entre gestores no disparo', () => {
   });
 });
 
+describe('Admin vê o que os gestores programam', () => {
+  beforeEach(limparBanco);
+
+  async function agendarPor(token: string) {
+    return api('POST', '/api/disparos', {
+      token,
+      body: {
+        titulo: 'Ofertas', mensagem: 'oi', midias: [MIDIA], grupos: [GRUPO], quando: 'agendado',
+        agendado_para: new Date(Date.now() + 3600_000).toISOString(),
+        permitir_fim_de_semana: true,
+      },
+    });
+  }
+
+  it('o histórico do admin traz os disparos de todos os gestores, com o nome de quem programou', async () => {
+    const admin = await criarGestor({ isAdmin: true });
+    const a = await criarGestor({ nome: 'Ana' });
+    const b = await criarGestor({ nome: 'Bruno' });
+    await conectarWhatsappFake(a.id);
+    await conectarWhatsappFake(b.id);
+    await agendarPor(a.token);
+    await agendarPor(b.token);
+
+    const lista = await api('GET', '/api/disparos', { token: admin.token });
+    expect(lista.body).toHaveLength(2);
+    expect(lista.body.map((d: { gestor: string }) => d.gestor).sort()).toEqual(['Ana', 'Bruno']);
+    expect(lista.body[0].total_midias).toBe(1);
+
+    // O gestor comum continua vendo só os dele
+    expect((await api('GET', '/api/disparos', { token: a.token })).body).toHaveLength(1);
+  });
+
+  it('admin abre o detalhe, lê os logs e cancela o disparo de um gestor', async () => {
+    const admin = await criarGestor({ isAdmin: true });
+    const a = await criarGestor({ nome: 'Ana' });
+    await conectarWhatsappFake(a.id);
+    const criado = await agendarPor(a.token);
+
+    const det = await api('GET', `/api/disparos/${criado.body.id}`, { token: admin.token });
+    expect(det.status).toBe(200);
+    expect(det.body.gestor).toBe('Ana');
+    expect((await api('GET', `/api/disparos/${criado.body.id}/logs`, { token: admin.token })).status).toBe(200);
+    expect((await api('DELETE', `/api/disparos/${criado.body.id}`, { token: admin.token })).status).toBe(204);
+  });
+
+  it('a carteira do admin mostra a campanha que o gestor programou', async () => {
+    const admin = await criarGestor({ isAdmin: true });
+    const a = await criarGestor({ nome: 'Ana' });
+    await conectarWhatsappFake(a.id);
+    const f = await criarFarmacia(a.id);
+    await api('POST', '/api/disparos', {
+      token: a.token,
+      body: {
+        titulo: 'Ofertas', mensagem: 'oi', grupos: [GRUPO], quando: 'agendado', farmacia_id: f.id,
+        agendado_para: new Date(Date.now() + 3600_000).toISOString(), permitir_fim_de_semana: true,
+      },
+    });
+
+    const carteira = await api('GET', '/api/ofertas/carteira', { token: admin.token });
+    const linha = carteira.body.find((c: { farmacia_id: number }) => c.farmacia_id === f.id);
+    expect(linha.campanha).not.toBeNull();
+    expect(linha.campanha.gestor).toBe('Ana');
+  });
+});
+
 describe('Envio imediato (Evolution simulada)', () => {
   beforeEach(limparBanco);
   afterEach(() => { vi.unstubAllGlobals(); });

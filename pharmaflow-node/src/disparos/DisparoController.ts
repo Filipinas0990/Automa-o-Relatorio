@@ -102,7 +102,7 @@ export class DisparoController extends Controller {
 
         if (jids.length === 0) return reply.send([]);
 
-        const donos = await this.service.donosDeGrupos(req.user.id, jids);
+        const donos = await this.service.donosDeGrupos(req.user, jids);
 
         return reply.send(donos.map((d) => ({
           jid:         d.jid,
@@ -152,7 +152,7 @@ export class DisparoController extends Controller {
       // e podem ser vários — o padrão de 1 MB do Fastify estoura fácil.
       { preHandler: [autenticar], bodyLimit: 80 * 1024 * 1024 },
       async (req, reply) => {
-        const r = await this.service.criar(req.user.id, req.body);
+        const r = await this.service.criar(req.user, req.body);
 
         if (r.tipo === 'enfileirado') {
           // Enfileirado no motor de campanhas — o resultado por grupo chega
@@ -212,7 +212,7 @@ export class DisparoController extends Controller {
         const farmaciaId = parseInt(req.params.farmaciaId, 10);
         if (Number.isNaN(farmaciaId)) throw new RequisicaoInvalida('farmaciaId inválido.');
 
-        const ultimo = await this.service.ultimosProdutos(req.user.id, farmaciaId);
+        const ultimo = await this.service.ultimosProdutos(req.user, farmaciaId);
         if (!ultimo) return reply.send({ produtos: [], disparado_em: null });
 
         let produtos: { id: number; nome: string }[] = [];
@@ -226,21 +226,22 @@ export class DisparoController extends Controller {
       },
     );
 
-    /** GET /api/disparos — histórico dos disparos do gestor. */
+    /** GET /api/disparos — histórico dos disparos do gestor (admin: de todos). */
     app.get('/api/disparos', comAuth, async (req, reply) => {
-      const disparos = await this.service.listar(req.user.id);
+      const disparos = await this.service.listar(req.user);
 
       return reply.send(
         disparos.map((d) => {
           let totalGrupos = 0;
           try { totalGrupos = (JSON.parse(d.gruposJson) as unknown[]).length; } catch { /* ignore */ }
-          let totalMidias = 0;
-          try { totalMidias = d.midiasJson ? (JSON.parse(d.midiasJson) as unknown[]).length : 0; } catch { /* ignore */ }
           return {
             id:            d.id,
+            // Quem programou — o admin vê os disparos de todos os gestores.
+            gestor_id:     d.gestorId,
+            gestor:        d.gestorNome,
             titulo:        d.titulo,
             mensagem:      d.mensagem,
-            total_midias:  totalMidias,
+            total_midias:  d.totalMidias,
             farmacia_id:   d.farmaciaId,
             total_grupos:  totalGrupos,
             quando:        d.quando,
@@ -272,7 +273,7 @@ export class DisparoController extends Controller {
       '/api/disparos/:id',
       comAuth,
       async (req, reply) => {
-        const d = await this.service.detalhar(req.user.id, parseInt(req.params.id, 10));
+        const d = await this.service.detalhar(req.user, parseInt(req.params.id, 10));
 
         const jsonOu = <T>(texto: string | null, padrao: T): T => {
           if (!texto) return padrao;
@@ -286,6 +287,8 @@ export class DisparoController extends Controller {
           titulo:        d.titulo,
           mensagem:      d.mensagem,
           farmacia_id:   d.farmaciaId,
+          gestor_id:     d.gestorId,
+          gestor:        d.gestorNome,
           quando:        d.quando,
           status:        d.status,
           repetir:       d.repetir,
@@ -311,7 +314,7 @@ export class DisparoController extends Controller {
       '/api/disparos/:id/logs',
       comAuth,
       async (req, reply) => {
-        const logs = await this.service.logs(req.user.id, parseInt(req.params.id, 10));
+        const logs = await this.service.logs(req.user, parseInt(req.params.id, 10));
         return reply.send(logs);
       },
     );
@@ -321,7 +324,7 @@ export class DisparoController extends Controller {
       '/api/disparos/:id',
       comAuth,
       async (req, reply) => {
-        await this.service.cancelar(req.user.id, parseInt(req.params.id, 10));
+        await this.service.cancelar(req.user, parseInt(req.params.id, 10));
         return reply.code(204).send();
       },
     );
