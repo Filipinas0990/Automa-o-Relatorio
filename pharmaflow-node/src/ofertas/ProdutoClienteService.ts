@@ -10,7 +10,7 @@ export class EspacoCheio extends Error {}
  * Quantos produtos cada farmácia pode guardar. O banco garante o mesmo número
  * no gatilho da migration 0041 — mudar um sem o outro não adianta.
  */
-export const LIMITE_PRODUTOS_CLIENTE = 30;
+export const LIMITE_PRODUTOS_CLIENTE = 90;
 
 /**
  * Teto da foto já decodificada. O front comprime antes de mandar (JPEG ~1200px

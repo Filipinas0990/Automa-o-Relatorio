@@ -467,7 +467,7 @@ export const solicitacoesOferta = pgTable('solicitacoes_oferta', {
 });
 
 // Produtos que o próprio cliente manda pelo link de ofertas (migration 0041).
-// No máximo 30 por farmácia — o gatilho produtos_cliente_limite garante no banco.
+// No máximo 90 por farmácia — o gatilho produtos_cliente_limite garante no banco.
 export const produtosCliente = pgTable('produtos_cliente', {
   id:         serial('id').primaryKey(),
   farmaciaId: integer('farmacia_id').notNull().references(() => farmacias.id),

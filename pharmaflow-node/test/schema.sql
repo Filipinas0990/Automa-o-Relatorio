@@ -1645,13 +1645,13 @@ CREATE TABLE IF NOT EXISTS produtos_cliente (
 CREATE INDEX IF NOT EXISTS produtos_cliente_farmacia_idx ON produtos_cliente (farmacia_id);
 
 COMMENT ON TABLE produtos_cliente IS
-  'Produtos (foto + nome) enviados pelo dono da farmácia pelo link de ofertas. Máximo de 30 por farmácia, garantido pelo gatilho produtos_cliente_limite.';
+  'Produtos (foto + nome) enviados pelo dono da farmácia pelo link de ofertas. Máximo de 90 por farmácia, garantido pelo gatilho produtos_cliente_limite.';
 
 CREATE OR REPLACE FUNCTION produtos_cliente_limite() RETURNS trigger AS $$
 BEGIN
   -- Trava a farmácia: envios simultâneos do mesmo cliente esperam a vez.
   PERFORM 1 FROM farmacias WHERE id = NEW.farmacia_id FOR UPDATE;
-  IF (SELECT count(*) FROM produtos_cliente WHERE farmacia_id = NEW.farmacia_id) >= 30 THEN
+  IF (SELECT count(*) FROM produtos_cliente WHERE farmacia_id = NEW.farmacia_id) >= 90 THEN
     RAISE EXCEPTION 'limite_produtos_cliente' USING ERRCODE = 'check_violation';
   END IF;
   RETURN NEW;

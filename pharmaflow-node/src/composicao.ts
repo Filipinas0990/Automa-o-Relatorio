@@ -231,7 +231,7 @@ const linkOfertaService = new LinkOfertaService(
   // também vale para os links de produção. Em produção, basta não definir.
   process.env.OFERTAS_URL_BASE || process.env.FRONTEND_URL || 'http://localhost:5173',
 );
-// Espaço de até 30 produtos (foto + nome) que cada cliente manda pelo link.
+// Espaço de até 90 produtos (foto + nome) que cada cliente manda pelo link.
 const produtoClienteRepository = new ProdutoClienteRepository(db);
 const solicitacaoService = new SolicitacaoService(
   solicitacaoRepository, farmaciaRepository, catalogo, produtoClienteRepository,

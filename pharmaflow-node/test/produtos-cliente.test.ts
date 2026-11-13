@@ -1,7 +1,7 @@
 /**
  * Produtos que o cliente manda pelo link de ofertas (migration 0041).
  *
- * Regra do dono: cada farmácia tem um espaço de NO MÁXIMO 30 produtos. E,
+ * Regra do dono: cada farmácia tem um espaço de NO MÁXIMO 90 produtos. E,
  * como todo o resto do link, um cliente não alcança o espaço de outro.
  */
 import { describe, it, expect, beforeEach } from 'vitest';
@@ -33,7 +33,7 @@ describe('Produtos do cliente pelo link', () => {
     expect(r.status).toBe(201);
 
     const link = await api('GET', `/api/publico/ofertas/${token}`);
-    expect(link.body.meus_produtos.limite).toBe(30);
+    expect(link.body.meus_produtos.limite).toBe(90);
     expect(link.body.meus_produtos.itens).toEqual([{ id: r.body.id, nome: 'Protetor Solar FPS 50' }]);
 
     const img = await api('GET', `/api/publico/ofertas/${token}/meus-produtos/${r.body.id}/imagem`);
@@ -44,19 +44,19 @@ describe('Produtos do cliente pelo link', () => {
     expect(doGestor.body.itens).toHaveLength(1);
   });
 
-  it('recusa o 31º produto e libera a vaga quando um é excluído', async () => {
+  it('recusa o 91º produto e libera a vaga quando um é excluído', async () => {
     const g = await criarGestor();
     const f = await criarFarmacia(g.id);
     const token = await linkDoCliente(g.token, f.id);
 
     const ids: number[] = [];
-    for (let i = 1; i <= 30; i++) ids.push((await enviar(token, `Produto ${i}`)).body.id);
+    for (let i = 1; i <= 90; i++) ids.push((await enviar(token, `Produto ${i}`)).body.id);
 
-    const excedente = await enviar(token, 'Produto 31');
+    const excedente = await enviar(token, 'Produto 91');
     expect(excedente.status).toBe(409);
 
     expect((await api('DELETE', `/api/publico/ofertas/${token}/meus-produtos/${ids[0]}`)).status).toBe(200);
-    expect((await enviar(token, 'Produto 31')).status).toBe(201);
+    expect((await enviar(token, 'Produto 91')).status).toBe(201);
   });
 
   it('o limite vale mesmo com envios simultâneos', async () => {
@@ -64,11 +64,11 @@ describe('Produtos do cliente pelo link', () => {
     const f = await criarFarmacia(g.id);
     const token = await linkDoCliente(g.token, f.id);
 
-    const respostas = await Promise.all(Array.from({ length: 40 }, (_, i) => enviar(token, `Produto ${i}`)));
-    expect(respostas.filter((r) => r.status === 201)).toHaveLength(30);
+    const respostas = await Promise.all(Array.from({ length: 100 }, (_, i) => enviar(token, `Produto ${i}`)));
+    expect(respostas.filter((r) => r.status === 201)).toHaveLength(90);
 
     const link = await api('GET', `/api/publico/ofertas/${token}`);
-    expect(link.body.meus_produtos.itens).toHaveLength(30);
+    expect(link.body.meus_produtos.itens).toHaveLength(90);
   });
 
   it('um cliente não vê nem exclui o produto de outro', async () => {
