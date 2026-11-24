@@ -7,7 +7,7 @@ import type { WhatsappRepository } from '../whatsapp/WhatsappRepository';
 import type { SolicitacaoRepository } from '../ofertas/SolicitacaoRepository';
 import type { ClienteCampanhas } from './ClienteCampanhas';
 import { DisparoRepository, type InstanciaStatus } from './DisparoRepository';
-import { fatiarRodizio, PRODUTOS_POR_ENVIO, loteDaVez, montarEnvio, listaAcabou } from './rodizio';
+import { fatiarRodizio, PRODUTOS_POR_ENVIO, loteDaVez, montarEnvio, listaAcabou, type ResultadoRodizio } from './rodizio';
 import { horarioValido, ehFimDeSemana, calcularProximoEnvio } from './agendamento';
 import type {
   GrupoWhatsApp, ListagemGrupos, OpcoesListagem, ConexaoDisparo,
@@ -552,6 +552,11 @@ export class DisparoService {
     // Disparo repetido leva só o lote da vez — ver fatiarRodizio
     const rodizio = loteDaVez(disparo, midias);
 
+    if (this.postagemVazia(midias, rodizio.lote)) {
+      await this.pularPostagem(disparo, rodizio);
+      return { modo: 'campanhas', grupos: 0 };
+    }
+
     // A mensagem vira legenda de cada criativo — ver montarEnvio
     const envio = montarEnvio(disparo.mensagem, rodizio.lote);
 
@@ -572,7 +577,10 @@ export class DisparoService {
     }
 
     // Só depois do aceite: recusa no motor não consome produto do rodízio
-    await this.disparos.atualizarDisparo(disparoId, { cursorMidia: rodizio.proximoCursor });
+    await this.disparos.atualizarDisparo(disparoId, {
+      cursorMidia:   rodizio.proximoCursor,
+      midiasPuladas: rodizio.puladas,
+    });
 
     logger.info(
       {
@@ -656,6 +664,12 @@ export class DisparoService {
     }
 
     const rodizio = loteDaVez(disparo, midias);
+
+    if (this.postagemVazia(midias, rodizio.lote)) {
+      await this.pularPostagem(disparo, rodizio);
+      return { enviados: 0, falhas: 0 };
+    }
+
     const envio = montarEnvio(disparo.mensagem, rodizio.lote);
 
     let enviados = 0;
@@ -712,7 +726,8 @@ export class DisparoService {
       proximoEnvio: proximo,
       // Avança mesmo com falha parcial: repetir o mesmo lote na próxima
       // postagem atrasaria a lista inteira por causa de um grupo fora do ar.
-      cursorMidia:  rodizio.proximoCursor,
+      cursorMidia:   rodizio.proximoCursor,
+      midiasPuladas: rodizio.puladas,
     });
 
     logger.info(
@@ -723,6 +738,48 @@ export class DisparoService {
       'Disparo em grupos executado',
     );
     return { enviados, falhas };
+  }
+
+  /**
+   * A campanha tem criativos, mas nenhum saiu no lote desta vez: todos os da
+   * vez estão pausados (migration 0047). Disparo só de texto não conta — esse
+   * nunca teve criativo.
+   */
+  private postagemVazia(midias: MidiaDisparo[], lote: MidiaDisparo[]): boolean {
+    return midias.length > 0 && lote.length === 0;
+  }
+
+  /**
+   * Horário em que não há produto ativo para postar: NADA vai para o grupo.
+   *
+   * Mandar mesmo assim seria pior que pular — o montarEnvio, sem criativo,
+   * transforma a mensagem num texto solto ("🔥 OFERTAS — Farmácia 🔥") sem
+   * oferta nenhuma embaixo. Sem log por grupo (nada foi postado) e sem mexer
+   * no `ultimo_envio`: a linha do tempo do acompanhamento mostra o que saiu.
+   *
+   * A campanha segue para o próximo horário esperando o gestor reativar. Só
+   * encerra quando não há mesmo próximo — data de término, ou envio único
+   * (que a API não deixa ficar sem produto; aqui só por corrida de cliques).
+   */
+  private async pularPostagem(disparo: DisparoGrupo, rodizio: ResultadoRodizio): Promise<void> {
+    const proximo = rodizio.acabou ? null : calcularProximoEnvio(disparo, new Date());
+
+    // Sem próximo: chegou a data de término (a campanha postou antes e só
+    // sobrou produto pausado — terminou normal) ou é um envio único que nunca
+    // teve o que postar (isso sim é erro, e aparece assim no Histórico).
+    const encerrada = disparo.ultimoEnvio ? 'enviado' : 'erro';
+
+    await this.disparos.atualizarDisparo(disparo.id, {
+      status:        proximo ? 'agendado' : encerrada,
+      proximoEnvio:  proximo,
+      cursorMidia:   rodizio.proximoCursor,
+      midiasPuladas: rodizio.puladas,
+    });
+
+    logger.info(
+      { disparoId: disparo.id, pausados: disparo.midiasPausadas, proximo },
+      'Postagem pulada: todos os produtos da vez estão pausados',
+    );
   }
 
   // ── Criação do disparo ───────────────────────────────────────────────────

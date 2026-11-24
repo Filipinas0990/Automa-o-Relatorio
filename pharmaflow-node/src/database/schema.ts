@@ -365,6 +365,12 @@ export const disparosGrupo = pgTable('disparos_grupo', {
   // false (padrão) = nada sai em sábado/domingo. true = o gestor liberou o fim
   // de semana ao criar esta campanha (migration 0044).
   permitirFimDeSemana: boolean('permitir_fim_de_semana').default(false).notNull(),
+  // Índices de midias_json que o gestor pausou (sem estoque, preço mudou):
+  // não saem até ele reativar. Migration 0047.
+  midiasPausadas: integer('midias_pausadas').array().default([]).notNull(),
+  // Índices que perderam a vez no rodízio por estarem pausados e ainda devem
+  // sair — reativado, sai na postagem seguinte. Só o envio escreve. 0047.
+  midiasPuladas:  integer('midias_puladas').array().default([]).notNull(),
   // JSON: [{ id, nome }] — quais produtos do catálogo geraram esses criativos.
   // Alimenta o filtro "Recentes" do passo 3 (migration 0029). Null nos antigos.
   produtosJson: text('produtos_json'),

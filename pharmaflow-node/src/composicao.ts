@@ -61,6 +61,7 @@ import { DisparoRepository } from './disparos/DisparoRepository';
 import { ClienteCampanhas } from './disparos/ClienteCampanhas';
 import { DisparoService } from './disparos/DisparoService';
 import { DisparoController } from './disparos/DisparoController';
+import { PausaDeProdutos } from './disparos/PausaDeProdutos';
 import { InterpretadorIA } from './ai/InterpretadorIA';
 import { TokenMetaRepository } from './ads/TokenMetaRepository';
 import { CampanhaPendenteRepository } from './ads/CampanhaPendenteRepository';
@@ -260,4 +261,8 @@ export const ofertaController = new OfertaController(
 export const disparoService = new DisparoService(
   disparoRepository, whatsappRepository, clienteEvolution, clienteCampanhas, solicitacaoRepository,
 );
-export const disparoController = new DisparoController(disparoService, autenticador);
+export const disparoController = new DisparoController(
+  disparoService, autenticador,
+  // DisparoRepository cumpre PausasDosProdutos (declarado com `implements`).
+  new PausaDeProdutos(disparoRepository),
+);

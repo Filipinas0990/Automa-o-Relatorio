@@ -7,11 +7,17 @@ import type {
   GestorWhatsapp, DisparoGrupo, GrupoCache, HorarioDisparo,
 } from '../database/schema';
 import type { BancoDeDados } from '../compartilhado/tipos';
+import type { PausasDosProdutos } from './PausaDeProdutos';
+import type { SituacaoDaCampanha } from './pausa';
 
 export type InstanciaStatus = 'open' | 'close' | 'connecting';
 
+/** Ordena e tira repetição — a coluna é um array solto no banco. */
+const ordenados = (lista: number[] | null | undefined): number[] =>
+  [...new Set((lista ?? []).map(Number))].sort((a, b) => a - b);
+
 /** Acesso às tabelas de disparo em grupos: instância do gestor, disparos, horários e cache de grupos. */
-export class DisparoRepository {
+export class DisparoRepository implements PausasDosProdutos {
   constructor(private readonly db: BancoDeDados) {}
 
   // ── Instância Evolution do gestor ──────────────────────────────────────────
@@ -243,6 +249,7 @@ export class DisparoRepository {
         farmaciaId:          disparosGrupo.farmaciaId,
         gruposJson:          disparosGrupo.gruposJson,
         totalMidias:         sql<number>`COALESCE(json_array_length(${disparosGrupo.midiasJson}::json), 0)::int`,
+        totalPausados:       sql<number>`cardinality(${disparosGrupo.midiasPausadas})::int`,
         quando:              disparosGrupo.quando,
         repetir:             disparosGrupo.repetir,
         status:              disparosGrupo.status,
@@ -282,11 +289,90 @@ export class DisparoRepository {
     id:     number,
     campos: Partial<{
       status: string; proximoEnvio: Date | null; ultimoEnvio: Date | null; cursorMidia: number;
+      /** Quem perdeu a vez pausado — só o envio escreve (ver fatiarRodizio). */
+      midiasPuladas: number[];
     }>,
   ): Promise<void> {
     await this.db.update(disparosGrupo)
       .set({ ...campos, atualizadoEm: sql`NOW()` })
       .where(eq(disparosGrupo.id, id));
+  }
+
+  // ── Pausa de produto (migration 0047) ─────────────────────────────────────
+
+  /**
+   * O que a regra da pausa precisa saber, SEM trazer as imagens para o Node:
+   * o total e o rótulo saem do próprio Postgres. O `midias_json` é convertido
+   * uma vez só (LATERAL) — é texto de dezenas de MB.
+   */
+  async situacaoParaPausa(
+    disparoId: number,
+    indice:    number,
+  ): Promise<(SituacaoDaCampanha & { gestorId: number; rotulo: string | null }) | null> {
+    const resultado = await this.db.execute<{
+      gestor_id:        number;
+      status:           string;
+      repetir:          string;
+      repetir_produtos: boolean;
+      cursor_midia:     number;
+      midias_pausadas:  number[] | null;
+      midias_puladas:   number[] | null;
+      total:            number;
+      rotulo:           string | null;
+    }>(sql`
+      SELECT d.gestor_id, d.status, d.repetir, d.repetir_produtos, d.cursor_midia,
+             d.midias_pausadas, d.midias_puladas,
+             COALESCE(json_array_length(m.j), 0)::int AS total,
+             m.j -> ${indice}::int ->> 'rotulo'      AS rotulo
+      FROM ${disparosGrupo} d
+      CROSS JOIN LATERAL (SELECT d.midias_json::json AS j) m
+      WHERE d.id = ${disparoId}
+    `);
+
+    const r = resultado.rows[0];
+    if (!r) return null;
+
+    return {
+      gestorId:        Number(r.gestor_id),
+      status:          r.status,
+      repetir:         r.repetir,
+      repetirProdutos: Boolean(r.repetir_produtos),
+      cursorMidia:     Number(r.cursor_midia ?? 0),
+      totalMidias:     Number(r.total ?? 0),
+      midiasPausadas:  ordenados(r.midias_pausadas),
+      midiasPuladas:   ordenados(r.midias_puladas),
+      rotulo:          r.rotulo?.trim() || null,
+    };
+  }
+
+  /*
+   * As duas escritas da pausa são UM update atômico no array — dois cliques
+   * (ou duas abas) não se atropelam lendo e regravando a lista.
+   *
+   * De propósito NÃO mexem em `atualizado_em`: é por ele que o agendador
+   * descobre disparo travado em "enviando" (verificarDisparosTravados), e é
+   * nele que se lê a hora real de um cancelamento. Pausar não é nenhum dos dois.
+   */
+
+  async pausarMidia(disparoId: number, indice: number): Promise<number[]> {
+    const [row] = await this.db.update(disparosGrupo)
+      .set({
+        midiasPausadas: sql`CASE
+          WHEN ${indice}::int = ANY(${disparosGrupo.midiasPausadas}) THEN ${disparosGrupo.midiasPausadas}
+          ELSE array_append(${disparosGrupo.midiasPausadas}, ${indice}::int)
+        END`,
+      })
+      .where(eq(disparosGrupo.id, disparoId))
+      .returning({ pausadas: disparosGrupo.midiasPausadas });
+    return ordenados(row?.pausadas);
+  }
+
+  async reativarMidia(disparoId: number, indice: number): Promise<number[]> {
+    const [row] = await this.db.update(disparosGrupo)
+      .set({ midiasPausadas: sql`array_remove(${disparosGrupo.midiasPausadas}, ${indice}::int)` })
+      .where(eq(disparosGrupo.id, disparoId))
+      .returning({ pausadas: disparosGrupo.midiasPausadas });
+    return ordenados(row?.pausadas);
   }
 
   async registrarLog(data: {

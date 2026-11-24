@@ -30,40 +30,161 @@ export const PRODUTOS_POR_ENVIO = 3;
  * `acabou` é o que encerra o disparo; sem isso ele continuaria agendado até a
  * data de término, postando lote vazio. Lista vazia acaba sempre — nem o
  * `daVolta` segura, senão a campanha ficaria eternamente postando nada.
+ *
+ * PAUSA (migration 0047). Produto pausado não entra no lote. Quando a vez
+ * dele chega e ele está pausado, o cursor passa por cima e ele é anotado em
+ * `puladas` — fica "devendo". Reativado, sai na postagem seguinte, antes da
+ * fila normal: estoque que voltou não espera a lista inteira dar a volta.
+ * Sem a anotação, o cursor (que só anda para a frente) o deixaria para trás
+ * para sempre numa campanha sem volta.
+ *
+ * Por isso, sem volta, a lista só ACABA quando o cursor chega ao fim e não
+ * sobrou ninguém devendo. Se sobrou só produto pausado, a campanha fica
+ * esperando — postagem vazia, nada sai — até o gestor reativar ou cancelar:
+ * produto pausado não foi ao ar, então a lista não acabou.
  */
 export function fatiarRodizio(
   midias:   MidiaDisparo[],
   cursor:   number,
   porEnvio: number = PRODUTOS_POR_ENVIO,
   daVolta:  boolean = false,
-): { lote: MidiaDisparo[]; proximoCursor: number; acabou: boolean } {
-  if (midias.length === 0) return { lote: [], proximoCursor: 0, acabou: true };
+  pausa:    EstadoPausa = SEM_PAUSA,
+): ResultadoRodizio {
+  const total = midias.length;
+  if (total === 0) return { lote: [], proximoCursor: 0, acabou: true, puladas: [] };
+
+  const pausadas = new Set(indicesValidos(pausa.pausadas, total));
 
   // Tolera cursor sujo (negativo, ou além do fim se o disparo foi editado)
-  const bruto  = Math.min(Math.max(0, Math.trunc(cursor)), midias.length);
-  // Cursor parado no fim + volta = recomeça a lista nesta mesma postagem
-  const inicio = daVolta && bruto >= midias.length ? 0 : bruto;
-  const lote   = midias.slice(inicio, inicio + porEnvio);
+  const bruto = Math.min(Math.max(0, Math.trunc(cursor)), total);
 
-  const fimDaLista    = inicio + lote.length >= midias.length;
-  const proximoCursor = daVolta && fimDaLista ? 0 : inicio + lote.length;
+  // Cursor parado no fim + volta = recomeça a lista nesta mesma postagem. Na
+  // volta nova ninguém está devendo: cada produto ganha a vez dele de novo.
+  const novaVolta = daVolta && bruto >= total;
+  const inicio    = novaVolta ? 0 : bruto;
+  // Só quem já ficou para trás conta como devendo; índice à frente do cursor
+  // ainda vai ter a vez dele (e contá-lo duas vezes duplicaria a arte).
+  const devendo   = novaVolta ? [] : indicesValidos(pausa.puladas, total).filter((i) => i < inicio);
 
-  return { lote, proximoCursor, acabou: daVolta ? false : fimDaLista };
+  const passada = umaPassada(inicio, devendo, pausadas, total, porEnvio);
+  const fimDaLista = passada.parouEm >= total;
+
+  if (!daVolta) {
+    return {
+      lote:          passada.indices.map((i) => midias[i]),
+      proximoCursor: passada.parouEm,
+      acabou:        fimDaLista && passada.devendo.length === 0,
+      puladas:       passada.devendo,
+    };
+  }
+
+  if (!fimDaLista) {
+    return {
+      lote:          passada.indices.map((i) => midias[i]),
+      proximoCursor: passada.parouEm,
+      acabou:        false,
+      puladas:       passada.devendo,
+    };
+  }
+
+  // Fechou a volta. Se o fim da lista estava todo pausado, esta postagem
+  // sairia vazia com produto ativo no começo da lista — então já começa a
+  // volta nova aqui. Se nem assim sai nada, está tudo pausado.
+  if (passada.indices.length === 0) {
+    const nova = umaPassada(0, [], pausadas, total, porEnvio);
+    const fechouDeNovo = nova.parouEm >= total;
+    return {
+      lote:          nova.indices.map((i) => midias[i]),
+      proximoCursor: fechouDeNovo ? 0 : nova.parouEm,
+      acabou:        false,
+      puladas:       fechouDeNovo ? [] : nova.devendo,
+    };
+  }
+
+  return {
+    lote:          passada.indices.map((i) => midias[i]),
+    proximoCursor: 0,
+    acabou:        false,
+    puladas:       [],
+  };
+}
+
+/**
+ * Uma passada pela lista: primeiro quem está devendo e já foi reativado, depois
+ * a fila normal a partir do cursor, até encher o lote. Pausado que estiver no
+ * caminho fica devendo. Devolve os índices escolhidos, em ordem crescente.
+ */
+function umaPassada(
+  inicio:   number,
+  devendo:  number[],
+  pausadas: Set<number>,
+  total:    number,
+  porEnvio: number,
+): { indices: number[]; parouEm: number; devendo: number[] } {
+  const indices: number[] = [];
+  const aindaDevendo: number[] = [];
+
+  for (const i of devendo) {
+    if (indices.length < porEnvio && !pausadas.has(i)) indices.push(i);
+    else aindaDevendo.push(i);
+  }
+
+  let pos = inicio;
+  while (pos < total && indices.length < porEnvio) {
+    if (pausadas.has(pos)) aindaDevendo.push(pos);
+    else indices.push(pos);
+    pos += 1;
+  }
+
+  return { indices, parouEm: pos, devendo: aindaDevendo };
+}
+
+/** Inteiros dentro da lista, sem repetição, em ordem — tolera coluna suja. */
+function indicesValidos(lista: readonly number[] | null | undefined, total: number): number[] {
+  if (!Array.isArray(lista)) return [];
+  return [...new Set(lista.filter((i) => Number.isInteger(i) && i >= 0 && i < total))].sort((a, b) => a - b);
+}
+
+/** O que o gestor pausou e o que perdeu a vez — colunas da migration 0047. */
+export interface EstadoPausa {
+  pausadas: readonly number[];
+  puladas:  readonly number[];
+}
+
+export const SEM_PAUSA: EstadoPausa = { pausadas: [], puladas: [] };
+
+export interface ResultadoRodizio {
+  lote:          MidiaDisparo[];
+  proximoCursor: number;
+  acabou:        boolean;
+  /** Novo valor de midias_puladas: quem ficou devendo depois desta postagem. */
+  puladas:       number[];
 }
 
 /**
  * Aplica o rodízio quando o disparo se repete. No envio único a lista vai
  * inteira: só existe uma ocorrência, então fatiar deixaria a maior parte dos
  * produtos que o cliente pediu sem sair nunca.
+ *
+ * No envio único o produto pausado simplesmente fica de fora — e é anotado em
+ * `puladas` para o acompanhamento mostrar que ele NÃO saiu.
  */
-export function loteDaVez(
-  disparo: DisparoGrupo,
-  midias:  MidiaDisparo[],
-): { lote: MidiaDisparo[]; proximoCursor: number; acabou: boolean } {
+export function loteDaVez(disparo: DisparoGrupo, midias: MidiaDisparo[]): ResultadoRodizio {
+  const pausa: EstadoPausa = {
+    pausadas: disparo.midiasPausadas ?? [],
+    puladas:  disparo.midiasPuladas ?? [],
+  };
+
   if (disparo.repetir === 'nunca') {
-    return { lote: midias, proximoCursor: midias.length, acabou: true };
+    const pausadas = new Set(indicesValidos(pausa.pausadas, midias.length));
+    return {
+      lote:          midias.filter((_, i) => !pausadas.has(i)),
+      proximoCursor: midias.length,
+      acabou:        true,
+      puladas:       [...pausadas],
+    };
   }
-  return fatiarRodizio(midias, disparo.cursorMidia ?? 0, PRODUTOS_POR_ENVIO, disparo.repetirProdutos);
+  return fatiarRodizio(midias, disparo.cursorMidia ?? 0, PRODUTOS_POR_ENVIO, disparo.repetirProdutos, pausa);
 }
 
 /**
@@ -113,5 +234,12 @@ export function listaAcabou(disparo: DisparoGrupo): boolean {
   }
   // Sem criativo é disparo só de texto: não há lista para acabar
   if (total === 0) return false;
-  return (disparo.cursorMidia ?? 0) >= total;
+
+  // Produto que perdeu a vez pausado ainda deve sair (ver fatiarRodizio). No
+  // envio único não há "depois": o que ficou de fora, ficou.
+  const devendo = disparo.repetir === 'nunca'
+    ? 0
+    : indicesValidos(disparo.midiasPuladas, total).length;
+
+  return (disparo.cursorMidia ?? 0) >= total && devendo === 0;
 }

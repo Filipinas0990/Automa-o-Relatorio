@@ -328,7 +328,11 @@ CREATE TABLE public.disparos_grupo (
     horarios_json text,
     repetir_ate timestamp with time zone,
     produtos_json text,
-    cursor_midia integer DEFAULT 0 NOT NULL
+    cursor_midia integer DEFAULT 0 NOT NULL,
+    repetir_produtos boolean DEFAULT false NOT NULL,
+    permitir_fim_de_semana boolean DEFAULT false NOT NULL,
+    midias_pausadas integer[] DEFAULT '{}'::integer[] NOT NULL,
+    midias_puladas integer[] DEFAULT '{}'::integer[] NOT NULL
 );
 
 

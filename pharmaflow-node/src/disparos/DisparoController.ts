@@ -4,6 +4,7 @@ import { ErroAplicacao, RequisicaoInvalida, NaoAutorizado } from '../compartilha
 import { logger } from '../logger';
 import type { Autenticador } from '../auth/Autenticador';
 import type { DisparoService, CriarDisparoBody } from './DisparoService';
+import type { PausaDeProdutos } from './PausaDeProdutos';
 import type { GrupoSelecionado, MidiaDisparo, ResultadoGrupo } from './types';
 
 /**
@@ -18,6 +19,7 @@ export class DisparoController extends Controller {
   constructor(
     private readonly service: DisparoService,
     private readonly auth: Autenticador,
+    private readonly pausas: PausaDeProdutos,
   ) {
     super();
   }
@@ -242,6 +244,7 @@ export class DisparoController extends Controller {
             titulo:        d.titulo,
             mensagem:      d.mensagem,
             total_midias:  d.totalMidias,
+            total_pausados: d.totalPausados,
             farmacia_id:   d.farmaciaId,
             total_grupos:  totalGrupos,
             quando:        d.quando,
@@ -305,7 +308,38 @@ export class DisparoController extends Controller {
           cursor_midia:  d.cursorMidia ?? 0,
           // Só o rótulo ("Produto — R$ 9,99"). Arte pronta não tem rótulo.
           produtos:      midias.map((m) => m.rotulo ?? null),
+          // Índices em `produtos` que o gestor pausou (migration 0047).
+          produtos_pausados: [...new Set(d.midiasPausadas ?? [])].sort((a, b) => a - b),
+          // Índices que perderam a vez pausados: atrás do cursor, mas NÃO
+          // saíram. Sem isto a tela os mostraria como "já postado".
+          produtos_pulados:  [...new Set(d.midiasPuladas ?? [])].sort((a, b) => a - b),
         });
+      },
+    );
+
+    /**
+     * PATCH /api/disparos/:id/produtos/:indice   body: { pausado: boolean }
+     *
+     * Pausa ou reativa UM produto da campanha sem cancelá-la — o produto
+     * acabou o estoque ou mudou de preço (o preço está impresso na arte).
+     * `indice` é a posição em `produtos` do GET /api/disparos/:id.
+     */
+    app.patch<{ Params: { id: string; indice: string }; Body: { pausado?: unknown } }>(
+      '/api/disparos/:id/produtos/:indice',
+      comAuth,
+      async (req, reply) => {
+        const pausado = req.body?.pausado;
+        if (typeof pausado !== 'boolean') {
+          throw new RequisicaoInvalida('Informe "pausado": true para pausar ou false para reativar.');
+        }
+
+        const r = await this.pausas.definir(
+          req.user,
+          Number(req.params.id),
+          Number(req.params.indice),
+          pausado,
+        );
+        return reply.send({ indice: r.indice, rotulo: r.rotulo, pausado: r.pausado, produtos_pausados: r.pausados });
       },
     );
 
