@@ -56,7 +56,10 @@ export function motivoParaNaoPausar(c: SituacaoDaCampanha, indice: number): stri
   // Envio único com tudo pausado mandaria a mensagem sem oferta nenhuma.
   // Quem não quer enviar nada cancela — e o cancelamento confirma pelo nome.
   if (c.repetir === 'nunca' && !c.midiasPausadas.includes(indice)) {
-    const ativos = c.totalMidias - new Set(c.midiasPausadas).size;
+    // Só conta índice que existe na lista: coluna mexida à mão não pode
+    // travar a pausa de um produto que ainda tem companhia.
+    const pausadosDeVerdade = new Set(c.midiasPausadas.filter((i) => i >= 0 && i < c.totalMidias));
+    const ativos = c.totalMidias - pausadosDeVerdade.size;
     if (ativos <= 1) {
       return 'É o único produto ativo deste envio. Para não enviar nada, cancele a campanha.';
     }

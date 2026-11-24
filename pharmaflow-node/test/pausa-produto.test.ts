@@ -206,6 +206,13 @@ describe('Quando o produto pode ser pausado (regra)', () => {
   it('campanha repetida saindo agora: a pausa vale para a próxima postagem', () => {
     expect(motivoParaNaoPausar(campanha({ status: 'enviando' }), 4)).toBeNull();
   });
+
+  it('envio único: índice pausado fora da lista (coluna suja) não conta como produto pausado', () => {
+    // 3 produtos, só o 0 pausado de verdade — o 9 não existe. Pausar o 1
+    // ainda deixa o 2 ativo, então tem que poder.
+    const unico = campanha({ repetir: 'nunca', totalMidias: 3, midiasPausadas: [0, 9] });
+    expect(motivoParaNaoPausar(unico, 1)).toBeNull();
+  });
 });
 
 // ── Pela API ─────────────────────────────────────────────────────────────────
@@ -375,5 +382,299 @@ describe('Pausar produto pela API', () => {
     expect(evo.legendas).toEqual(['p0', 'p1', 'p2']);
     const detalhe = await api('GET', `/api/disparos/${id}`, { token: g.token });
     expect(detalhe.body).toMatchObject({ status: 'enviado', produtos_pulados: [3] });
+  });
+});
+
+// ── Bateria 2 (24/11/2026): motor de campanhas, bordas da API, fim de campanha ─
+
+/** Lê o disparo direto do banco — é a fonte da verdade do envio. */
+async function doBanco(id: number) {
+  const [d] = await db.select().from(disparosGrupo).where(eq(disparosGrupo.id, id));
+  return d;
+}
+
+/**
+ * Motor de campanhas falso (CAMPAIGNS_API_URL, o caminho de PRODUÇÃO). Guarda
+ * o rótulo de cada criativo que o PharmaFlow mandou enfileirar.
+ */
+function simularMotor(aceita = true): { chamadas: number; rotulos: string[][] } {
+  const registro = { chamadas: 0, rotulos: [] as string[][] };
+  vi.stubEnv('CAMPAIGNS_API_URL', 'http://motor.teste');
+
+  vi.stubGlobal('fetch', vi.fn(async (url: string, init?: { body?: string }) => {
+    const u = String(url);
+    if (u.startsWith('http://motor.teste/disparo')) {
+      registro.chamadas += 1;
+      const corpo = JSON.parse(String(init?.body ?? '{}'));
+      registro.rotulos.push(
+        (corpo.medias ?? []).map((m: { rotulo?: string }) => String(m.rotulo ?? '').split('\n').pop()),
+      );
+      return aceita
+        ? new Response(JSON.stringify({ ok: true }), { status: 202 })
+        : new Response(JSON.stringify({ erro: 'fila cheia' }), { status: 500 });
+    }
+    if (u.includes('/instance/connectionState/')) {
+      return new Response(JSON.stringify({ instance: { state: 'open' } }), { status: 200 });
+    }
+    return new Response(JSON.stringify({}), { status: 200 });
+  }));
+
+  return registro;
+}
+
+describe('Pausa no motor de campanhas (caminho de produção)', () => {
+  beforeEach(limparBanco);
+  afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
+
+  it('o motor recebe só os produtos ativos, e o pulado fica anotado', async () => {
+    const g = await criarGestor();
+    await conectarWhatsappFake(g.id);
+    const id = await agendar(g.token);
+    const motor = simularMotor();
+
+    await pausar(g.token, id, 1);
+    const r = await disparoService.executarDisparo(id);
+
+    expect(r).toEqual({ modo: 'campanhas', grupos: 1 });
+    expect(motor.rotulos).toEqual([['p0', 'p2', 'p3']]);
+    const d = await doBanco(id);
+    expect(d.cursorMidia).toBe(4);
+    expect(d.midiasPuladas).toEqual([1]);
+  });
+
+  it('motor recusou: nem o cursor nem os pulados andam (nada foi consumido)', async () => {
+    const g = await criarGestor();
+    await conectarWhatsappFake(g.id);
+    const id = await agendar(g.token);
+    simularMotor(false);
+
+    await pausar(g.token, id, 1);
+    await expect(disparoService.executarDisparo(id)).rejects.toThrow(/recusou/);
+
+    const d = await doBanco(id);
+    expect(d.status).toBe('erro');
+    expect(d.cursorMidia).toBe(0);
+    expect(d.midiasPuladas).toEqual([]);
+  });
+
+  it('callback do motor não encerra a campanha enquanto há pausado devendo', async () => {
+    const g = await criarGestor();
+    await conectarWhatsappFake(g.id);
+    const id = await agendar(g.token, { midias: listaDe(3) });
+    simularMotor();
+
+    await pausar(g.token, id, 1);
+    await disparoService.executarDisparo(id);          // sai p0 e p2; cursor no fim
+    await disparoService.finalizarDisparo(id, [{ jid: GRUPO.jid, nome: GRUPO.nome, status: 'ok' }]);
+
+    const d = await doBanco(id);
+    expect(d.status).toBe('agendado');                 // p1 ainda não foi ao ar
+    expect(d.proximoEnvio).not.toBeNull();
+  });
+
+  it('tudo pausado: o motor nem é chamado', async () => {
+    const g = await criarGestor();
+    await conectarWhatsappFake(g.id);
+    const id = await agendar(g.token, { midias: listaDe(2) });
+    const motor = simularMotor();
+
+    await pausar(g.token, id, 0);
+    await pausar(g.token, id, 1);
+    await disparoService.executarDisparo(id);
+
+    expect(motor.chamadas).toBe(0);
+    expect((await doBanco(id)).status).toBe('agendado');
+  });
+});
+
+describe('Pausa pela API — bordas', () => {
+  beforeEach(limparBanco);
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  it('sem login: 401', async () => {
+    const r = await api('PATCH', '/api/disparos/1/produtos/0', { body: { pausado: true } });
+    expect(r.status).toBe(401);
+  });
+
+  it('disparo que não existe: 404', async () => {
+    const g = await criarGestor();
+    expect((await pausar(g.token, 999, 0)).status).toBe(404);
+  });
+
+  it('índice que não é inteiro positivo: 400', async () => {
+    const g = await criarGestor();
+    await conectarWhatsappFake(g.id);
+    const id = await agendar(g.token);
+
+    for (const indice of ['abc', '-1', '1.5']) {
+      const r = await api('PATCH', `/api/disparos/${id}/produtos/${indice}`, { token: g.token, body: { pausado: true } });
+      expect(r.status, `índice "${indice}"`).toBe(400);
+    }
+  });
+
+  it('"pausado" tem que ser booleano de verdade — o texto "true" não vale', async () => {
+    const g = await criarGestor();
+    await conectarWhatsappFake(g.id);
+    const id = await agendar(g.token);
+
+    const r = await api('PATCH', `/api/disparos/${id}/produtos/0`, { token: g.token, body: { pausado: 'true' } });
+    expect(r.status).toBe(400);
+    expect((await doBanco(id)).midiasPausadas).toEqual([]);
+  });
+
+  it('disparo só de texto não tem produto para pausar: 404', async () => {
+    const g = await criarGestor();
+    await conectarWhatsappFake(g.id);
+    const id = await agendar(g.token, { midias: [] });
+    expect((await pausar(g.token, id, 0)).status).toBe(404);
+  });
+
+  it('arte pronta (sem rótulo) pausa e devolve rótulo null', async () => {
+    const g = await criarGestor();
+    await conectarWhatsappFake(g.id);
+    const id = await agendar(g.token, { midias: [{ b64: 'ZmFrZQ==', mime: 'image/png' }, ...listaDe(2)] });
+
+    const r = await pausar(g.token, id, 0);
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({ indice: 0, rotulo: null, pausado: true });
+  });
+
+  it('reativar o que não está pausado não quebra nada', async () => {
+    const g = await criarGestor();
+    await conectarWhatsappFake(g.id);
+    const id = await agendar(g.token);
+    await pausar(g.token, id, 4);
+
+    const r = await pausar(g.token, id, 2, false);
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({ produtos_pausados: [4] });
+  });
+
+  it('campanha que já terminou: 409', async () => {
+    const g = await criarGestor();
+    await conectarWhatsappFake(g.id);
+    const id = await agendar(g.token);
+    await db.update(disparosGrupo).set({ status: 'enviado' }).where(eq(disparosGrupo.id, id));
+
+    const r = await pausar(g.token, id, 0);
+    expect(r.status).toBe(409);
+    expect((r.body as { detail: string }).detail).toMatch(/terminou/);
+  });
+
+  it('sem volta: produto que já foi postado não pode ser pausado (409)', async () => {
+    const g = await criarGestor();
+    await conectarWhatsappFake(g.id);
+    const id = await agendar(g.token);
+    await db.update(disparosGrupo).set({ cursorMidia: 3 }).where(eq(disparosGrupo.id, id));
+
+    expect((await pausar(g.token, id, 0)).status).toBe(409);
+    expect((await pausar(g.token, id, 3)).status).toBe(200);   // o próximo da fila pode
+  });
+
+  it('saindo agora: campanha repetida aceita (vale para a próxima); envio único recusa', async () => {
+    const g = await criarGestor();
+    await conectarWhatsappFake(g.id);
+    const repetida = await agendar(g.token);
+    const unica = await agendar(g.token, { repetir: 'nunca' });
+    await db.update(disparosGrupo).set({ status: 'enviando' }).where(eq(disparosGrupo.id, repetida));
+    await db.update(disparosGrupo).set({ status: 'enviando' }).where(eq(disparosGrupo.id, unica));
+
+    expect((await pausar(g.token, repetida, 4)).status).toBe(200);
+    expect((await pausar(g.token, unica, 4)).status).toBe(409);
+  });
+
+  it('pausar NÃO mexe em atualizado_em (é por ele que se acha disparo travado)', async () => {
+    const g = await criarGestor();
+    await conectarWhatsappFake(g.id);
+    const id = await agendar(g.token);
+    const antigo = new Date('2026-01-01T12:00:00Z');
+    await db.update(disparosGrupo).set({ atualizadoEm: antigo }).where(eq(disparosGrupo.id, id));
+
+    await pausar(g.token, id, 2);
+    await pausar(g.token, id, 2, false);
+
+    expect((await doBanco(id)).atualizadoEm?.toISOString()).toBe(antigo.toISOString());
+  });
+
+  it('cinco pausas ao mesmo tempo (duas abas, cliques rápidos): nenhuma se perde', async () => {
+    const g = await criarGestor();
+    await conectarWhatsappFake(g.id);
+    const id = await agendar(g.token);
+
+    const respostas = await Promise.all([0, 1, 2, 3, 4].map((i) => pausar(g.token, id, i)));
+    expect(respostas.every((r) => r.status === 200)).toBe(true);
+    expect([...(await doBanco(id)).midiasPausadas].sort()).toEqual([0, 1, 2, 3, 4]);
+  });
+});
+
+describe('Fim de campanha com produto pausado', () => {
+  beforeEach(limparBanco);
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  /** Término 10 min depois do 1º envio: a próxima ocorrência diária já passa dele. */
+  const terminoCurto = () => ({
+    repetir_ate: new Date(Date.now() + 3600_000 + 10 * 60_000).toISOString(),
+  });
+
+  it('chegou o término e só sobrou pausado: encerra como ENVIADO (ela postou antes)', async () => {
+    const g = await criarGestor();
+    await conectarWhatsappFake(g.id);
+    const id = await agendar(g.token, terminoCurto());
+    const evo = simularEvolution();
+    await db.update(disparosGrupo).set({
+      cursorMidia: 6, midiasPausadas: [1], midiasPuladas: [1],
+      ultimoEnvio: new Date(Date.now() - 864e5),
+    }).where(eq(disparosGrupo.id, id));
+
+    await disparoService.executarDisparo(id);
+
+    expect(evo.legendas).toEqual([]);
+    const d = await doBanco(id);
+    expect(d.status).toBe('enviado');
+    expect(d.proximoEnvio).toBeNull();
+  });
+
+  it('envio único que ficou sem produto (corrida de cliques): nada sai e vira ERRO', async () => {
+    const g = await criarGestor();
+    await conectarWhatsappFake(g.id);
+    const id = await agendar(g.token, { repetir: 'nunca', midias: listaDe(2) });
+    const evo = simularEvolution();
+    // A API não deixa chegar aqui; simula duas abas pausando ao mesmo tempo
+    await db.update(disparosGrupo).set({ midiasPausadas: [0, 1] }).where(eq(disparosGrupo.id, id));
+
+    await disparoService.executarDisparo(id);
+
+    expect(evo.legendas).toEqual([]);
+    expect(evo.textos).toBe(0);
+    expect((await doBanco(id)).status).toBe('erro');
+  });
+
+  it('lista que dá a volta: o fim pausado não gera postagem vazia, e o reativado volta na vez dele', async () => {
+    const g = await criarGestor();
+    await conectarWhatsappFake(g.id);
+    const id = await agendar(g.token, {
+      midias: listaDe(4), repetir_produtos: true,
+      repetir_ate: new Date(Date.now() + 30 * 864e5).toISOString(),
+    });
+    const evo = simularEvolution();
+
+    await pausar(g.token, id, 3);
+
+    await disparoService.executarDisparo(id);
+    expect(evo.legendas).toEqual(['p0', 'p1', 'p2']);
+
+    // Só o p3 (pausado) até o fim: começa a volta nova na mesma postagem
+    evo.legendas.length = 0;
+    await disparoService.executarDisparo(id);
+    expect(evo.legendas).toEqual(['p0', 'p1', 'p2']);
+
+    // Reativado: sai na vez dele e a lista recomeça
+    await pausar(g.token, id, 3, false);
+    evo.legendas.length = 0;
+    await disparoService.executarDisparo(id);
+    expect(evo.legendas).toEqual(['p3']);
+    const d = await doBanco(id);
+    expect(d.cursorMidia).toBe(0);
+    expect(d.status).toBe('agendado');
   });
 });

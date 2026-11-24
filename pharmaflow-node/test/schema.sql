@@ -1621,6 +1621,11 @@ CREATE UNIQUE INDEX farmacias_meta_ad_account_id_unico
 
 
 -- Migration 0041 (produtos_cliente), acrescentada à mão até o próximo dump.
+-- O dump zera o search_path no começo (set_config('search_path', '', false)),
+-- e o SQL da migration abaixo usa nomes sem "public." — sem esta linha o banco
+-- de teste nem é criado (erro 3F000, "no schema has been selected").
+SET search_path = public;
+
 -- Migration 0041: produtos que o próprio cliente envia pelo link de ofertas
 --
 -- Além de escolher no banco de imagens da agência, o dono da farmácia pode
