@@ -102,6 +102,27 @@ docker compose up -d --build api
 
 ---
 
+## Trava de envio ao WhatsApp (`WHATSAPP_ENVIO_REAL`)
+
+Desde 24/11/2026 o PharmaFlow só manda mensagem de verdade (e só conecta,
+desconecta, cria ou apaga conexão na Evolution) quando o `.env` da raiz tem:
+
+```
+WHATSAPP_ENVIO_REAL=true
+```
+
+Essa linha existe **só no servidor de produção**. Sem ela, o sistema entra em
+modo teste: as telas funcionam, os disparos aparecem como enviados, mas nada
+chega aos grupos — o log da API mostra `[MODO TESTE] não enviado ao WhatsApp` e
+a tela de Grupos exibe a faixa "Modo teste". Na subida, a API avisa no log em
+qual modo está.
+
+Depois de um deploy, confira: `docker logs farmacia_api 2>&1 | grep -E "MODO TESTE|Envio ao WhatsApp LIGADO" | tail -1`
+tem que mostrar **"Envio ao WhatsApp LIGADO"**. Se mostrar "MODO TESTE", a linha
+sumiu do `.env` — recoloque e rode `docker compose up -d --build api`.
+
+**Nunca** copie essa linha para o `.env` de um computador de desenvolvimento.
+
 ## Senha do Banco de Imagens (uma vez só)
 
 Toda ação no Banco de Imagens (subir, editar, ligar/desligar, classificar,

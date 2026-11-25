@@ -4,6 +4,7 @@ import cors     from '@fastify/cors';
 import formbody from '@fastify/formbody';
 import { logger } from '../logger';
 import { iniciarSchedulerWhatsApp } from '../scheduler';
+import { envioRealLigado, VARIAVEL_ENVIO_REAL } from '../compartilhado/ModoEnvio';
 import {
   authController, gestorController, farmaciaController, painelController,
   rankingController, googleController, conexaoMetaController,
@@ -79,6 +80,16 @@ if (require.main === module) {
   app.listen({ port: PORT, host: '0.0.0.0' }, (err) => {
     if (err) { console.error(err); process.exit(1); }
     console.log(`PharmaFlow API rodando em http://0.0.0.0:${PORT}`);
+    // Trava de envio (incidente 24/11): sem a variável, nada sai para o
+    // WhatsApp. No servidor isso é um alarme — tem que gritar na subida.
+    if (!envioRealLigado()) {
+      logger.warn(
+        `MODO TESTE: ${VARIAVEL_ENVIO_REAL} não está "true" — NENHUMA mensagem sai para o WhatsApp `
+        + 'neste processo (os envios são só registrados no log). Em produção, isso é erro de configuração.',
+      );
+    } else {
+      logger.info('Envio ao WhatsApp LIGADO neste processo.');
+    }
     iniciarSchedulerWhatsApp();
     // Aquece o cache das contas de anúncio (migration 0032): o primeiro gestor
     // a abrir o wizard de campanha depois do deploy encontra a lista pronta,

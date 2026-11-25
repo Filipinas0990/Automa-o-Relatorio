@@ -5,6 +5,7 @@ import { logger } from '../logger';
 import type { Autenticador } from '../auth/Autenticador';
 import type { DisparoService, CriarDisparoBody } from './DisparoService';
 import type { PausaDeProdutos } from './PausaDeProdutos';
+import type { PoliticaDeEnvio } from '../compartilhado/ModoEnvio';
 import type { GrupoSelecionado, MidiaDisparo, ResultadoGrupo } from './types';
 
 /**
@@ -20,6 +21,7 @@ export class DisparoController extends Controller {
     private readonly service: DisparoService,
     private readonly auth: Autenticador,
     private readonly pausas: PausaDeProdutos,
+    private readonly modoEnvio: PoliticaDeEnvio,
   ) {
     super();
   }
@@ -50,6 +52,18 @@ export class DisparoController extends Controller {
     app.delete('/api/disparos/whatsapp', comAuth, async (req, reply) => {
       await this.service.desconectarGestor(req.user.id);
       return reply.code(204).send();
+    });
+
+    /**
+     * GET /api/disparos/modo-envio → { envio_real }
+     *
+     * A tela de Grupos mostra uma faixa quando é false: neste sistema nada sai
+     * para o WhatsApp (ver compartilhado/ModoEnvio). Numa cópia de teste é o
+     * esperado; no servidor de produção é um alarme — faltou a variável na .env
+     * e as campanhas estão "saindo" sem chegar em grupo nenhum.
+     */
+    app.get('/api/disparos/modo-envio', comAuth, async () => {
+      return { envio_real: this.modoEnvio.envioReal() };
     });
 
     // ── Grupos ───────────────────────────────────────────────────────────────

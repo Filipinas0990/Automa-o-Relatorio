@@ -31,6 +31,10 @@ export default defineConfig({
       // Porta fechada em loopback: recusa a conexão na hora. Um domínio
       // inexistente faria cada chamada esperar o DNS estourar (suíte ~5x mais lenta).
       EVOLUTION_API_URL: 'http://127.0.0.1:1',
+      // As suítes trocam o fetch por uma Evolution falsa e contam os envios,
+      // então rodam com o envio "ligado". A trava em si é testada em
+      // test/modo-envio.test.ts, que desliga a variável caso a caso.
+      WHATSAPP_ENVIO_REAL: 'true',
       EVOLUTION_API_KEY: 'chave-de-teste',
       FRONTEND_URL: 'http://localhost:5173',
       BANCO_IMAGENS_SENHA_HASH: HASH_SENHA_BANCO,

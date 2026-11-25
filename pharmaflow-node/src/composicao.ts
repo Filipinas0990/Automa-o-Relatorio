@@ -62,6 +62,7 @@ import { ClienteCampanhas } from './disparos/ClienteCampanhas';
 import { DisparoService } from './disparos/DisparoService';
 import { DisparoController } from './disparos/DisparoController';
 import { PausaDeProdutos } from './disparos/PausaDeProdutos';
+import { EnvioPorAmbiente } from './compartilhado/ModoEnvio';
 import { InterpretadorIA } from './ai/InterpretadorIA';
 import { TokenMetaRepository } from './ads/TokenMetaRepository';
 import { CampanhaPendenteRepository } from './ads/CampanhaPendenteRepository';
@@ -109,7 +110,10 @@ export const authController = new AuthController(authService, autenticador, toke
 
 // ── WhatsApp (Evolution API) ──────────────────────────────────────────────────
 export const whatsappRepository = new WhatsappRepository(db);
-export const clienteEvolution   = new ClienteEvolution();
+// Trava de envio (incidente 24/11): só mexe no WhatsApp com
+// WHATSAPP_ENVIO_REAL=true na .env — ver compartilhado/ModoEnvio.
+export const politicaDeEnvio    = new EnvioPorAmbiente();
+export const clienteEvolution   = new ClienteEvolution(politicaDeEnvio);
 // O roteador de mensagens entrantes (bot de ads) é ligado mais abaixo, depois
 // que AdsService existe — ver `whatsappService.definirRoteador(...)`.
 export const whatsappService    = new WhatsappService(whatsappRepository, clienteEvolution);
@@ -119,7 +123,7 @@ export const whatsappController = new WhatsappController(whatsappService, autent
 // (repository + cliente do motor de campanhas já saem daqui; o Service entra
 // mais abaixo, depois do solicitacaoRepository, que ele também usa)
 export const disparoRepository = new DisparoRepository(db);
-const clienteCampanhas = new ClienteCampanhas();
+const clienteCampanhas = new ClienteCampanhas(politicaDeEnvio);
 
 // ── Farmácias ─────────────────────────────────────────────────────────────────
 const farmaciaRepository = new FarmaciaRepository(db);
@@ -265,4 +269,5 @@ export const disparoController = new DisparoController(
   disparoService, autenticador,
   // DisparoRepository cumpre PausasDosProdutos (declarado com `implements`).
   new PausaDeProdutos(disparoRepository),
+  politicaDeEnvio,
 );

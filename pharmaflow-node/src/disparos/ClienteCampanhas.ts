@@ -1,4 +1,5 @@
 import { logger } from '../logger';
+import { EnvioPorAmbiente, type PoliticaDeEnvio } from '../compartilhado/ModoEnvio';
 import type { GrupoSelecionado, MidiaDisparo } from './types';
 
 /**
@@ -23,9 +24,18 @@ export interface DisparoCampanhasPayload {
 }
 
 export class ClienteCampanhas {
-  /** true quando o motor de campanhas está configurado para uso. */
+  constructor(private readonly politica: PoliticaDeEnvio = new EnvioPorAmbiente()) {}
+
+  /**
+   * true quando o motor de campanhas está configurado para uso.
+   *
+   * No modo teste (ver compartilhado/ModoEnvio) o motor fica desligado mesmo
+   * configurado: ele envia por conta própria, fora do alcance da trava do
+   * ClienteEvolution. Sem ele o disparo cai no envio direto — que passa pela
+   * trava e é simulado.
+   */
   configurado(): boolean {
-    return Boolean(process.env.CAMPAIGNS_API_URL || '');
+    return this.politica.envioReal() && Boolean(process.env.CAMPAIGNS_API_URL || '');
   }
 
   /** URL de callback que o campanhas deve chamar ao terminar (pode ser vazia). */
@@ -41,6 +51,13 @@ export class ClienteCampanhas {
   async enfileirar(
     payload: DisparoCampanhasPayload,
   ): Promise<{ ok: boolean; status: number; data: unknown }> {
+    // Defesa extra: quem chamar sem conferir configurado() não enfileira, e
+    // recebe recusa (não sucesso) — para nada ser consumido como se tivesse saído.
+    if (!this.politica.envioReal()) {
+      logger.warn({ disparoId: payload.disparoId }, '[MODO TESTE] disparo NÃO enfileirado no motor de campanhas');
+      return { ok: false, status: 503, data: { erro: 'modo teste: envio ao WhatsApp desligado neste processo' } };
+    }
+
     const url = process.env.CAMPAIGNS_API_URL || '';
     const res = await fetch(`${url}/disparo`, {
       method: 'POST',
